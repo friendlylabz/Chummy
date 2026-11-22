@@ -2,10 +2,11 @@
 
 use chummy_llm::{Client, Preset, ProbeReport, ProviderConfig, ProviderKind, presets, probe};
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, State, WebviewWindow};
 
 use super::{CmdResult, err};
 use crate::commands::local::start_engine_for;
+use crate::dialogs;
 use crate::state::AppState;
 
 #[tauri::command]
@@ -68,9 +69,12 @@ fn validate(cfg: &ProviderConfig) -> Result<(), String> {
 
 /// Adds or updates a provider. `api_key`: `None` keeps the stored key,
 /// `Some("")` removes it, anything else replaces it. Returns the provider id.
+/// A plain `http://` address off the local network is saved only after the
+/// user confirms (once per address).
 #[tauri::command]
-pub fn save_provider(
+pub async fn save_provider(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, AppState>,
     mut config: ProviderConfig,
     api_key: Option<String>,
@@ -80,6 +84,42 @@ pub fn save_provider(
     config.base_url = config.base_url.trim().trim_end_matches('/').to_string();
     validate(&config)?;
 
+    let existing = state.settings();
+    let address_changed = existing
+        .provider(&config.id)
+        .is_none_or(|old| old.base_url != config.base_url);
+    if config.kind != ProviderKind::Local
+        && address_changed
+        && chummy_llm::unencrypted_remote(&config.base_url)
+    {
+        let msg = format!(
+            "{}\n\nThis address uses plain http:// and isn't on this computer or your local network. \
+             Your API key and every conversation with this model would travel unencrypted, unless \
+             something else protects them, such as a VPN.\n\nUse https:// if the server supports it.",
+            config.base_url
+        );
+        if !dialogs::confirm(
+            &app,
+            window.label(),
+            "Connect without encryption?",
+            &msg,
+            "Connect anyway",
+            true,
+        )
+        .await
+        {
+            return Err("Not saved: the address uses unencrypted http://.".into());
+        }
+        chummy_log::system::log(
+            chummy_log::system::Level::Warn,
+            "security",
+            format!(
+                "Model connection {} uses unencrypted http:// off the local network",
+                config.name
+            ),
+            &[("address", &config.base_url)],
+        );
+    }
     let existing = state.settings();
     if config.id.is_empty() {
         config.id = format!("{}-{}", slug(&config.name), short_random());

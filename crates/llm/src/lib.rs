@@ -35,7 +35,7 @@ mod types;
 pub use client::Client;
 pub use config::{
     DEFAULT_DAILY_TOKENS, DEFAULT_MAX_TOKENS, LocalModel, Precision, Preset, ProviderConfig,
-    ProviderKind, endpoint_problem, presets,
+    ProviderKind, endpoint_problem, presets, unencrypted_remote,
 };
 pub use error::LlmError;
 pub use probe::{ProbeReport, ProbeStep, StepStatus, probe};

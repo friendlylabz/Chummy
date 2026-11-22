@@ -72,7 +72,11 @@ without noticing.
    `http://api.example.com` sent API keys and conversations unencrypted.
    Plain http is now only accepted for this computer and the local network
    (loopback and private addresses, `.local` and single-word host names), and
-   addresses with a user name or key in them are refused. The same check
+   addresses with a user name or key in them are refused. *(Changed after
+   pass 8: plain http elsewhere is allowed again, for servers behind a VPN
+   without a usable certificate, but saving such an address shows a warning
+   in the form and a native confirmation naming the risk, and the choice is
+   written to the system log.)* The same check
    runs before **Test connection** and model listing, which send the stored
    key.
 4. **Two copies of Chummy could run at once** (for example, without a

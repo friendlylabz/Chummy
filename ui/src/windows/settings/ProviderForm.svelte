@@ -26,6 +26,27 @@
   let model = $state(start?.model ?? "");
   let temperature = $state(start?.temperature != null ? String(start.temperature) : "");
   let apiKey = $state("");
+  /** Plain http:// to somewhere that isn't this computer or the local network. */
+  const unencrypted = $derived.by(() => {
+    let u: URL;
+    try {
+      u = new URL(baseUrl.trim());
+    } catch {
+      return false;
+    }
+    if (u.protocol !== "http:") return false;
+    const h = u.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
+    const local =
+      h === "localhost" ||
+      /\.(localhost|local|lan|home\.arpa|internal)$/.test(h) ||
+      /^(127\.|10\.|192\.168\.|169\.254\.)/.test(h) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(h) ||
+      h === "::1" ||
+      /^f[cd]/.test(h) ||
+      /^fe80:/.test(h) ||
+      (!h.includes(".") && !h.includes(":"));
+    return !local;
+  });
   let maxTokens = $state(String(start?.max_tokens ?? DEFAULT_MAX_TOKENS));
   const maxValue = $derived(Math.round(Number(maxTokens.replace(/[,_\s]/g, ""))));
   const maxBad = $derived(!Number.isFinite(maxValue) || maxValue < 16 || maxValue > 32768);
@@ -122,6 +143,12 @@
   <div class="field">
     <label for="pf-url">Server address</label>
     <input id="pf-url" class="input mono" bind:value={baseUrl} placeholder="http://localhost:8080/v1" spellcheck="false" />
+    {#if unencrypted}
+      <span class="hint warn-hint">
+        <Icon name="alert" size={13} /> Plain http:// off your local network isn't encrypted: your API key and conversations
+        travel as they are, unless a VPN or similar protects them. Chummy asks you to confirm when you save.
+      </span>
+    {/if}
   </div>
 
   <div class="field">
@@ -217,6 +244,12 @@
   h1 {
     font-size: var(--text-xl);
     font-weight: 650;
+  }
+  .warn-hint {
+    display: flex;
+    gap: 5px;
+    align-items: flex-start;
+    color: var(--warn);
   }
   .results {
     margin-top: var(--space-5);

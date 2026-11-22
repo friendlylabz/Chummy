@@ -304,10 +304,11 @@ mod tests {
 }
 
 /// What's wrong with a model server's address, if anything, in words for
-/// the user. Plain `http://` is only allowed for this computer and the local
-/// network: anywhere else it would send API keys and conversations
-/// unencrypted. Addresses with a user name or password in them are refused,
-/// so keys only ever live in the keychain.
+/// the user. Addresses with a user name or password in them are refused, so
+/// keys only ever live in the keychain. Plain `http://` is allowed anywhere
+/// (some servers sit behind a VPN with no usable certificate), but the app
+/// asks first when it isn't this computer or the local network: see
+/// [`unencrypted_remote`].
 pub fn endpoint_problem(url: &str) -> Option<String> {
     let url = url.trim();
     if !(url.starts_with("http://") || url.starts_with("https://")) {
@@ -319,12 +320,25 @@ pub fn endpoint_problem(url: &str) -> Option<String> {
     if !parsed.username().is_empty() || parsed.password().is_some() {
         return Some("Don't put a user name or key in the address; use the API key field.".into());
     }
-    let Some(host) = parsed.host() else {
+    if parsed.host().is_none() {
         return Some("The server address needs a host name.".into());
-    };
-    if parsed.scheme() == "https" {
-        return None;
     }
+    None
+}
+
+/// Whether `url` is plain `http://` to somewhere other than this computer
+/// or the local network, so API keys and conversations would cross the
+/// network unencrypted (unless something else, like a VPN, encrypts them).
+pub fn unencrypted_remote(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url.trim()) else {
+        return false;
+    };
+    if parsed.scheme() != "http" {
+        return false;
+    }
+    let Some(host) = parsed.host() else {
+        return false;
+    };
     let local = match host {
         url::Host::Ipv4(ip) => ip.is_loopback() || ip.is_private() || ip.is_link_local(),
         url::Host::Ipv6(ip) => {
@@ -341,21 +355,39 @@ pub fn endpoint_problem(url: &str) -> Option<String> {
                 || !d.contains('.')
         }
     };
-    (!local).then(|| {
-        "Use https:// for servers on the internet. Plain http:// would send your API key and \
-         conversations unencrypted; it's only allowed for this computer and your local network."
-            .into()
-    })
+    !local
 }
 
 #[cfg(test)]
 mod endpoint_tests {
-    use super::endpoint_problem;
+    use super::{endpoint_problem, unencrypted_remote};
 
     #[test]
-    fn plain_http_only_for_local_servers() {
+    fn addresses_are_checked() {
         for ok in [
             "https://api.openai.com/v1",
+            "http://localhost:11434",
+            "http://203.0.113.9/v1",
+            "http://llm.example.vpn:8000/v1",
+        ] {
+            assert_eq!(endpoint_problem(ok), None, "{ok}");
+        }
+        for bad in [
+            "https://user:key@api.example.com",
+            "http://user@example.com",
+            "ftp://x",
+            "localhost:8080",
+            "http://",
+        ] {
+            assert!(endpoint_problem(bad).is_some(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn plain_http_off_the_local_network_is_flagged() {
+        for local in [
+            "https://api.openai.com/v1",
+            "https://203.0.113.9/v1",
             "http://localhost:11434",
             "http://127.0.0.1:8080/v1",
             "http://192.168.1.20:8000/v1",
@@ -363,19 +395,15 @@ mod endpoint_tests {
             "http://[::1]:8080",
             "http://gpu-box:8000/v1",
             "http://studio.local:1234/v1",
-            "https://203.0.113.9/v1",
         ] {
-            assert_eq!(endpoint_problem(ok), None, "{ok}");
+            assert!(!unencrypted_remote(local), "{local}");
         }
-        for bad in [
+        for remote in [
             "http://api.example.com/v1",
             "http://203.0.113.9/v1",
-            "https://user:key@api.example.com",
-            "ftp://x",
-            "localhost:8080",
-            "http://",
+            "http://100.64.1.2:8000/v1",
         ] {
-            assert!(endpoint_problem(bad).is_some(), "{bad}");
+            assert!(unencrypted_remote(remote), "{remote}");
         }
     }
 }
