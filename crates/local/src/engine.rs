@@ -8,11 +8,10 @@ use std::time::{Duration, Instant};
 
 use chummy_llm::Precision;
 use serde::Serialize;
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 
 use crate::runtime::quiet;
-use crate::{ENGINE_SCRIPT, LocalError, http_client};
+use crate::{ENGINE_SCRIPT, LocalError, http_client, python_env, read_lines};
 
 /// How long a model may take to load before we give up.
 const LOAD_TIMEOUT: Duration = Duration::from_secs(20 * 60);
@@ -146,42 +145,30 @@ impl Engine {
             .env("HF_HUB_OFFLINE", "1")
             .env("TRANSFORMERS_OFFLINE", "1")
             .env("HF_HUB_DISABLE_TELEMETRY", "1")
-            .env("PYTHONNOUSERSITE", "1")
-            .env("PYTHONDONTWRITEBYTECODE", "1")
-            .env_remove("PYTHONPATH")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        python_env(&mut cmd);
         quiet(&mut cmd);
         let mut child = cmd
             .spawn()
             .map_err(LocalError::io("starting the local engine"))?;
 
-        for stream in [
-            child
-                .stdout
-                .take()
-                .map(|s| Box::new(s) as Box<dyn tokio::io::AsyncRead + Unpin + Send>),
-            child
-                .stderr
-                .take()
-                .map(|s| Box::new(s) as Box<dyn tokio::io::AsyncRead + Unpin + Send>),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            let log = self.log.clone();
-            tokio::spawn(async move {
-                let mut lines = BufReader::new(stream).lines();
-                while let Ok(Some(l)) = lines.next_line().await {
-                    let mut log = lock(&log);
-                    if log.len() >= LOG_LINES {
-                        log.pop_front();
-                    }
-                    log.push_back(l);
+        let log_line = |log: Arc<Mutex<VecDeque<String>>>| {
+            move |l: String| {
+                let mut log = lock(&log);
+                if log.len() >= LOG_LINES {
+                    log.pop_front();
                 }
-            });
+                log.push_back(l);
+            }
+        };
+        if let Some(out) = child.stdout.take() {
+            read_lines(out, log_line(self.log.clone()));
+        }
+        if let Some(err) = child.stderr.take() {
+            read_lines(err, log_line(self.log.clone()));
         }
 
         let s = EngineStatus::Loading {

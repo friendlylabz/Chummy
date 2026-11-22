@@ -74,6 +74,40 @@ impl LocalError {
     }
 }
 
+/// Reads a child process's output line by line until it closes. Bytes that
+/// aren't valid UTF-8 (Windows code pages) are replaced rather than ending the
+/// read: stopping early would close the pipe and break the child's writes.
+pub(crate) fn read_lines(
+    stream: impl tokio::io::AsyncRead + Unpin + Send + 'static,
+    mut on_line: impl FnMut(String) + Send + 'static,
+) {
+    use tokio::io::AsyncBufReadExt;
+    tokio::spawn(async move {
+        let mut reader = tokio::io::BufReader::new(stream);
+        let mut buf = Vec::new();
+        loop {
+            buf.clear();
+            match reader.read_until(b'\n', &mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    let line = String::from_utf8_lossy(&buf);
+                    on_line(line.trim_end_matches(['\r', '\n']).to_string());
+                }
+            }
+        }
+    });
+}
+
+/// Environment for every Python process Chummy starts.
+pub(crate) fn python_env(cmd: &mut tokio::process::Command) {
+    cmd.env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8")
+        .env("PYTHONNOUSERSITE", "1")
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .env_remove("PYTHONPATH")
+        .env_remove("PYTHONHOME");
+}
+
 /// Shared HTTP client settings.
 pub(crate) fn http_client() -> reqwest::Client {
     reqwest::Client::builder()

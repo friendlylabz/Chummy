@@ -19,11 +19,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
 use crate::download::hex;
-use crate::{LocalError, http_client};
+use crate::{LocalError, http_client, python_env, read_lines};
 
 const UV_RELEASES: &str = "https://github.com/astral-sh/uv/releases/latest/download";
 const PYTHON_VERSION: &str = "3.12";
@@ -350,25 +349,16 @@ async fn run_uv(
         .spawn()
         .map_err(LocalError::io("starting uv"))?;
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    for stream in [
-        child
-            .stdout
-            .take()
-            .map(|s| Box::new(s) as Box<dyn tokio::io::AsyncRead + Unpin + Send>),
-        child
-            .stderr
-            .take()
-            .map(|s| Box::new(s) as Box<dyn tokio::io::AsyncRead + Unpin + Send>),
-    ]
-    .into_iter()
-    .flatten()
-    {
+    if let Some(out) = child.stdout.take() {
         let tx = tx.clone();
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(stream).lines();
-            while let Ok(Some(l)) = lines.next_line().await {
-                let _ = tx.send(l);
-            }
+        read_lines(out, move |l| {
+            let _ = tx.send(l);
+        });
+    }
+    if let Some(err) = child.stderr.take() {
+        let tx = tx.clone();
+        read_lines(err, move |l| {
+            let _ = tx.send(l);
         });
     }
     drop(tx);
@@ -418,10 +408,8 @@ print(json.dumps({
 
 async fn probe(paths: &RuntimePaths) -> Result<RuntimeInfo, LocalError> {
     let mut cmd = Command::new(&paths.python);
-    cmd.arg("-c")
-        .arg(PROBE)
-        .env("PYTHONNOUSERSITE", "1")
-        .stdin(Stdio::null());
+    cmd.arg("-c").arg(PROBE).stdin(Stdio::null());
+    python_env(&mut cmd);
     quiet(&mut cmd);
     let out = cmd
         .output()

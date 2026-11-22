@@ -78,7 +78,7 @@ class Parser:
 
 
 class HermesParser(Parser):
-    """<tool_call>{"name": ..., "arguments": {...}}</tool_call> (Qwen, Hermes, …)."""
+    """<tool_call>{"name": ..., "arguments": {...}}</tool_call> (Qwen, Hermes, ...)."""
 
     name = "hermes"
     markers = ("<tool_call>",)
@@ -646,7 +646,7 @@ def main(argv=None):
 
     def load():
         try:
-            print(f"loading {backend.name}…", flush=True)
+            print(f"loading {backend.name}...", flush=True)
             backend.load()
             state.status = "ready"
             print(f"ready on {backend.device}", flush=True)
