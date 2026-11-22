@@ -70,5 +70,13 @@ jobs:
         run: cargo fmt --all --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # The sandbox tests run real tools on the real WebAssembly Python.
+      - name: WebAssembly Python for the tool sandbox tests
+        shell: bash
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/python-wasi.zip" \
+            https://github.com/brettcannon/cpython-wasi-build/releases/download/v3.14.7/python-3.14.7-wasi_sdk-24.zip
+          echo "CHUMMY_TEST_PYTHON_ZIP=$RUNNER_TEMP/python-wasi.zip" >> "$GITHUB_ENV"
+          echo "CHUMMY_TEST_PYPI=1" >> "$GITHUB_ENV"
       - name: Test
         run: cargo test --workspace --locked

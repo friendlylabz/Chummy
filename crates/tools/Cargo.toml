@@ -1,6 +1,6 @@
 [package]
 name = "chummy-tools"
-description = "WebAssembly tool host for Chummy."
+description = "Sandboxed Python tools for Chummy, run as WebAssembly."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,7 +12,18 @@ publish = false
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+futures-util.workspace = true
+reqwest.workspace = true
 chummy-sandbox.workspace = true
+toml = { version = "1", default-features = false, features = ["parse", "serde"] }
+sha2 = "0.10"
+zip = { version = "9", default-features = false, features = ["deflate"] }
+wasmtime = { version = "51", default-features = false, features = ["cranelift", "async", "cache", "runtime", "parallel-compilation", "std", "addr2line"] }
+wasmtime-wasi = { version = "51", default-features = false, features = ["p1"] }
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

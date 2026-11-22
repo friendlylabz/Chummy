@@ -74,11 +74,24 @@ pub struct ToolSpec {
     pub parameters: serde_json::Value,
 }
 
+/// Whether the model must call a tool.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolChoice {
+    #[default]
+    Auto,
+    /// Call one of the offered tools.
+    Required,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ChatRequest {
     pub messages: Vec<Message>,
     #[serde(default)]
     pub tools: Vec<ToolSpec>,
+    /// Ignored when `tools` is empty.
+    #[serde(default)]
+    pub tool_choice: ToolChoice,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

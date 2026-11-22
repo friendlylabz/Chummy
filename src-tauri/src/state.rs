@@ -11,6 +11,7 @@ use chummy_local::runtime::RuntimePaths;
 use chummy_sandbox::Protected;
 use chummy_store::secrets::{Keychain, SecretStore};
 use chummy_store::{ChummyDirs, JsonDoc, Recovery};
+use chummy_tools::{ToolHost, ToolPaths};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
@@ -56,6 +57,11 @@ pub struct AppState {
     pub picked_workspaces: Mutex<HashMap<String, PathBuf>>,
     /// Runs in progress, by run id.
     pub runs: Mutex<HashMap<String, RunInfo>>,
+    pub tool_paths: ToolPaths,
+    /// The tool sandbox, created (Python compiled) on first use.
+    tool_host: tokio::sync::Mutex<Option<Arc<ToolHost>>>,
+    /// Set while the tool runtime is being set up.
+    pub tools_installing: Mutex<bool>,
 }
 
 /// What the main window needs to know before it unlocks chat.
@@ -112,6 +118,9 @@ impl AppState {
             runtime_install: Mutex::new(None),
             picked_workspaces: Mutex::new(HashMap::new()),
             runs: Mutex::new(HashMap::new()),
+            tool_paths: ToolPaths::new(&dirs.tools),
+            tool_host: tokio::sync::Mutex::new(None),
+            tools_installing: Mutex::new(false),
             dirs,
         })
     }
@@ -155,9 +164,38 @@ impl AppState {
         }
     }
 
+    /// The tool sandbox. The first call compiles the WebAssembly Python
+    /// (cached on disk, so later starts are quick).
+    pub async fn tool_host(&self) -> Result<Arc<ToolHost>, String> {
+        let mut guard = self.tool_host.lock().await;
+        if let Some(h) = guard.as_ref() {
+            return Ok(h.clone());
+        }
+        if chummy_tools::python_status(&self.tool_paths).is_none() {
+            return Err("Tools aren't set up yet. Set them up in Settings → Tools.".into());
+        }
+        let paths = self.tool_paths.clone();
+        let host = tokio::task::spawn_blocking(move || ToolHost::new(&paths, tools_http()))
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| format!("The tool sandbox couldn't start: {e}"))?;
+        let host = Arc::new(host);
+        *guard = Some(host.clone());
+        Ok(host)
+    }
+
     pub fn has_secret(&self, key: &str) -> bool {
         matches!(self.secrets.get(key), Ok(Some(_)))
     }
+}
+
+/// The HTTP client for the tool runtime's downloads.
+pub fn tools_http() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .user_agent(concat!("Chummy/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .unwrap_or_default()
 }
 
 /// Locks a mutex, recovering the data if a previous holder panicked.

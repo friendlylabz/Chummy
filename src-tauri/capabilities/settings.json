@@ -38,6 +38,10 @@
     "allow-set-hf-token",
     "allow-set-local-device",
     "allow-stop-engine",
-    "allow-engine-log"
+    "allow-engine-log",
+    "allow-tools-status",
+    "allow-setup-tools",
+    "allow-set-tool-enabled",
+    "allow-set-tool-network"
   ]
 }

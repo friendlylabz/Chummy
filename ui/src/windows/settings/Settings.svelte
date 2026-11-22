@@ -12,13 +12,15 @@
   import ModelsPane from "./ModelsPane.svelte";
   import LocalEnginePane from "./LocalEnginePane.svelte";
   import AgentsPane from "./AgentsPane.svelte";
+  import ToolsPane from "./ToolsPane.svelte";
 
-  type Section = "agents" | "models" | "engine" | "permissions" | "appearance" | "about";
+  type Section = "agents" | "models" | "engine" | "tools" | "permissions" | "appearance" | "about";
 
-  const sections: { id: Section; label: string; icon: "bot" | "cpu" | "shield" | "palette" | "info" | "chat" }[] = [
+  const sections: { id: Section; label: string; icon: "bot" | "cpu" | "shield" | "palette" | "info" | "chat" | "wrench" }[] = [
     { id: "agents", label: "Agents", icon: "chat" },
     { id: "models", label: "Models", icon: "bot" },
     { id: "engine", label: "Local engine", icon: "cpu" },
+    { id: "tools", label: "Tools", icon: "wrench" },
     { id: "permissions", label: "Permissions", icon: "shield" },
     { id: "appearance", label: "Appearance", icon: "palette" },
     { id: "about", label: "About", icon: "info" },
@@ -75,6 +77,8 @@
         <LocalEnginePane addModel={() => go("models", "local")} />
       {:else if active === "agents"}
         <AgentsPane gotoModels={() => go("models", "pick")} />
+      {:else if active === "tools"}
+        <ToolsPane gotoPermissions={() => go("permissions")} />
       {:else if active === "permissions"}
         <h1>Permissions</h1>
         <p class="pane-sub">Everything beyond the workspace folder is off until you turn it on. Turning something on asks you to confirm.</p>
@@ -82,14 +86,14 @@
           <div class="row">
             <div>
               <div class="row-title">Internet access</div>
-              <div class="row-sub">Let agents and their tools reach the internet.</div>
+              <div class="row-sub">Let tools that you allow in Tools reach the internet. Off means no tool can go online.</div>
             </div>
             <Toggle checked={perms.network} label="Internet access" onchange={(v) => commands.setPermission("network", v)} />
           </div>
           <div class="row">
             <div>
               <div class="row-title">Tools</div>
-              <div class="row-sub">Let agents run installed tools. Tools stay locked to the workspace.</div>
+              <div class="row-sub">Let agents run the tools you switch on in Tools. Tools stay locked to the agent's workspace.</div>
             </div>
             <Toggle checked={perms.tools} label="Tools" onchange={(v) => commands.setPermission("tools", v)} />
           </div>

@@ -61,6 +61,36 @@ pub fn strip_thinking(s: &str) -> String {
     out.trim().to_string()
 }
 
+/// The `<think>…</think>` sections of an answer, joined.
+pub fn thinking(s: &str) -> String {
+    let mut out = Vec::new();
+    let mut rest = s;
+    while let Some(i) = rest.find("<think>") {
+        let after = &rest[i + "<think>".len()..];
+        match after.find("</think>") {
+            Some(j) => {
+                out.push(after[..j].trim().to_string());
+                rest = &after[j + "</think>".len()..];
+            }
+            None => {
+                out.push(after.trim().to_string());
+                break;
+            }
+        }
+    }
+    out.retain(|t| !t.is_empty());
+    out.join("\n\n")
+}
+
+/// Cuts text to `max` characters, saying so.
+pub fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        s.chars().take(max).collect::<String>() + &format!("\n[… cut at {max} characters]")
+    }
+}
+
 /// Replaces `_INPUT_` in `prompt` with `input`, or appends the input if the
 /// placeholder isn't there.
 pub fn fill_prompt(prompt: &str, input: &str) -> String {
@@ -103,6 +133,8 @@ mod tests {
         assert_eq!(strip_thinking("<think>hmm</think>\nAnswer"), "Answer");
         assert_eq!(strip_thinking("A <think>x</think>B"), "A B");
         assert_eq!(strip_thinking("<think>never closed"), "");
+        assert_eq!(thinking("<think> a </think>B<think>c</think>"), "a\n\nc");
+        assert_eq!(truncate("abcdef", 3), "abc\n[… cut at 3 characters]");
     }
 
     #[test]

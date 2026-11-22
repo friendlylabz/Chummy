@@ -14,7 +14,7 @@ mod windows;
 
 use tauri::{Manager, RunEvent};
 
-use commands::{agents, chat, general, local, loops, providers};
+use commands::{agents, chat, general, local, loops, providers, tools};
 use state::AppState;
 
 pub fn run() {
@@ -84,6 +84,10 @@ pub fn run() {
             local::set_local_device,
             local::stop_engine,
             local::engine_log,
+            tools::tools_status,
+            tools::setup_tools,
+            tools::set_tool_enabled,
+            tools::set_tool_network,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Chummy");

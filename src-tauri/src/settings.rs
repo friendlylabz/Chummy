@@ -4,6 +4,7 @@
 //! - every field has a default (`#[serde(default)]`), so older files load;
 //! - renames or meaning changes bump [`VERSION`] and add a step to [`migrate`].
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use chummy_llm::ProviderConfig;
@@ -54,6 +55,17 @@ pub struct Permissions {
     pub tools: bool,
 }
 
+/// A tool's switches. Both are off until the user turns them on, and both
+/// also need the matching permission (`tools`, `network`) to be on.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ToolPref {
+    /// Agents may call this tool.
+    pub enabled: bool,
+    /// This tool may use the internet (only for tools that ask for it).
+    pub network: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LocalSettings {
@@ -82,6 +94,8 @@ pub struct Settings {
     /// The agent shown in the chat window.
     pub active_agent: Option<String>,
     pub local: LocalSettings,
+    /// Per-tool switches, by tool name.
+    pub tools: BTreeMap<String, ToolPref>,
 }
 
 impl Default for Settings {
@@ -95,6 +109,7 @@ impl Default for Settings {
             agents: Vec::new(),
             active_agent: None,
             local: LocalSettings::default(),
+            tools: BTreeMap::new(),
         }
     }
 }
@@ -114,6 +129,10 @@ impl Settings {
             .as_deref()
             .and_then(|d| self.provider(d))
             .or_else(|| self.providers.first())
+    }
+
+    pub fn tool(&self, name: &str) -> ToolPref {
+        self.tools.get(name).copied().unwrap_or_default()
     }
 
     /// The model an agent uses: its own choice if that still exists, else the default.

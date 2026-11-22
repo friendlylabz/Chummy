@@ -1,14 +1,28 @@
 <script lang="ts">
-  import type { BlockInfo, Category } from "$lib/ipc";
+  import type { BlockInfo, Category, FunctionDef } from "$lib/ipc";
   import { loops } from "$lib/stores/loops.svelte";
   import { categoryColor, categoryLabel } from "./loopdoc";
 
-  let { onadd }: { onadd: (info: BlockInfo) => void } = $props();
+  let {
+    onadd,
+    functions = [],
+    current = null,
+    onaddfunction,
+  }: {
+    onadd: (info: BlockInfo) => void;
+    functions?: FunctionDef[];
+    /** The function being edited, which can't be added inside itself. */
+    current?: string | null;
+    onaddfunction: (f: FunctionDef) => void;
+  } = $props();
 
-  const order: Category[] = ["start", "think", "text", "flow", "workspace", "finish"];
+  const order: Category[] = ["start", "think", "exchange", "text", "flow", "workspace", "finish"];
   const groups = $derived(
-    order.map((c) => ({ c, items: loops.catalog.filter((b) => b.category === c) })).filter((g) => g.items.length),
+    order
+      .map((c) => ({ c, items: loops.catalog.filter((b) => b.category === c && b.palette) }))
+      .filter((g) => g.items.length),
   );
+  const usable = $derived(functions.filter((f) => f.id !== current));
 
   function dragStart(e: DragEvent, info: BlockInfo) {
     e.dataTransfer?.setData("application/x-chummy-block", info.kind);
@@ -38,6 +52,17 @@
       {/each}
     </div>
   {/each}
+  <div class="group">
+    <div class="group-title">Functions</div>
+    {#each usable as f (f.id)}
+      <button type="button" class="item" title={f.description || "A block made of other blocks"} style:--cat="var(--text-muted)" onclick={() => onaddfunction(f)}>
+        <span class="dot fn"></span>
+        <span class="name">{f.name}</span>
+      </button>
+    {:else}
+      <p class="tip">Select several blocks and choose Make function to group them into one.</p>
+    {/each}
+  </div>
 </aside>
 
 <style>
@@ -85,6 +110,9 @@
   }
   .item:hover {
     background: var(--surface-hover);
+  }
+  .dot.fn {
+    box-shadow: 2px 2px 0 -1px var(--surface), 2px 2px 0 0 var(--text-faint);
   }
   .dot {
     flex: none;

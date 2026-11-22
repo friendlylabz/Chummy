@@ -268,15 +268,16 @@ pub async fn set_permission(
         let (title, msg, ok) = match kind {
             PermissionKind::Network => (
                 "Allow internet access?",
-                "Agents and their tools will be able to reach the internet. They could send content \
-                 from their workspaces to websites.\n\nThis doesn't affect the model connections you set \
-                 up in Models; those are separate.",
+                "Tools you allow in Tools will be able to reach the internet (never this computer or \
+                 your local network). They could send content from an agent's workspace to websites.\n\n\
+                 This doesn't affect the model connections you set up in Models; those are separate.",
                 "Allow internet access",
             ),
             PermissionKind::Tools => (
                 "Allow tools?",
-                "Agents will be able to run the tools you install. Tools stay locked to the agent's \
-                 workspace folder, and still need internet access turned on to go online.",
+                "Agents will be able to run the tools you switch on in Tools. Each tool runs in a sandbox \
+                 that can only see the agent's workspace folder, and can only go online if you also \
+                 allow that tool and turn on internet access.",
                 "Allow tools",
             ),
         };

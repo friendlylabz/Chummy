@@ -9,7 +9,9 @@ use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 
 use super::{CmdResult, err};
-use crate::settings::{Agent, LocalSettings, Permissions, Settings, Theme};
+use std::collections::BTreeMap;
+
+use crate::settings::{Agent, LocalSettings, Permissions, Settings, Theme, ToolPref};
 use crate::state::{AppState, HF_TOKEN_KEY, SetupStatus};
 use crate::windows::{self, AppWindow};
 
@@ -32,6 +34,7 @@ pub struct SettingsView {
     pub default_provider: Option<String>,
     pub local: LocalSettings,
     pub hf_token_set: bool,
+    pub tools: BTreeMap<String, ToolPref>,
 }
 
 pub fn settings_view(state: &AppState, s: &Settings) -> SettingsView {
@@ -51,6 +54,7 @@ pub fn settings_view(state: &AppState, s: &Settings) -> SettingsView {
         default_provider: s.default_provider.clone(),
         local: s.local.clone(),
         hf_token_set: state.has_secret(HF_TOKEN_KEY),
+        tools: s.tools.clone(),
     }
 }
 

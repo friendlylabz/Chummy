@@ -168,6 +168,9 @@ pub fn templates() -> Vec<Template> {
         l("improve", "out", "check", "in"),
     ];
 
+    let plan = LoopFile::from_json(include_str!("../templates/five-step-plan.chummy.json"))
+        .expect("the built-in plan template is a valid loop file");
+
     vec![
         Template {
             id: "blank",
@@ -187,6 +190,12 @@ pub fn templates() -> Vec<Template> {
             description: "Drafts, checks its own answer, and improves it until the check passes.",
             file: check,
         },
+        Template {
+            id: "five_step_plan",
+            name: "5 step recursive plan",
+            description: "Plans your goal in 5 steps or fewer, does each step it can (with tools), and breaks down the rest, breadth-first.",
+            file: plan,
+        },
     ]
 }
 
@@ -194,6 +203,121 @@ pub fn templates() -> Vec<Template> {
 mod tests {
     use super::*;
     use crate::validate::analyze;
+
+    use crate::engine::{Host, LlmAnswer, LlmCall, RunInputs, RunStatus, ToolOutput, run};
+    use crate::exchange::{Role, ToolCall, ToolInfo};
+    use serde_json::{Value as Json, json};
+    use std::sync::Mutex;
+    use std::sync::atomic::AtomicBool;
+
+    /// Answers like a model that can do everything but writing a summary.
+    #[derive(Default)]
+    struct Planner {
+        tools_run: Mutex<Vec<String>>,
+    }
+
+    impl Host for Planner {
+        async fn llm(
+            &self,
+            call: LlmCall,
+            _: &mut (dyn FnMut(&str) + Send),
+        ) -> Result<LlmAnswer, String> {
+            let last = call.messages.last().unwrap();
+            let user = call
+                .messages
+                .iter()
+                .rev()
+                .find(|m| m.role == Role::User)
+                .map(|m| m.text.to_lowercase())
+                .unwrap_or_default();
+            let text = |t: &str| {
+                Ok(LlmAnswer {
+                    text: t.into(),
+                    ..Default::default()
+                })
+            };
+            if last.role == Role::Tool {
+                return text(&format!("Done: {}", last.text));
+            }
+            if !call.tools.is_empty() && user.contains("date") {
+                return Ok(LlmAnswer {
+                    calls: vec![ToolCall {
+                        id: "t1".into(),
+                        name: "current_time".into(),
+                        arguments: json!({}),
+                    }],
+                    ..Default::default()
+                });
+            }
+            if user.contains("yes or no") {
+                return text(if user.contains("summary") {
+                    "NO"
+                } else {
+                    "YES"
+                });
+            }
+            if user.contains("too big") {
+                return text("1. Gather notes\n2. Write two lines");
+            }
+            if user.contains("numbered") {
+                return text("1. Find today's date\n2. Pick a topic\n3. Write a summary");
+            }
+            text("did it")
+        }
+        fn tool_info(&self, name: &str) -> Option<ToolInfo> {
+            (name == "current_time").then(|| ToolInfo {
+                name: name.into(),
+                description: "Time.".into(),
+                parameters: json!({ "type": "object", "properties": {} }),
+            })
+        }
+        async fn run_tool(&self, name: &str, _: Json) -> Result<ToolOutput, String> {
+            self.tools_run.lock().unwrap().push(name.into());
+            Ok(ToolOutput {
+                text: "Monday".into(),
+                is_error: false,
+            })
+        }
+        fn read_file(&self, _: &str) -> Result<String, String> {
+            Err("no".into())
+        }
+        fn write_file(&self, _: &str, _: &str, _: bool) -> Result<(), String> {
+            Err("no".into())
+        }
+        fn list_files(&self, _: &str) -> Result<Vec<String>, String> {
+            Err("no".into())
+        }
+    }
+
+    #[tokio::test]
+    async fn the_plan_template_works_breadth_first() {
+        let t = templates()
+            .into_iter()
+            .find(|t| t.id == "five_step_plan")
+            .unwrap();
+        let host = Planner::default();
+        let inputs = RunInputs {
+            message: "Write about today".into(),
+            ..Default::default()
+        };
+        let out = run(&t.file, &host, &inputs, &AtomicBool::new(false), |_| {}).await;
+        assert_eq!(out.status, RunStatus::Completed, "{out:?}");
+        let r = &out.replies;
+        assert!(r[0].starts_with("**Plan**"), "{r:?}");
+        assert_eq!(r[1], "**✓ Step: Find today's date**\n\nDone: Monday");
+        assert_eq!(r[2], "**✓ Step: Pick a topic**\n\ndid it");
+        assert!(
+            r[3].starts_with("**Breaking down Step: Write a summary**"),
+            "{r:?}"
+        );
+        // The sub-steps come after the top-level steps: breadth-first.
+        assert_eq!(r[4], "**✓ Step: Gather notes**\n\ndid it");
+        assert_eq!(r[5], "**✓ Step: Write two lines**\n\ndid it");
+        assert_eq!(r.len(), 6);
+        assert_eq!(*host.tools_run.lock().unwrap(), vec!["current_time"]);
+        // Only the start exchange waits at the end, holding the running exchange.
+        assert_eq!(out.waiting, vec!["pair"]);
+    }
 
     #[test]
     fn templates_are_valid() {

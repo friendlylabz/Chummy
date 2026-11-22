@@ -37,5 +37,6 @@ pub use config::{LocalModel, Precision, Preset, ProviderConfig, ProviderKind, pr
 pub use error::LlmError;
 pub use probe::{ProbeReport, ProbeStep, StepStatus, probe};
 pub use types::{
-    ChatEvent, ChatRequest, ChatResponse, Message, Role, StopReason, ToolCall, ToolSpec, Usage,
+    ChatEvent, ChatRequest, ChatResponse, Message, Role, StopReason, ToolCall, ToolChoice,
+    ToolSpec, Usage,
 };

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
 
-use crate::types::{ChatEvent, ChatRequest, Role, StopReason, Usage, finish_tool_call};
+use crate::types::{ChatEvent, ChatRequest, Role, StopReason, ToolChoice, Usage, finish_tool_call};
 
 pub(crate) const VERSION: &str = "2023-06-01";
 const DEFAULT_MAX_TOKENS: u32 = 4096;
@@ -64,6 +64,9 @@ pub(crate) fn body(model: &str, req: &ChatRequest) -> Value {
             .iter()
             .map(|t| json!({ "name": t.name, "description": t.description, "input_schema": t.parameters }))
             .collect();
+        if req.tool_choice == ToolChoice::Required {
+            b["tool_choice"] = json!({ "type": "any" });
+        }
     }
     if let Some(t) = req.temperature {
         b["temperature"] = json!(t);

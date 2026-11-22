@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Handle, Position, useUpdateNodeInternals, type NodeProps } from "@xyflow/svelte";
   import { loops } from "$lib/stores/loops.svelte";
-  import { categoryColor, summary, type BlockNode } from "./loopdoc";
+  import { categoryColor, editorActions, summary, type BlockNode } from "./loopdoc";
 
   let { id, data, selected }: NodeProps<BlockNode> = $props();
 
@@ -20,6 +20,11 @@
 
 <div
   class="block"
+  class:fn={data.block.type === "function"}
+  ondblclick={() => {
+    if (data.block.type === "function") editorActions.openFunction(String(data.block.params.function ?? ""));
+  }}
+  role="presentation"
   class:selected
   class:has-issue={data.issues.length > 0}
   data-state={data.state ?? "idle"}
@@ -41,14 +46,14 @@
         {#each data.inputs as p (p.name)}
           <div class="port in">
             <Handle type="target" position={Position.Left} id={p.name} class="h kind-{p.kind}" />
-            <span>{p.label}</span>
+            <span class:exposed={data.exposedIn?.includes(p.name)} title={data.exposedIn?.includes(p.name) ? "Function input" : undefined}>{p.label}</span>
           </div>
         {/each}
       </div>
       <div class="col right">
         {#each data.outputs as p (p.name)}
           <div class="port out">
-            <span>{p.label}</span>
+            <span class:exposed={data.exposedOut?.includes(p.name)} title={data.exposedOut?.includes(p.name) ? "Function output" : undefined}>{p.label}</span>
             <Handle type="source" position={Position.Right} id={p.name} class="h kind-{p.kind}" />
           </div>
         {/each}
@@ -72,6 +77,15 @@
     transition:
       border-color var(--dur-fast) var(--ease),
       box-shadow var(--dur-fast) var(--ease);
+  }
+  .block.fn {
+    box-shadow:
+      4px 4px 0 -1px var(--surface),
+      4px 4px 0 0 var(--border-strong),
+      var(--shadow-sm);
+  }
+  .block.fn .head {
+    padding-top: var(--space-2);
   }
   .block.selected {
     border-color: var(--accent);
@@ -183,6 +197,19 @@
   .port :global(.h.kind-list) {
     background: #a78bfa;
     border-radius: 3px;
+  }
+  .port :global(.h.kind-exchange) {
+    background: #f4a261;
+    border-radius: 2px;
+  }
+  .exposed {
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .exposed::before {
+    content: "◆ ";
+    font-size: 8px;
+    vertical-align: 1px;
   }
   .port :global(.h.kind-any) {
     background: var(--text-muted);

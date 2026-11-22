@@ -8,7 +8,8 @@
 //!   takes one value from the front of each queue and runs.
 //! - A block's results go to **every** link from the output port that produced
 //!   them (broadcast). Most blocks produce one value on each output; *For each*
-//!   produces one per item, *Branch* uses only one of its two outputs, and
+//!   produces one per item, *Branch* uses only one of its two outputs, a model
+//!   block sends either its Answer or its Tool call (plus Reasoning), and
 //!   *Reply* produces none.
 //! - Blocks without inputs (Message, Conversation, Fixed text) run once, at the
 //!   start.
@@ -16,18 +17,24 @@
 //!   deterministic. The run ends when nothing is ready.
 //! - Cycles are allowed: a block runs again whenever its ports refill. Runs are
 //!   bounded by [`RunLimits`] and can be stopped at any time.
+//! - A **function** block runs its own blocks the same way, as a fresh run
+//!   seeded with its inputs, and sends out what reached its outputs. Steps,
+//!   model calls and tool calls inside count toward the loop's limits.
 
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value as Json;
 
-use crate::blocks::BlockKind;
-use crate::format::LoopFile;
-use crate::text::{fill_prompt, split, strip_thinking};
-use crate::validate::{Severity, analyze};
+use crate::blocks::{BadCall, BlockKind, LlmParams, OnToolError, ToolChoice};
+use crate::exchange::{ExMessage, Exchange, Role, ToolCall, ToolInfo, check_arguments};
+use crate::format::{Block, FunctionDef, Link, LoopFile};
+use crate::text::{fill_prompt, split, strip_thinking, thinking, truncate};
+use crate::validate::{Analysis, Severity, analyze};
 
 /// A value flowing between blocks.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -35,6 +42,7 @@ use crate::validate::{Severity, analyze};
 pub enum Value {
     Text(String),
     List(Vec<String>),
+    Exchange(Exchange),
 }
 
 impl Value {
@@ -42,6 +50,7 @@ impl Value {
         match self {
             Value::Text(t) => t.clone(),
             Value::List(l) => l.join("\n"),
+            Value::Exchange(e) => e.transcript(),
         }
     }
 
@@ -49,6 +58,7 @@ impl Value {
         match self {
             Value::Text(t) => vec![t.clone()],
             Value::List(l) => l.clone(),
+            Value::Exchange(e) => e.messages.iter().map(|m| m.text.clone()).collect(),
         }
     }
 
@@ -62,6 +72,28 @@ impl Value {
                 l.len(),
                 l.first().cloned().unwrap_or_default()
             ),
+            Value::Exchange(e) => {
+                let last = e.messages.last();
+                format!(
+                    "[exchange, {} messages] {}",
+                    e.messages.len(),
+                    last.map(|m| {
+                        if m.calls.is_empty() {
+                            format!("{}: {}", m.role.label(), m.text)
+                        } else {
+                            format!(
+                                "calls {}",
+                                m.calls
+                                    .iter()
+                                    .map(|c| c.name.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            )
+                        }
+                    })
+                    .unwrap_or_default()
+                )
+            }
         };
         if s.chars().count() > MAX {
             s.chars().take(MAX).collect::<String>() + "…"
@@ -77,6 +109,9 @@ fn d_steps() -> u32 {
 fn d_llm() -> u32 {
     20
 }
+fn d_tools() -> u32 {
+    20
+}
 
 /// Safety limits for one run. Stored in the loop file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,6 +123,9 @@ pub struct RunLimits {
     /// Most model calls allowed in one run of the loop.
     #[serde(default = "d_llm")]
     pub max_llm_calls: u32,
+    /// Most tool calls allowed in one run of the loop.
+    #[serde(default = "d_tools")]
+    pub max_tool_calls: u32,
 }
 
 impl Default for RunLimits {
@@ -95,6 +133,7 @@ impl Default for RunLimits {
         Self {
             max_steps: d_steps(),
             max_llm_calls: d_llm(),
+            max_tool_calls: d_tools(),
         }
     }
 }
@@ -117,16 +156,45 @@ pub struct RunInputs {
     pub overrides: HashMap<String, String>,
 }
 
-/// One model request from an LLM block.
+/// One model request from a model block.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LlmCall {
     pub block: String,
-    pub prompt: String,
-    pub system: Option<String>,
+    pub messages: Vec<ExMessage>,
+    /// Tools offered to the model (empty: none).
+    pub tools: Vec<ToolInfo>,
+    pub tool_choice: ToolChoice,
     pub temperature: Option<f32>,
     pub max_tokens: u32,
     /// Model connection id; `None` means the agent's model.
     pub model: Option<String>,
+}
+
+/// A tool call the model tried to make but got wrong at the format level.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MalformedCall {
+    pub name: String,
+    pub raw: String,
+    pub error: String,
+}
+
+/// What the model said.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LlmAnswer {
+    pub text: String,
+    /// Thinking the provider reported separately (not `<think>` tags, which
+    /// the engine finds itself).
+    pub reasoning: String,
+    pub calls: Vec<ToolCall>,
+    pub malformed: Vec<MalformedCall>,
+}
+
+/// A tool's result.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolOutput {
+    pub text: String,
+    /// The tool reported a problem; `text` says what.
+    pub is_error: bool,
 }
 
 /// What the engine needs from the outside world.
@@ -136,7 +204,15 @@ pub trait Host: Send + Sync {
         &self,
         call: LlmCall,
         on_text: &mut (dyn FnMut(&str) + Send),
-    ) -> impl Future<Output = Result<String, String>> + Send;
+    ) -> impl Future<Output = Result<LlmAnswer, String>> + Send;
+    /// A tool that's installed and switched on, if there is one by that name.
+    fn tool_info(&self, name: &str) -> Option<ToolInfo>;
+    /// Runs a tool. `Err` means it couldn't run at all.
+    fn run_tool(
+        &self,
+        name: &str,
+        arguments: Json,
+    ) -> impl Future<Output = Result<ToolOutput, String>> + Send;
     fn read_file(&self, path: &str) -> Result<String, String>;
     fn write_file(&self, path: &str, content: &str, append: bool) -> Result<(), String>;
     /// Names in a folder; folders end with `/`.
@@ -153,7 +229,8 @@ pub enum BlockState {
     Failed,
 }
 
-/// Progress reported while a run goes.
+/// Progress reported while a run goes. Blocks inside a function are named
+/// by path: `<function block id>/<inner block id>`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
@@ -169,6 +246,20 @@ pub enum Event {
     },
     /// Streaming text from a model.
     LlmText { block: String, text: String },
+    /// The model asked for a tool.
+    ToolCall {
+        block: String,
+        tool: String,
+        arguments: String,
+    },
+    ToolResult {
+        block: String,
+        tool: String,
+        preview: String,
+        is_error: bool,
+    },
+    /// Something worth knowing that isn't an error, e.g. a retry.
+    Notice { block: String, text: String },
     /// A Reply block produced part of the answer.
     Reply { block: String, text: String },
 }
@@ -194,32 +285,142 @@ pub struct RunOutcome {
     pub replies: Vec<String>,
     pub steps: u32,
     pub llm_calls: u32,
+    pub tool_calls: u32,
     /// Blocks left with some, but not all, of their inputs.
     pub waiting: Vec<String>,
 }
 
 type Outputs = Vec<(String, Value)>;
+type Emit<'e> = dyn FnMut(Event) + Send + 'e;
 
-struct Runner<'a, H: Host> {
-    l: &'a LoopFile,
-    host: &'a H,
-    inputs: &'a RunInputs,
-    cancel: &'a AtomicBool,
+/// One graph being run: the loop, or one call of a function.
+struct Frame<'a> {
+    blocks: &'a [Block],
+    /// Prepended to block ids in events ("" for the loop).
+    prefix: String,
     kinds: HashMap<String, BlockKind>,
-    /// Input port names per block, in order.
     in_ports: HashMap<String, Vec<String>>,
-    /// Per block, one queue per input port.
     queues: HashMap<String, Vec<VecDeque<Value>>>,
-    /// (block, output port) → [(block, input index)]
     routes: HashMap<(String, String), Vec<(String, usize)>>,
     ready: VecDeque<String>,
     /// How many times each block is in `ready`. Kept equal to the number of
     /// runs its queued inputs allow, so the queue is strictly first-come.
     scheduled: HashMap<String, usize>,
     remembered: HashMap<String, Value>,
+    /// (inner block, port) → function output names.
+    exposed: HashMap<(String, String), Vec<String>>,
+    /// What reached the function's outputs.
+    collected: Outputs,
+}
+
+impl<'a> Frame<'a> {
+    fn new(blocks: &'a [Block], links: &'a [Link], prefix: String, analysis: &Analysis) -> Self {
+        let mut f = Frame {
+            blocks,
+            prefix,
+            kinds: HashMap::new(),
+            in_ports: HashMap::new(),
+            queues: HashMap::new(),
+            routes: HashMap::new(),
+            ready: VecDeque::new(),
+            scheduled: HashMap::new(),
+            remembered: HashMap::new(),
+            exposed: HashMap::new(),
+            collected: vec![],
+        };
+        for b in blocks {
+            // Validation passed, so every block parses.
+            let Ok(k) = BlockKind::parse(&b.kind, &b.params) else {
+                continue;
+            };
+            let ins: Vec<String> = match &k {
+                BlockKind::Function(p) => analysis
+                    .functions
+                    .get(&p.function)
+                    .map(|fp| fp.ports.inputs.iter().map(|p| p.name.clone()).collect())
+                    .unwrap_or_default(),
+                _ => k.inputs().into_iter().map(|p| p.name).collect(),
+            };
+            f.queues
+                .insert(b.id.clone(), vec![VecDeque::new(); ins.len()]);
+            if ins.is_empty() {
+                f.ready.push_back(b.id.clone());
+            }
+            f.in_ports.insert(b.id.clone(), ins);
+            f.kinds.insert(b.id.clone(), k);
+        }
+        for link in links {
+            let Some(ports) = f.in_ports.get(&link.to.block) else {
+                continue;
+            };
+            let idx = ports.iter().position(|p| *p == link.to.port).unwrap_or(0);
+            f.routes
+                .entry((link.from.block.clone(), link.from.port.clone()))
+                .or_default()
+                .push((link.to.block.clone(), idx));
+        }
+        f
+    }
+
+    fn label(&self, id: &str) -> String {
+        self.blocks
+            .iter()
+            .find(|b| b.id == id)
+            .map(|b| {
+                if b.label.is_empty() {
+                    id.to_string()
+                } else {
+                    b.label.clone()
+                }
+            })
+            .unwrap_or_else(|| id.to_string())
+    }
+
+    fn path(&self, id: &str) -> String {
+        format!("{}{id}", self.prefix)
+    }
+
+    /// How many more runs the queued inputs allow.
+    fn possible_runs(&self, id: &str) -> usize {
+        self.queues[id].iter().map(|q| q.len()).min().unwrap_or(0)
+    }
+
+    /// Queues `id` once for every run its inputs now allow.
+    fn schedule(&mut self, id: &str) -> bool {
+        let possible = self.possible_runs(id);
+        let s = self.scheduled.entry(id.to_string()).or_default();
+        let added = *s < possible;
+        while *s < possible {
+            *s += 1;
+            self.ready.push_back(id.to_string());
+        }
+        added
+    }
+
+    fn waiting(&self) -> Vec<String> {
+        let mut w: Vec<String> = self
+            .queues
+            .iter()
+            .filter(|(_, qs)| qs.iter().any(|q| !q.is_empty()) && qs.iter().any(|q| q.is_empty()))
+            .map(|(id, _)| self.path(id))
+            .collect();
+        w.sort();
+        w
+    }
+}
+
+struct Runner<'a, H: Host> {
+    file: &'a LoopFile,
+    analysis: Analysis,
+    host: &'a H,
+    inputs: &'a RunInputs,
+    cancel: &'a AtomicBool,
     replies: Vec<String>,
     steps: u32,
     llm_calls: u32,
+    tool_calls: u32,
+    /// Notices already shown, so a block in a cycle doesn't repeat them.
+    noticed: std::collections::HashSet<String>,
 }
 
 /// Runs `l` to completion (or until stopped or limited).
@@ -244,64 +445,40 @@ pub async fn run<H: Host>(
             replies: vec![],
             steps: 0,
             llm_calls: 0,
+            tool_calls: 0,
             waiting: vec![],
         };
     }
 
     let mut r = Runner {
-        l,
+        file: l,
+        analysis,
         host,
         inputs,
         cancel,
-        kinds: HashMap::new(),
-        in_ports: HashMap::new(),
-        queues: HashMap::new(),
-        routes: HashMap::new(),
-        ready: VecDeque::new(),
-        scheduled: HashMap::new(),
-        remembered: HashMap::new(),
         replies: vec![],
         steps: 0,
         llm_calls: 0,
+        tool_calls: 0,
+        noticed: Default::default(),
     };
-    for b in &l.blocks {
-        // Validation passed, so every block parses.
-        let Ok(k) = BlockKind::parse(&b.kind, &b.params) else {
-            continue;
-        };
-        let ins: Vec<String> = k.inputs().into_iter().map(|p| p.name).collect();
-        r.queues
-            .insert(b.id.clone(), vec![VecDeque::new(); ins.len()]);
-        if ins.is_empty() {
-            r.ready.push_back(b.id.clone());
-        }
-        r.in_ports.insert(b.id.clone(), ins);
-        r.kinds.insert(b.id.clone(), k);
-    }
-    for link in &l.links {
-        let idx = r.in_ports[&link.to.block]
-            .iter()
-            .position(|p| *p == link.to.port)
-            .unwrap_or(0);
-        r.routes
-            .entry((link.from.block.clone(), link.from.port.clone()))
-            .or_default()
-            .push((link.to.block.clone(), idx));
-    }
-
-    let status = r.drive(&mut on_event).await;
-    let waiting = r
-        .queues
-        .iter()
-        .filter(|(_, qs)| qs.iter().any(|q| !q.is_empty()) && qs.iter().any(|q| q.is_empty()))
-        .map(|(id, _)| id.clone())
-        .collect();
+    let mut frame = Frame::new(&l.blocks, &l.links, String::new(), &r.analysis);
+    let status = match r.drive(&mut frame, &mut on_event).await {
+        Ok(()) => RunStatus::Completed,
+        Err(Stop::Cancelled) => RunStatus::Stopped,
+        Err(Stop::Limit(message)) => RunStatus::LimitReached { message },
+        Err(Stop::Failed { block, error }) => RunStatus::Failed {
+            block: Some(block),
+            error,
+        },
+    };
     RunOutcome {
         status,
         replies: r.replies,
         steps: r.steps,
         llm_calls: r.llm_calls,
-        waiting,
+        tool_calls: r.tool_calls,
+        waiting: frame.waiting(),
     }
 }
 
@@ -311,126 +488,126 @@ async fn cancelled(flag: &AtomicBool) {
     }
 }
 
-impl<H: Host> Runner<'_, H> {
-    /// How many more runs the queued inputs allow.
-    fn possible_runs(&self, id: &str) -> usize {
-        self.queues[id].iter().map(|q| q.len()).min().unwrap_or(0)
-    }
+enum Stop {
+    Cancelled,
+    Limit(String),
+    /// `block` is the path of the block that failed.
+    Failed {
+        block: String,
+        error: String,
+    },
+}
 
-    /// Queues `id` once for every run its inputs now allow.
-    fn schedule(&mut self, id: &str) -> bool {
-        let possible = self.possible_runs(id);
-        let s = self.scheduled.entry(id.to_string()).or_default();
-        let added = *s < possible;
-        while *s < possible {
-            *s += 1;
-            self.ready.push_back(id.to_string());
-        }
-        added
-    }
+/// A block's own failure, before the engine adds where it happened.
+enum BlockErr {
+    Stop(Stop),
+    Failed(String),
+}
 
-    fn label(&self, id: &str) -> String {
-        self.l
-            .block(id)
-            .map(|b| {
-                if b.label.is_empty() {
-                    id.to_string()
-                } else {
-                    b.label.clone()
+impl From<Stop> for BlockErr {
+    fn from(s: Stop) -> Self {
+        BlockErr::Stop(s)
+    }
+}
+
+type BoxFut<'s, T> = Pin<Box<dyn Future<Output = T> + Send + 's>>;
+
+impl<'a, H: Host> Runner<'a, H> {
+    fn drive<'s>(
+        &'s mut self,
+        frame: &'s mut Frame<'a>,
+        on_event: &'s mut Emit<'_>,
+    ) -> BoxFut<'s, Result<(), Stop>> {
+        Box::pin(async move {
+            while let Some(id) = frame.ready.pop_front() {
+                if self.cancel.load(Ordering::Relaxed) {
+                    return Err(Stop::Cancelled);
                 }
-            })
-            .unwrap_or_else(|| id.to_string())
-    }
-
-    async fn drive(&mut self, on_event: &mut (impl FnMut(Event) + Send)) -> RunStatus {
-        while let Some(id) = self.ready.pop_front() {
-            if self.cancel.load(Ordering::Relaxed) {
-                return RunStatus::Stopped;
-            }
-            if let Some(s) = self.scheduled.get_mut(&id) {
-                *s = s.saturating_sub(1);
-            }
-            let args: Vec<Value> = self
-                .queues
-                .get_mut(&id)
-                .unwrap()
-                .iter_mut()
-                .filter_map(|q| q.pop_front())
-                .collect();
-
-            self.steps += 1;
-            if self.steps > self.l.limits.max_steps {
-                return RunStatus::LimitReached {
-                    message: format!(
-                        "Stopped after {} steps, the loop's limit.",
-                        self.l.limits.max_steps
-                    ),
-                };
-            }
-
-            on_event(Event::BlockState {
-                block: id.clone(),
-                label: self.label(&id),
-                state: BlockState::Running,
-            });
-            let result = self.execute(&id, args, on_event).await;
-            let outputs = match result {
-                Ok(o) => o,
-                Err(Stop::Cancelled) => return RunStatus::Stopped,
-                Err(Stop::Limit(message)) => return RunStatus::LimitReached { message },
-                Err(Stop::Failed(e)) => {
-                    on_event(Event::BlockState {
-                        block: id.clone(),
-                        label: self.label(&id),
-                        state: BlockState::Failed,
-                    });
-                    return RunStatus::Failed {
-                        block: Some(id.clone()),
-                        error: format!("{}: {e}", self.label(&id)),
-                    };
+                if let Some(s) = frame.scheduled.get_mut(&id) {
+                    *s = s.saturating_sub(1);
                 }
-            };
-            on_event(Event::BlockState {
-                block: id.clone(),
-                label: self.label(&id),
-                state: BlockState::Done,
-            });
-
-            for (port, value) in outputs {
-                on_event(Event::BlockOutput {
-                    block: id.clone(),
-                    port: port.clone(),
-                    preview: value.preview(),
-                });
-                let targets = self
-                    .routes
-                    .get(&(id.clone(), port))
-                    .cloned()
+                let args: Vec<Value> = frame
+                    .queues
+                    .get_mut(&id)
+                    .map(|qs| qs.iter_mut().filter_map(|q| q.pop_front()).collect())
                     .unwrap_or_default();
-                for (to, idx) in targets {
-                    self.queues.get_mut(&to).unwrap()[idx].push_back(value.clone());
-                    if !self.schedule(&to) && self.possible_runs(&to) == 0 {
+
+                self.steps += 1;
+                if self.steps > self.file.limits.max_steps {
+                    return Err(Stop::Limit(format!(
+                        "Stopped after {} steps, the loop's limit.",
+                        self.file.limits.max_steps
+                    )));
+                }
+
+                let path = frame.path(&id);
+                let label = frame.label(&id);
+                on_event(Event::BlockState {
+                    block: path.clone(),
+                    label: label.clone(),
+                    state: BlockState::Running,
+                });
+                let outputs = match self.execute(frame, &id, args, on_event).await {
+                    Ok(o) => o,
+                    Err(BlockErr::Stop(s)) => return Err(s),
+                    Err(BlockErr::Failed(e)) => {
                         on_event(Event::BlockState {
-                            label: self.label(&to),
-                            block: to,
-                            state: BlockState::Waiting,
+                            block: path.clone(),
+                            label: label.clone(),
+                            state: BlockState::Failed,
                         });
+                        return Err(Stop::Failed {
+                            block: path,
+                            error: format!("{label}: {e}"),
+                        });
+                    }
+                };
+                on_event(Event::BlockState {
+                    block: path.clone(),
+                    label,
+                    state: BlockState::Done,
+                });
+
+                for (port, value) in outputs {
+                    on_event(Event::BlockOutput {
+                        block: path.clone(),
+                        port: port.clone(),
+                        preview: value.preview(),
+                    });
+                    let key = (id.clone(), port);
+                    if let Some(names) = frame.exposed.get(&key) {
+                        for n in names.clone() {
+                            frame.collected.push((n, value.clone()));
+                        }
+                    }
+                    let targets = frame.routes.get(&key).cloned().unwrap_or_default();
+                    for (to, idx) in targets {
+                        frame.queues.get_mut(&to).unwrap()[idx].push_back(value.clone());
+                        if !frame.schedule(&to) && frame.possible_runs(&to) == 0 {
+                            on_event(Event::BlockState {
+                                block: frame.path(&to),
+                                label: frame.label(&to),
+                                state: BlockState::Waiting,
+                            });
+                        }
                     }
                 }
             }
-        }
-        RunStatus::Completed
+            Ok(())
+        })
     }
 
     async fn execute(
         &mut self,
+        frame: &mut Frame<'a>,
         id: &str,
         args: Vec<Value>,
-        on_event: &mut (impl FnMut(Event) + Send),
-    ) -> Result<Outputs, Stop> {
+        on_event: &mut Emit<'_>,
+    ) -> Result<Outputs, BlockErr> {
         let one = |v: Value| Ok(vec![("out".to_string(), v)]);
         let arg = |i: usize| args.get(i).cloned().unwrap_or(Value::Text(String::new()));
-        let kind = self.kinds[id].clone();
+        let path = frame.path(id);
+        let kind = frame.kinds[id].clone();
         match kind {
             BlockKind::Input(_) => {
                 let text = self
@@ -470,49 +647,135 @@ impl<H: Host> Runner<'_, H> {
             BlockKind::Output(_) => {
                 let text = arg(0).as_text();
                 self.replies.push(text.clone());
-                on_event(Event::Reply {
-                    block: id.to_string(),
-                    text,
-                });
+                on_event(Event::Reply { block: path, text });
                 Ok(vec![])
             }
-            BlockKind::Llm(p) => {
-                if self.llm_calls >= self.l.limits.max_llm_calls {
-                    return Err(Stop::Limit(format!(
-                        "Stopped after {} model calls, the loop's limit.",
-                        self.l.limits.max_llm_calls
-                    )));
-                }
-                self.llm_calls += 1;
-                let call = LlmCall {
-                    block: id.to_string(),
-                    prompt: fill_prompt(&p.prompt, &arg(0).as_text()),
-                    system: Some(p.system.clone()).filter(|s| !s.trim().is_empty()),
-                    temperature: p.temperature,
-                    max_tokens: p.max_tokens,
-                    model: p.model.clone().filter(|m| !m.is_empty()),
+            BlockKind::Llm(p) => self.model_block(&path, &p, arg(0), on_event).await,
+            BlockKind::RunTool(p) => {
+                let Value::Exchange(mut ex) = arg(0) else {
+                    return Err(BlockErr::Failed(
+                        "it needs an exchange from a model block's Tool call output".into(),
+                    ));
                 };
-                let block = id.to_string();
-                let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-                let mut on_text = move |t: &str| {
-                    let _ = tx.send(t.to_string());
-                };
-                let fut = self.host.llm(call, &mut on_text);
-                tokio::pin!(fut);
-                let answer = loop {
-                    tokio::select! {
-                        r = &mut fut => break r,
-                        Some(t) = rx.recv() => on_event(Event::LlmText { block: block.clone(), text: t }),
-                        _ = cancelled(self.cancel) => return Err(Stop::Cancelled),
-                    }
-                };
-                while let Ok(t) = rx.try_recv() {
-                    on_event(Event::LlmText {
-                        block: block.clone(),
-                        text: t,
+                let calls = ex.pending_calls();
+                if calls.is_empty() {
+                    on_event(Event::Notice {
+                        block: path.clone(),
+                        text: "No tool calls to run; passing the exchange on.".into(),
                     });
                 }
-                one(Value::Text(strip_thinking(&answer.map_err(Stop::Failed)?)))
+                for call in calls {
+                    if self.tool_calls >= self.file.limits.max_tool_calls {
+                        return Err(Stop::Limit(format!(
+                            "Stopped after {} tool calls, the loop's limit.",
+                            self.file.limits.max_tool_calls
+                        ))
+                        .into());
+                    }
+                    self.tool_calls += 1;
+                    on_event(Event::ToolCall {
+                        block: path.clone(),
+                        tool: call.name.clone(),
+                        arguments: call.arguments.to_string(),
+                    });
+                    let fut = self.host.run_tool(&call.name, call.arguments.clone());
+                    let result = tokio::select! {
+                        r = fut => r,
+                        _ = cancelled(self.cancel) => return Err(Stop::Cancelled.into()),
+                    };
+                    let out = match result {
+                        Ok(o) => o,
+                        Err(e) => ToolOutput {
+                            text: format!("Error: {e}"),
+                            is_error: true,
+                        },
+                    };
+                    if out.is_error && p.on_error == OnToolError::Fail {
+                        return Err(BlockErr::Failed(format!("{}: {}", call.name, out.text)));
+                    }
+                    let text = truncate(&out.text, p.max_result_chars as usize);
+                    on_event(Event::ToolResult {
+                        block: path.clone(),
+                        tool: call.name.clone(),
+                        preview: Value::Text(text.clone()).preview(),
+                        is_error: out.is_error,
+                    });
+                    ex.messages.push(ExMessage {
+                        call_id: Some(call.id.clone()),
+                        name: Some(call.name.clone()),
+                        ..ExMessage::new(Role::Tool, text)
+                    });
+                }
+                one(Value::Exchange(ex))
+            }
+            BlockKind::Exchange(p) => {
+                let mut ex = Exchange::default();
+                let system = p.system.trim();
+                let has_system = matches!(arg(0), Value::Exchange(ref e) if e.messages.iter().any(|m| m.role == Role::System));
+                if !system.is_empty() && !has_system {
+                    ex.messages.push(ExMessage::new(Role::System, system));
+                }
+                let roles = if p.roles.is_empty() {
+                    vec![Role::User]
+                } else {
+                    p.roles.clone()
+                };
+                match arg(0) {
+                    Value::Text(t) => ex.messages.push(ExMessage::new(roles[0], t)),
+                    Value::List(items) => {
+                        for (i, t) in items.into_iter().enumerate() {
+                            ex.messages.push(ExMessage::new(roles[i % roles.len()], t));
+                        }
+                    }
+                    Value::Exchange(e) => ex.messages.extend(e.messages),
+                }
+                one(Value::Exchange(ex))
+            }
+            BlockKind::Augment(p) => {
+                let Value::Exchange(mut ex) = arg(0) else {
+                    return Err(BlockErr::Failed(
+                        "the Exchange input needs an exchange".into(),
+                    ));
+                };
+                let fmt = |t: &str| {
+                    if p.format.contains("_INPUT_") {
+                        p.format.replace("_INPUT_", t)
+                    } else {
+                        fill_prompt(&p.format, t)
+                    }
+                };
+                match arg(1) {
+                    Value::Text(t) => ex.messages.push(ExMessage::new(p.role, fmt(&t))),
+                    Value::List(items) => {
+                        for t in items {
+                            ex.messages.push(ExMessage::new(p.role, fmt(&t)));
+                        }
+                    }
+                    Value::Exchange(e) => ex
+                        .messages
+                        .extend(e.messages.into_iter().filter(|m| m.role != Role::System)),
+                }
+                one(Value::Exchange(ex))
+            }
+            BlockKind::ReadExchange(p) => {
+                let Value::Exchange(ex) = arg(0) else {
+                    return Err(BlockErr::Failed("it needs an exchange".into()));
+                };
+                let last = ex
+                    .messages
+                    .iter()
+                    .rev()
+                    .find(|m| p.role.matches(m.role) && !(m.text.is_empty() && !m.calls.is_empty()))
+                    .map(|m| m.text.clone())
+                    .unwrap_or_default();
+                Ok(vec![
+                    ("last".into(), Value::Text(last)),
+                    ("all".into(), Value::Text(ex.transcript())),
+                ])
+            }
+            BlockKind::Function(p) => {
+                self.function_block(frame, id, &p.function, args, on_event)
+                    .await
             }
             BlockKind::Combine(p) => {
                 let mut out = p.format.clone();
@@ -523,7 +786,7 @@ impl<H: Host> Runner<'_, H> {
             }
             BlockKind::Forward(_) => one(arg(0)),
             BlockKind::Remember(_) => {
-                let v = self
+                let v = frame
                     .remembered
                     .entry(id.to_string())
                     .or_insert_with(|| arg(0))
@@ -536,11 +799,19 @@ impl<H: Host> Runner<'_, H> {
                 p.overlap as usize,
                 p.deviation as usize,
             ))),
-            BlockKind::ForEach(_) => Ok(arg(0)
-                .as_list()
-                .into_iter()
-                .map(|t| ("out".to_string(), Value::Text(t)))
-                .collect()),
+            BlockKind::ForEach(p) => {
+                let items = arg(0).as_list();
+                let n = if p.limit == 0 {
+                    items.len()
+                } else {
+                    p.limit as usize
+                };
+                Ok(items
+                    .into_iter()
+                    .take(n)
+                    .map(|t| ("out".to_string(), Value::Text(t)))
+                    .collect())
+            }
             BlockKind::Separate(p) => Ok(arg(0)
                 .as_list()
                 .into_iter()
@@ -553,7 +824,8 @@ impl<H: Host> Runner<'_, H> {
                 one(Value::Text(arg(0).as_list().join(&sep)))
             }
             BlockKind::Regex(p) => {
-                let re = regex::Regex::new(&p.pattern).map_err(|e| Stop::Failed(e.to_string()))?;
+                let re =
+                    regex::Regex::new(&p.pattern).map_err(|e| BlockErr::Failed(e.to_string()))?;
                 let text = arg(0).as_text();
                 one(Value::List(
                     re.find_iter(&text)
@@ -562,7 +834,8 @@ impl<H: Host> Runner<'_, H> {
                 ))
             }
             BlockKind::Capture(p) => {
-                let re = regex::Regex::new(&p.pattern).map_err(|e| Stop::Failed(e.to_string()))?;
+                let re =
+                    regex::Regex::new(&p.pattern).map_err(|e| BlockErr::Failed(e.to_string()))?;
                 let text = arg(0).as_text();
                 let groups = (re.captures_len() - 1).min(10);
                 let mut cols = vec![Vec::new(); groups];
@@ -582,7 +855,8 @@ impl<H: Host> Runner<'_, H> {
                     .collect())
             }
             BlockKind::Branch(p) => {
-                let re = regex::Regex::new(&p.pattern).map_err(|e| Stop::Failed(e.to_string()))?;
+                let re =
+                    regex::Regex::new(&p.pattern).map_err(|e| BlockErr::Failed(e.to_string()))?;
                 let port = if re.is_match(&arg(1).as_text()) {
                     "yes"
                 } else {
@@ -593,52 +867,354 @@ impl<H: Host> Runner<'_, H> {
             BlockKind::ReadFile(_) => one(Value::Text(
                 self.host
                     .read_file(arg(0).as_text().trim())
-                    .map_err(Stop::Failed)?,
+                    .map_err(BlockErr::Failed)?,
             )),
             BlockKind::WriteFile(p) => {
                 let path = arg(0).as_text().trim().to_string();
                 self.host
                     .write_file(&path, &arg(1).as_text(), p.append)
-                    .map_err(Stop::Failed)?;
+                    .map_err(BlockErr::Failed)?;
                 one(Value::Text(path))
             }
             BlockKind::ListFiles(_) => one(Value::List(
                 self.host
                     .list_files(arg(0).as_text().trim())
-                    .map_err(Stop::Failed)?,
+                    .map_err(BlockErr::Failed)?,
             )),
         }
     }
-}
 
-enum Stop {
-    Cancelled,
-    Limit(String),
-    Failed(String),
+    async fn function_block(
+        &mut self,
+        frame: &Frame<'a>,
+        id: &str,
+        function: &str,
+        args: Vec<Value>,
+        on_event: &mut Emit<'_>,
+    ) -> Result<Outputs, BlockErr> {
+        let file = self.file;
+        let def: &'a FunctionDef = file
+            .function(function)
+            .ok_or_else(|| BlockErr::Failed(format!("the function “{function}” is missing")))?;
+        let mut sub = Frame::new(
+            &def.blocks,
+            &def.links,
+            format!("{}/", frame.path(id)),
+            &self.analysis,
+        );
+        for o in &def.outputs {
+            sub.exposed
+                .entry((o.from.block.clone(), o.from.port.clone()))
+                .or_default()
+                .push(o.name.clone());
+        }
+        let in_names: Vec<String> = self
+            .analysis
+            .functions
+            .get(function)
+            .map(|f| f.ports.inputs.iter().map(|p| p.name.clone()).collect())
+            .unwrap_or_default();
+        for (name, value) in in_names.iter().zip(args) {
+            for i in def.inputs.iter().filter(|i| &i.name == name) {
+                let idx = sub
+                    .in_ports
+                    .get(&i.to.block)
+                    .and_then(|ps| ps.iter().position(|p| *p == i.to.port));
+                if let (Some(idx), Some(qs)) = (idx, sub.queues.get_mut(&i.to.block)) {
+                    qs[idx].push_back(value.clone());
+                }
+            }
+        }
+        let seeded: Vec<String> = def.inputs.iter().map(|i| i.to.block.clone()).collect();
+        for b in seeded {
+            sub.schedule(&b);
+        }
+        self.drive(&mut sub, on_event).await?;
+        Ok(sub.collected)
+    }
+
+    async fn model_block(
+        &mut self,
+        path: &str,
+        p: &LlmParams,
+        input: Value,
+        on_event: &mut Emit<'_>,
+    ) -> Result<Outputs, BlockErr> {
+        let system = p.system.trim();
+        // The exchange this block continues, and what it sends the model.
+        let (base, mut messages) = match input {
+            Value::Exchange(ex) => {
+                let mut msgs = ex.messages.clone();
+                if !system.is_empty() {
+                    msgs.retain(|m| m.role != Role::System);
+                    msgs.insert(0, ExMessage::new(Role::System, system));
+                }
+                (ex, msgs)
+            }
+            other => {
+                let mut ex = Exchange::default();
+                if !system.is_empty() {
+                    ex.messages.push(ExMessage::new(Role::System, system));
+                }
+                ex.messages.push(ExMessage::new(
+                    Role::User,
+                    fill_prompt(&p.prompt, &other.as_text()),
+                ));
+                let msgs = ex.messages.clone();
+                (ex, msgs)
+            }
+        };
+        let mut tools = Vec::new();
+        for name in &p.tools {
+            match self.host.tool_info(name) {
+                Some(t) => tools.push(t),
+                None => {
+                    let text = format!(
+                        "The tool “{name}” isn't switched on (Settings → Tools), so the model wasn't offered it."
+                    );
+                    if self.noticed.insert(text.clone()) {
+                        on_event(Event::Notice {
+                            block: path.to_string(),
+                            text,
+                        });
+                    }
+                }
+            }
+        }
+
+        let mut attempt = 0;
+        loop {
+            if self.llm_calls >= self.file.limits.max_llm_calls {
+                return Err(Stop::Limit(format!(
+                    "Stopped after {} model calls, the loop's limit.",
+                    self.file.limits.max_llm_calls
+                ))
+                .into());
+            }
+            self.llm_calls += 1;
+            let call = LlmCall {
+                block: path.to_string(),
+                messages: messages.clone(),
+                tools: tools.clone(),
+                tool_choice: p.tool_choice,
+                temperature: p.temperature,
+                max_tokens: p.max_tokens,
+                model: p.model.clone().filter(|m| !m.is_empty()),
+            };
+            let answer = self.ask(path, call, on_event).await?;
+            let mut reasoning = answer.reasoning.trim().to_string();
+            let inline = thinking(&answer.text);
+            if !inline.is_empty() {
+                if !reasoning.is_empty() {
+                    reasoning.push_str("\n\n");
+                }
+                reasoning.push_str(&inline);
+            }
+            let text = strip_thinking(&answer.text);
+
+            if tools.is_empty() {
+                return Ok(vec![
+                    ("out".into(), Value::Text(text)),
+                    ("reasoning".into(), Value::Text(reasoning)),
+                ]);
+            }
+
+            // Check the calls.
+            let mut good = Vec::new();
+            let mut problems = Vec::new();
+            for m in &answer.malformed {
+                problems.push(format!(
+                    "the call to {} wasn't valid JSON ({})",
+                    m.name, m.error
+                ));
+            }
+            for c in &answer.calls {
+                match tools.iter().find(|t| t.name == c.name) {
+                    None => problems.push(format!(
+                        "there's no tool called “{}” (you can use: {})",
+                        c.name,
+                        tools
+                            .iter()
+                            .map(|t| t.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )),
+                    Some(t) => match check_arguments(&t.parameters, &c.arguments) {
+                        Ok(args) => good.push(ToolCall {
+                            arguments: args,
+                            ..c.clone()
+                        }),
+                        Err(e) => problems.push(format!("in the call to {}, {e}", c.name)),
+                    },
+                }
+            }
+            if good.is_empty() && problems.is_empty() && p.tool_choice == ToolChoice::Required {
+                problems.push(format!(
+                    "you must call one of these tools: {}",
+                    tools
+                        .iter()
+                        .map(|t| t.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+
+            let send_calls = |good: Vec<ToolCall>, text: String, reasoning: String| {
+                let mut ex = base.clone();
+                ex.messages.push(ExMessage {
+                    calls: good,
+                    ..ExMessage::new(Role::Assistant, text)
+                });
+                Ok(vec![
+                    ("tool".into(), Value::Exchange(ex)),
+                    ("reasoning".into(), Value::Text(reasoning)),
+                ])
+            };
+            if problems.is_empty() {
+                if good.is_empty() {
+                    return Ok(vec![
+                        ("out".into(), Value::Text(text)),
+                        ("reasoning".into(), Value::Text(reasoning)),
+                    ]);
+                }
+                return send_calls(good, text, reasoning);
+            }
+
+            let problem = problems.join("; ");
+            match p.on_bad_call {
+                BadCall::Answer => {
+                    if !good.is_empty() {
+                        return send_calls(good, text, reasoning);
+                    }
+                    on_event(Event::Notice {
+                        block: path.to_string(),
+                        text: format!("Bad tool call ignored: {problem}."),
+                    });
+                    return Ok(vec![
+                        ("out".into(), Value::Text(text)),
+                        ("reasoning".into(), Value::Text(reasoning)),
+                    ]);
+                }
+                BadCall::Retry if attempt < p.retries => {
+                    attempt += 1;
+                    on_event(Event::Notice {
+                        block: path.to_string(),
+                        text: format!(
+                            "Bad tool call ({problem}). Asking again ({attempt}/{}).",
+                            p.retries
+                        ),
+                    });
+                    let said = if text.is_empty() {
+                        let names: Vec<&str> = answer
+                            .calls
+                            .iter()
+                            .map(|c| c.name.as_str())
+                            .chain(answer.malformed.iter().map(|m| m.name.as_str()))
+                            .collect();
+                        if names.is_empty() {
+                            "(no tool call)".to_string()
+                        } else {
+                            format!("(tried to call {})", names.join(", "))
+                        }
+                    } else {
+                        text.clone()
+                    };
+                    messages.push(ExMessage::new(Role::Assistant, said));
+                    messages.push(ExMessage::new(
+                        Role::User,
+                        format!(
+                            "That didn't work: {problem}. Try again: call a tool with correct arguments{}.",
+                            if p.tool_choice == ToolChoice::Required {
+                                ""
+                            } else {
+                                ", or answer without a tool"
+                            }
+                        ),
+                    ));
+                }
+                _ => {
+                    return Err(BlockErr::Failed(format!(
+                        "the model made a bad tool call: {problem}"
+                    )));
+                }
+            }
+        }
+    }
+
+    /// One model request, streaming its text as events.
+    async fn ask(
+        &self,
+        path: &str,
+        call: LlmCall,
+        on_event: &mut Emit<'_>,
+    ) -> Result<LlmAnswer, BlockErr> {
+        let block = path.to_string();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let mut on_text = move |t: &str| {
+            let _ = tx.send(t.to_string());
+        };
+        let fut = self.host.llm(call, &mut on_text);
+        tokio::pin!(fut);
+        let answer = loop {
+            tokio::select! {
+                r = &mut fut => break r,
+                Some(t) = rx.recv() => on_event(Event::LlmText { block: block.clone(), text: t }),
+                _ = cancelled(self.cancel) => return Err(Stop::Cancelled.into()),
+            }
+        };
+        while let Ok(t) = rx.try_recv() {
+            on_event(Event::LlmText {
+                block: block.clone(),
+                text: t,
+            });
+        }
+        answer.map_err(BlockErr::Failed)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::format::{Block, Link, PortRef, Position};
+    use serde_json::Value as Json;
     use serde_json::json;
     use std::sync::Mutex;
 
     /// A model that answers from a script and records prompts.
     #[derive(Default)]
     struct Fake {
-        answers: Mutex<VecDeque<String>>,
+        answers: Mutex<VecDeque<LlmAnswer>>,
         prompts: Mutex<Vec<String>>,
+        calls: Mutex<Vec<LlmCall>>,
         files: Mutex<HashMap<String, String>>,
+        tool_runs: Mutex<Vec<(String, Json)>>,
+    }
+
+    fn text(s: &str) -> LlmAnswer {
+        LlmAnswer {
+            text: s.into(),
+            ..Default::default()
+        }
+    }
+
+    fn calls(name: &str, args: Json) -> LlmAnswer {
+        LlmAnswer {
+            calls: vec![ToolCall {
+                id: format!("c-{name}"),
+                name: name.into(),
+                arguments: args,
+            }],
+            ..Default::default()
+        }
     }
 
     impl Fake {
         fn with(answers: &[&str]) -> Self {
+            Self::script(answers.iter().map(|s| text(s)).collect())
+        }
+        fn script(answers: Vec<LlmAnswer>) -> Self {
             let f = Self::default();
-            f.answers
-                .lock()
-                .unwrap()
-                .extend(answers.iter().map(|s| s.to_string()));
+            f.answers.lock().unwrap().extend(answers);
             f
         }
     }
@@ -648,16 +1224,44 @@ mod tests {
             &self,
             call: LlmCall,
             on_text: &mut (dyn FnMut(&str) + Send),
-        ) -> Result<String, String> {
-            self.prompts.lock().unwrap().push(call.prompt.clone());
+        ) -> Result<LlmAnswer, String> {
+            let prompt = call
+                .messages
+                .last()
+                .map(|m| m.text.clone())
+                .unwrap_or_default();
+            self.prompts.lock().unwrap().push(prompt.clone());
+            self.calls.lock().unwrap().push(call);
             let a = self
                 .answers
                 .lock()
                 .unwrap()
                 .pop_front()
-                .unwrap_or_else(|| format!("echo: {}", call.prompt));
-            on_text(&a);
+                .unwrap_or_else(|| text(&format!("echo: {prompt}")));
+            on_text(&a.text);
             Ok(a)
+        }
+        fn tool_info(&self, name: &str) -> Option<ToolInfo> {
+            (name == "echo").then(|| ToolInfo {
+                name: "echo".into(),
+                description: "Echoes text.".into(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": { "text": { "type": "string" } },
+                    "required": ["text"],
+                    "additionalProperties": false
+                }),
+            })
+        }
+        async fn run_tool(&self, name: &str, arguments: Json) -> Result<ToolOutput, String> {
+            self.tool_runs
+                .lock()
+                .unwrap()
+                .push((name.into(), arguments.clone()));
+            Ok(ToolOutput {
+                text: format!("echoed {}", arguments["text"].as_str().unwrap_or("")),
+                is_error: false,
+            })
         }
         fn read_file(&self, path: &str) -> Result<String, String> {
             self.files
@@ -838,6 +1442,7 @@ mod tests {
         l.limits = RunLimits {
             max_steps: 5,
             max_llm_calls: 100,
+            max_tool_calls: 10,
         };
         let (o, _) = go(&l, &Fake::default(), "x").await;
         assert!(matches!(o.status, RunStatus::LimitReached { .. }));
@@ -974,5 +1579,333 @@ mod tests {
         )
         .await;
         assert_eq!(out.status, RunStatus::Stopped);
+    }
+
+    fn tool_loop() -> LoopFile {
+        // message → model(tools) → tool → run → back to model; answer → reply
+        lp(
+            vec![
+                b("in", "input", json!({})),
+                b(
+                    "m",
+                    "llm",
+                    json!({ "prompt": "Do: _INPUT_", "tools": ["echo"] }),
+                ),
+                b("run", "run_tool", json!({})),
+                b("out", "output", json!({})),
+                b("think", "output", json!({})),
+            ],
+            vec![
+                ln("in", "out", "m", "in"),
+                ln("m", "tool", "run", "in"),
+                ln("run", "out", "m", "in"),
+                ln("m", "out", "out", "in"),
+            ],
+        )
+    }
+
+    #[tokio::test]
+    async fn model_calls_tools_and_continues_the_exchange() {
+        let host = Fake::script(vec![
+            LlmAnswer {
+                reasoning: "I should echo".into(),
+                ..calls("echo", json!({ "text": "hi" }))
+            },
+            text("<think>done now</think>All done: echoed hi"),
+        ]);
+        let (o, ev) = go(&tool_loop(), &host, "say hi").await;
+        assert_eq!(o.status, RunStatus::Completed, "{o:?}");
+        assert_eq!(o.replies, vec!["All done: echoed hi"]);
+        assert_eq!((o.llm_calls, o.tool_calls), (2, 1));
+        assert_eq!(host.tool_runs.lock().unwrap()[0].1, json!({ "text": "hi" }));
+        // The second request continued the exchange: prompt, call, result.
+        let second = &host.calls.lock().unwrap()[1];
+        let roles: Vec<Role> = second.messages.iter().map(|m| m.role).collect();
+        assert_eq!(roles, vec![Role::User, Role::Assistant, Role::Tool]);
+        assert_eq!(second.messages[0].text, "Do: say hi");
+        assert_eq!(second.messages[2].text, "echoed hi");
+        assert_eq!(second.tools.len(), 1);
+        // Answer was silent while the tool was used; reasoning went out both times.
+        let outs: Vec<(String, String)> = ev
+            .iter()
+            .filter_map(|e| match e {
+                Event::BlockOutput {
+                    block,
+                    port,
+                    preview,
+                } if block == "m" => Some((port.clone(), preview.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(outs[0].0, "tool");
+        assert_eq!(outs[1], ("reasoning".into(), "I should echo".into()));
+        assert_eq!(outs[2], ("out".into(), "All done: echoed hi".into()));
+        assert_eq!(outs[3], ("reasoning".into(), "done now".into()));
+        assert!(
+            ev.iter()
+                .any(|e| matches!(e, Event::ToolResult { tool, .. } if tool == "echo"))
+        );
+    }
+
+    #[tokio::test]
+    async fn bad_tool_calls_are_retried_or_fail_or_become_answers() {
+        // Unknown tool, then bad arguments (coerced number is fine), then good.
+        let host = Fake::script(vec![
+            calls("nope", json!({})),
+            calls("echo", json!({ "words": "x" })),
+            calls("echo", json!({ "text": 5 })),
+            text("ok"),
+        ]);
+        let (o, ev) = go(&tool_loop(), &host, "x").await;
+        assert_eq!(o.replies, vec!["ok"], "{o:?}");
+        assert_eq!(host.tool_runs.lock().unwrap()[0].1, json!({ "text": "5" }));
+        let notices = ev
+            .iter()
+            .filter(|e| matches!(e, Event::Notice { .. }))
+            .count();
+        assert_eq!(notices, 2);
+        let retry = host.calls.lock().unwrap()[1].clone();
+        assert!(
+            retry
+                .messages
+                .last()
+                .unwrap()
+                .text
+                .contains("no tool called “nope”")
+        );
+
+        // Out of retries → the run fails.
+        let mut l = tool_loop();
+        l.blocks[1].params = json!({ "tools": ["echo"], "retries": 1 });
+        let host = Fake::script(vec![calls("nope", json!({})), calls("nope", json!({}))]);
+        let (o, _) = go(&l, &host, "x").await;
+        assert!(
+            matches!(o.status, RunStatus::Failed { ref error, .. } if error.contains("bad tool call")),
+            "{o:?}"
+        );
+
+        // "answer": the text is used.
+        l.blocks[1].params = json!({ "tools": ["echo"], "on_bad_call": "answer" });
+        let host = Fake::script(vec![LlmAnswer {
+            text: "plain".into(),
+            ..calls("nope", json!({}))
+        }]);
+        let (o, _) = go(&l, &host, "x").await;
+        assert_eq!(o.replies, vec!["plain"]);
+
+        // "required": answering without a tool counts as a bad call.
+        l.blocks[1].params =
+            json!({ "tools": ["echo"], "tool_choice": "required", "on_bad_call": "fail" });
+        let host = Fake::with(&["no tools for me"]);
+        let (o, _) = go(&l, &host, "x").await;
+        assert!(matches!(o.status, RunStatus::Failed { .. }));
+
+        // A tool that isn't switched on isn't offered; the block still answers.
+        l.blocks[1].params = json!({ "tools": ["missing"] });
+        let host = Fake::with(&["fine"]);
+        let (o, ev) = go(&l, &host, "x").await;
+        assert_eq!(o.replies, vec!["fine"]);
+        assert!(host.calls.lock().unwrap()[0].tools.is_empty());
+        assert!(ev.iter().any(
+            |e| matches!(e, Event::Notice { text, .. } if text.contains("isn't switched on"))
+        ));
+    }
+
+    #[tokio::test]
+    async fn tool_call_limit() {
+        let mut l = tool_loop();
+        l.limits.max_tool_calls = 2;
+        let host = Fake::script(
+            (0..5)
+                .map(|_| calls("echo", json!({ "text": "a" })))
+                .collect(),
+        );
+        let (o, _) = go(&l, &host, "x").await;
+        assert!(
+            matches!(o.status, RunStatus::LimitReached { ref message } if message.contains("tool calls")),
+            "{o:?}"
+        );
+        assert_eq!(o.tool_calls, 2);
+    }
+
+    #[tokio::test]
+    async fn exchange_blocks() {
+        let l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b("goal", "fixed", json!({ "text": "Be brief." })),
+                b(
+                    "start",
+                    "exchange",
+                    json!({ "system": "You help.", "roles": ["user"] }),
+                ),
+                b(
+                    "add",
+                    "augment",
+                    json!({ "role": "assistant", "format": "Noted: _INPUT_" }),
+                ),
+                b("m", "llm", json!({})),
+                b("read", "read_exchange", json!({ "role": "assistant" })),
+                b("o", "output", json!({})),
+            ],
+            vec![
+                ln("in", "out", "start", "in"),
+                ln("start", "out", "add", "exchange"),
+                ln("goal", "out", "add", "in"),
+                ln("add", "out", "m", "in"),
+                ln("add", "out", "read", "in"),
+                ln("read", "last", "o", "in"),
+                ln("m", "out", "o", "in"),
+            ],
+        );
+        let host = Fake::with(&["model answer"]);
+        let (o, _) = go(&l, &host, "hello").await;
+        assert_eq!(o.status, RunStatus::Completed, "{o:?}");
+        assert_eq!(o.replies, vec!["model answer", "Noted: Be brief."]);
+        let sent = &host.calls.lock().unwrap()[0].messages;
+        assert_eq!(
+            sent.iter()
+                .map(|m| (m.role, m.text.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (Role::System, "You help."),
+                (Role::User, "hello"),
+                (Role::Assistant, "Noted: Be brief."),
+            ]
+        );
+    }
+
+    fn func(
+        id: &str,
+        blocks: Vec<Block>,
+        links: Vec<Link>,
+        ins: &[(&str, &str, &str)],
+        outs: &[(&str, &str, &str)],
+    ) -> FunctionDef {
+        FunctionDef {
+            id: id.into(),
+            name: id.into(),
+            description: String::new(),
+            inputs: ins
+                .iter()
+                .map(|(n, blk, port)| crate::format::FunctionInput {
+                    name: (*n).into(),
+                    label: String::new(),
+                    to: PortRef {
+                        block: (*blk).into(),
+                        port: (*port).into(),
+                    },
+                })
+                .collect(),
+            outputs: outs
+                .iter()
+                .map(|(n, blk, port)| crate::format::FunctionOutput {
+                    name: (*n).into(),
+                    label: String::new(),
+                    from: PortRef {
+                        block: (*blk).into(),
+                        port: (*port).into(),
+                    },
+                })
+                .collect(),
+            blocks,
+            links,
+        }
+    }
+
+    #[tokio::test]
+    async fn function_blocks_run_their_blocks_per_call() {
+        // shout(x) = combine("_INPUT1_!" , suffix) ; used twice, and nested.
+        let shout = func(
+            "shout",
+            vec![
+                b("sfx", "fixed", json!({ "text": "!" })),
+                b(
+                    "c",
+                    "combine",
+                    json!({ "inputs": 2, "format": "_INPUT1__INPUT2_" }),
+                ),
+                b("m", "remember", json!({})),
+            ],
+            vec![ln("sfx", "out", "c", "in2"), ln("c", "out", "m", "in")],
+            &[("in1", "c", "in1")],
+            &[("out1", "m", "out")],
+        );
+        let twice = func(
+            "twice",
+            vec![
+                b("a", "function", json!({ "function": "shout" })),
+                b("b2", "function", json!({ "function": "shout" })),
+            ],
+            vec![ln("a", "out1", "b2", "in1")],
+            &[("x", "a", "in1")],
+            &[("y", "b2", "out1")],
+        );
+        let mut l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b("each", "split", json!({ "chunk_size": 100 })),
+                b("rx", "regex", json!({ "pattern": "\\w+" })),
+                b("fe", "for_each", json!({ "limit": 2 })),
+                b("f", "function", json!({ "function": "twice" })),
+                b("o", "output", json!({})),
+            ],
+            vec![
+                ln("in", "out", "rx", "in"),
+                ln("rx", "out", "fe", "in"),
+                ln("fe", "out", "f", "x"),
+                ln("f", "y", "o", "in"),
+            ],
+        );
+        l.blocks.remove(1);
+        l.functions = vec![shout, twice];
+        let a = analyze(&l);
+        assert!(a.ok, "{:?}", a.issues);
+        assert_eq!(a.functions["twice"].ports.inputs[0].name, "x");
+        let (o, ev) = go(&l, &Fake::default(), "hey you there").await;
+        assert_eq!(o.status, RunStatus::Completed, "{o:?}");
+        // Remember is fresh per call, so each word is shouted on its own.
+        assert_eq!(o.replies, vec!["hey!!", "you!!"]);
+        assert!(
+            ev.iter()
+                .any(|e| matches!(e, Event::BlockState { block, .. } if block == "f/a/c"))
+        );
+    }
+
+    #[test]
+    fn functions_cannot_use_themselves() {
+        let mut l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b("f", "function", json!({ "function": "loopy" })),
+            ],
+            vec![ln("in", "out", "f", "x")],
+        );
+        l.functions = vec![func(
+            "loopy",
+            vec![b("inner", "function", json!({ "function": "loopy" }))],
+            vec![],
+            &[],
+            &[],
+        )];
+        let a = analyze(&l);
+        assert!(!a.ok);
+        assert!(
+            a.issues.iter().any(|i| i.message.contains("uses itself")),
+            "{:?}",
+            a.issues
+        );
+
+        // A bad port mapping is reported on the function.
+        l.functions = vec![func(
+            "bad",
+            vec![b("c", "forward", json!({}))],
+            vec![],
+            &[("x", "c", "nope")],
+            &[],
+        )];
+        l.blocks[1].params = json!({ "function": "bad" });
+        let a = analyze(&l);
+        assert!(a.issues.iter().any(|i| i.function.as_deref() == Some("bad") && i.message.contains("missing port")), "{:?}", a.issues);
     }
 }

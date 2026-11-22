@@ -68,6 +68,7 @@ export interface Settings {
   default_provider: string | null;
   local: { device: string };
   hf_token_set: boolean;
+  tools: Record<string, { enabled: boolean; network: boolean }>;
 }
 
 export interface SetupStatus {
@@ -224,7 +225,7 @@ export type RuntimeEvent =
 
 // ---- loops
 
-export type ValueKind = "text" | "list" | "any";
+export type ValueKind = "text" | "list" | "exchange" | "any";
 export interface PortSpec {
   name: string;
   label: string;
@@ -252,6 +253,26 @@ export interface Link {
 export interface RunLimits {
   max_steps: number;
   max_llm_calls: number;
+  max_tool_calls?: number;
+}
+export interface FunctionInput {
+  name: string;
+  label: string;
+  to: PortRef;
+}
+export interface FunctionOutput {
+  name: string;
+  label: string;
+  from: PortRef;
+}
+export interface FunctionDef {
+  id: string;
+  name: string;
+  description: string;
+  inputs: FunctionInput[];
+  outputs: FunctionOutput[];
+  blocks: Block[];
+  links: Link[];
 }
 export interface LoopFile {
   format: "chummy.loop";
@@ -261,14 +282,22 @@ export interface LoopFile {
   limits: RunLimits;
   blocks: Block[];
   links: Link[];
+  functions?: FunctionDef[];
 }
 export interface Issue {
   severity: "error" | "warning";
   block: string | null;
+  /** The function the block is in, if any. */
+  function?: string;
   message: string;
 }
+export interface BlockPorts {
+  inputs: PortSpec[];
+  outputs: PortSpec[];
+}
 export interface Analysis {
-  ports: Record<string, { inputs: PortSpec[]; outputs: PortSpec[] }>;
+  ports: Record<string, BlockPorts>;
+  functions: Record<string, { ports: BlockPorts; blocks: Record<string, BlockPorts> }>;
   issues: Issue[];
   ok: boolean;
 }
@@ -278,9 +307,12 @@ export type ParamKind =
   | { kind: "number"; min: number; max: number; step: number }
   | { kind: "integer"; min: number; max: number }
   | { kind: "bool" }
-  | { kind: "model" };
+  | { kind: "model" }
+  | { kind: "choice"; options: { value: string; label: string }[] }
+  | { kind: "roles" }
+  | { kind: "tools" };
 export type ParamSpec = ParamKind & { key: string; label: string; help: string; optional: boolean };
-export type Category = "start" | "think" | "text" | "flow" | "workspace" | "finish";
+export type Category = "start" | "think" | "exchange" | "text" | "flow" | "workspace" | "finish";
 export interface BlockInfo {
   kind: string;
   label: string;
@@ -288,6 +320,7 @@ export interface BlockInfo {
   description: string;
   params: ParamSpec[];
   default_params: Record<string, unknown>;
+  palette: boolean;
 }
 export interface Template {
   id: string;
@@ -311,7 +344,7 @@ export interface ChatMessage {
   role: "user" | "assistant" | "notice";
   text: string;
   at: number;
-  run?: { status: string; steps: number; llm_calls: number };
+  run?: { status: string; steps: number; llm_calls: number; tool_calls?: number };
 }
 export interface RunInfo {
   run_id: string;
@@ -325,6 +358,9 @@ export type FlowEvent =
   | { type: "block_state"; block: string; label: string; state: BlockState }
   | { type: "block_output"; block: string; port: string; preview: string }
   | { type: "llm_text"; block: string; text: string }
+  | { type: "tool_call"; block: string; tool: string; arguments: string }
+  | { type: "tool_result"; block: string; tool: string; preview: string; is_error: boolean }
+  | { type: "notice"; block: string; text: string }
   | { type: "reply"; block: string; text: string };
 export type RunStatus =
   | { status: "completed" }
@@ -336,8 +372,39 @@ export interface RunOutcome {
   replies: string[];
   steps: number;
   llm_calls: number;
+  tool_calls: number;
   waiting: string[];
 }
+
+// ---- tools
+
+export interface ToolView {
+  name: string;
+  title: string;
+  version: string;
+  description: string;
+  parameters: { properties?: Record<string, { type?: string; description?: string }>; required?: string[] };
+  network: boolean;
+  timeout_secs: number;
+  dependencies: string[];
+  packages: { name: string; version: string }[];
+  builtin: boolean;
+  enabled: boolean;
+  network_allowed: boolean;
+}
+export interface ToolsStatus {
+  runtime: { version: string; sha256: string } | null;
+  python_version: string;
+  download_bytes: number;
+  installing: boolean;
+  tools: ToolView[];
+  builtin_count: number;
+}
+export type ToolsProgress =
+  | { type: "download"; done: number; total: number }
+  | { type: "step"; message: string }
+  | { type: "finished" }
+  | { type: "failed"; error: string };
 export interface PickedWorkspace {
   token: string;
   path: string;
@@ -357,6 +424,7 @@ const mock = {
     hf_token_set: false,
     agents: [],
     active_agent: null,
+    tools: {},
   } as Settings,
   listeners: new Set<(s: Settings) => void>(),
 };
@@ -445,6 +513,19 @@ export const commands = {
   setLocalDevice: (device: string) => call<void>("set_local_device", { device }),
   stopEngine: () => call<void>("stop_engine"),
   engineLog: () => call<string[]>("engine_log", undefined, () => []),
+
+  toolsStatus: () =>
+    call<ToolsStatus>("tools_status", undefined, () => ({
+      runtime: null,
+      python_version: "3.14",
+      download_bytes: 14_000_000,
+      installing: false,
+      tools: [],
+      builtin_count: 7,
+    })),
+  setupTools: () => call<boolean>("setup_tools", undefined, () => false),
+  setToolEnabled: (name: string, enabled: boolean) => call<void>("set_tool_enabled", { name, enabled }),
+  setToolNetwork: (name: string, enabled: boolean) => call<boolean>("set_tool_network", { name, enabled }),
 };
 
 // ---------------------------------------------------------------- events
@@ -472,6 +553,8 @@ export const events = {
   onChatMessage: (
     cb: (e: { agent_id: string; message?: ChatMessage; cleared?: boolean }) => void,
   ) => on("chat:message", cb),
+  onToolsChanged: (cb: (s: ToolsStatus) => void) => on("tools:changed", cb),
+  onToolsProgress: (cb: (p: ToolsProgress) => void) => on("tools:progress", cb),
   /** Another window asked this one to show a section. */
   onGoto: (cb: (section: string) => void) => on("window:goto", cb),
 };

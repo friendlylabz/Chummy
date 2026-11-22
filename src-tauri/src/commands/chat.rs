@@ -10,11 +10,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use chummy_flow::{
-    ChatTurn, Event, Host, LlmCall, LoopFile, RunInputs, RunOutcome, RunStatus, analyze, run,
+    ChatTurn, Event, ExMessage, Host, LlmAnswer, LlmCall, LoopFile, MalformedCall, Role, RunInputs,
+    RunOutcome, RunStatus, ToolInfo, ToolOutput, analyze, run,
 };
-use chummy_llm::{ChatEvent, ChatRequest, Client, Message, ProviderConfig, ProviderKind};
+use chummy_llm::{ChatEvent, ChatRequest, Client, Message, ProviderConfig, ProviderKind, ToolSpec};
 use chummy_sandbox::Jail;
 use chummy_store::JsonDoc;
+use chummy_tools::{NetPolicy, ToolManifest};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -32,6 +34,8 @@ pub struct RunSummary {
     pub status: String,
     pub steps: u32,
     pub llm_calls: u32,
+    #[serde(default)]
+    pub tool_calls: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -339,6 +343,32 @@ fn start(
     run_id
 }
 
+fn to_llm_message(m: &ExMessage) -> Message {
+    let mut out = match m.role {
+        Role::System => Message::system(&m.text),
+        Role::User => Message::user(&m.text),
+        Role::Assistant => Message::assistant(&m.text),
+        Role::Tool => {
+            let call = chummy_llm::ToolCall {
+                id: m.call_id.clone().unwrap_or_default(),
+                name: m.name.clone().unwrap_or_default(),
+                arguments: serde_json::json!({}),
+            };
+            Message::tool_result(&call, &m.text)
+        }
+    };
+    out.tool_calls = m
+        .calls
+        .iter()
+        .map(|c| chummy_llm::ToolCall {
+            id: c.id.clone(),
+            name: c.name.clone(),
+            arguments: c.arguments.clone(),
+        })
+        .collect();
+    out
+}
+
 /// Chat messages that report a finished run.
 fn messages_for(o: &RunOutcome) -> Vec<ChatMessage> {
     let (status, notice) = match &o.status {
@@ -358,6 +388,7 @@ fn messages_for(o: &RunOutcome) -> Vec<ChatMessage> {
         status: status.into(),
         steps: o.steps,
         llm_calls: o.llm_calls,
+        tool_calls: o.tool_calls,
     };
     let mut out = Vec::new();
     if !o.replies.is_empty() {
@@ -381,13 +412,15 @@ fn messages_for(o: &RunOutcome) -> Vec<ChatMessage> {
     out
 }
 
-/// Connects the engine to models and to the agent's workspace.
+/// Connects the engine to models, tools and the agent's workspace.
 pub struct AppHost {
     app: AppHandle,
     settings: Settings,
     default_model: Option<ProviderConfig>,
     jail: Option<Jail>,
     clients: tokio::sync::Mutex<HashMap<String, Client>>,
+    /// Tools agents may use now: installed, switched on, and tools allowed.
+    tools: HashMap<String, ToolManifest>,
 }
 
 impl AppHost {
@@ -397,12 +430,39 @@ impl AppHost {
         default_model: Option<ProviderConfig>,
         jail: Option<Jail>,
     ) -> Self {
+        let state = app.state::<AppState>();
+        let tools = if settings.permissions.tools {
+            chummy_tools::installed(&state.tool_paths)
+                .into_iter()
+                .filter(|m| settings.tool(&m.name).enabled)
+                .map(|m| (m.name.clone(), m))
+                .collect()
+        } else {
+            HashMap::new()
+        };
         Self {
             app: app.clone(),
             settings,
             default_model,
             jail,
             clients: Default::default(),
+            tools,
+        }
+    }
+
+    /// Whether `m` may use the internet now, and if not, why (for the model).
+    fn net_policy(&self, m: &ToolManifest) -> NetPolicy {
+        if !m.network {
+            NetPolicy::off(format!("{} doesn't use the internet.", m.title))
+        } else if !self.settings.permissions.network {
+            NetPolicy::off("Internet access is off in Chummy, so this tool can't go online.")
+        } else if !self.settings.tool(&m.name).network {
+            NetPolicy::off(format!(
+                "Internet access is off for “{}”, so it can't go online.",
+                m.title
+            ))
+        } else {
+            NetPolicy::on()
         }
     }
 
@@ -445,7 +505,7 @@ impl Host for AppHost {
         &self,
         call: LlmCall,
         on_text: &mut (dyn FnMut(&str) + Send),
-    ) -> Result<String, String> {
+    ) -> Result<LlmAnswer, String> {
         let provider = match &call.model {
             Some(id) => self.settings.provider(id).cloned().ok_or(
                 "This block's model connection no longer exists. Pick another in the loop editor.",
@@ -456,26 +516,98 @@ impl Host for AppHost {
                 .ok_or("No model is connected. Add one in Settings → Models.")?,
         };
         let client = self.client(&provider).await?;
-        let mut messages = Vec::new();
-        if let Some(s) = call.system {
-            messages.push(Message::system(s));
-        }
-        messages.push(Message::user(call.prompt));
+        let messages = call.messages.iter().map(to_llm_message).collect();
         let req = ChatRequest {
             messages,
-            tools: vec![],
+            tools: call
+                .tools
+                .iter()
+                .map(|t| ToolSpec {
+                    name: t.name.clone(),
+                    description: t.description.clone(),
+                    parameters: t.parameters.clone(),
+                })
+                .collect(),
+            tool_choice: match call.tool_choice {
+                chummy_flow::ToolChoice::Auto => chummy_llm::ToolChoice::Auto,
+                chummy_flow::ToolChoice::Required => chummy_llm::ToolChoice::Required,
+            },
             temperature: call.temperature,
             max_tokens: Some(call.max_tokens),
         };
+        let mut malformed = Vec::new();
         let resp = client
-            .chat(&req, |ev| {
-                if let ChatEvent::Text { text } = ev {
-                    on_text(text);
-                }
+            .chat(&req, |ev| match ev {
+                ChatEvent::Text { text } => on_text(text),
+                ChatEvent::MalformedToolCall {
+                    name, raw, error, ..
+                } => malformed.push(MalformedCall {
+                    name: name.clone(),
+                    raw: raw.clone(),
+                    error: error.clone(),
+                }),
+                _ => {}
             })
             .await
             .map_err(|e| format!("{}: {e}", provider.name))?;
-        Ok(resp.text)
+        Ok(LlmAnswer {
+            text: resp.text,
+            reasoning: resp.reasoning,
+            calls: resp
+                .tool_calls
+                .into_iter()
+                .map(|c| chummy_flow::ToolCall {
+                    id: c.id,
+                    name: c.name,
+                    arguments: c.arguments,
+                })
+                .collect(),
+            malformed,
+        })
+    }
+
+    fn tool_info(&self, name: &str) -> Option<ToolInfo> {
+        self.tools.get(name).map(|m| ToolInfo {
+            name: m.name.clone(),
+            description: m.description.clone(),
+            parameters: m.parameters.clone(),
+        })
+    }
+
+    async fn run_tool(
+        &self,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<ToolOutput, String> {
+        let Some(m) = self.tools.get(name) else {
+            return Ok(ToolOutput {
+                text: format!("Error: there's no tool called “{name}” switched on."),
+                is_error: true,
+            });
+        };
+        let state = self.app.state::<AppState>();
+        let host = state.tool_host().await?;
+        let env = iana_time_zone::get_timezone()
+            .map(|tz| vec![("TZ".to_string(), tz)])
+            .unwrap_or_default();
+        let workspace = self.jail.as_ref().map(|j| j.root().to_path_buf());
+        let r = host
+            .run(
+                name,
+                arguments,
+                workspace.as_deref(),
+                self.net_policy(m),
+                env,
+            )
+            .await
+            .map_err(|e| {
+                let e = e.to_string();
+                e[..1].to_uppercase() + &e[1..]
+            })?;
+        Ok(ToolOutput {
+            text: r.text,
+            is_error: r.is_error,
+        })
     }
 
     fn read_file(&self, path: &str) -> Result<String, String> {

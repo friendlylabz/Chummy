@@ -50,6 +50,57 @@ pub struct LoopFile {
     pub blocks: Vec<Block>,
     #[serde(default)]
     pub links: Vec<Link>,
+    /// Block functions: groups of blocks used as one block (type
+    /// `function`) anywhere in this loop.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub functions: Vec<FunctionDef>,
+}
+
+/// A block made of other blocks.
+///
+/// Its inputs and outputs are ports of its own blocks that are left open:
+/// a value arriving on a function input goes to the inner port it names,
+/// and every value an inner block sends out of a port named by a function
+/// output leaves the function there. A function block waits for all its
+/// inputs, then runs its blocks (fresh each time, like a new run) until
+/// none can run, then sends what reached its outputs, in order.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FunctionDef {
+    /// Unique among the loop's functions. Letters, digits, `-` and `_`.
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub inputs: Vec<FunctionInput>,
+    #[serde(default)]
+    pub outputs: Vec<FunctionOutput>,
+    pub blocks: Vec<Block>,
+    #[serde(default)]
+    pub links: Vec<Link>,
+}
+
+/// A function input: values arriving here go to `to`, an inner input port.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FunctionInput {
+    /// The port's name on the function block.
+    pub name: String,
+    #[serde(default)]
+    pub label: String,
+    pub to: PortRef,
+}
+
+/// A function output: values sent out of `from`, an inner output port,
+/// leave the function here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FunctionOutput {
+    pub name: String,
+    #[serde(default)]
+    pub label: String,
+    pub from: PortRef,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -107,6 +158,7 @@ impl LoopFile {
             limits: RunLimits::default(),
             blocks: vec![],
             links: vec![],
+            functions: vec![],
         }
     }
 
@@ -140,6 +192,10 @@ impl LoopFile {
 
     pub fn block(&self, id: &str) -> Option<&Block> {
         self.blocks.iter().find(|b| b.id == id)
+    }
+
+    pub fn function(&self, id: &str) -> Option<&FunctionDef> {
+        self.functions.iter().find(|f| f.id == id)
     }
 }
 

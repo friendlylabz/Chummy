@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
+use crate::exchange::Role;
+
 /// What a port carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -10,7 +12,9 @@ pub enum ValueKind {
     Text,
     /// A list of texts.
     List,
-    /// Text or list: passes along whatever it receives.
+    /// A conversation with the model (see [`crate::Exchange`]).
+    Exchange,
+    /// Anything: passes along whatever it receives.
     Any,
 }
 
@@ -54,6 +58,78 @@ fn d_deviation() -> u32 {
 fn d_newline() -> String {
     "\n".into()
 }
+fn d_result_chars() -> u32 {
+    4000
+}
+fn d_roles() -> Vec<Role> {
+    vec![Role::User]
+}
+fn d_user() -> Role {
+    Role::User
+}
+fn d_input() -> String {
+    "_INPUT_".into()
+}
+
+/// Whether a model block must call a tool.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolChoice {
+    /// The model decides.
+    #[default]
+    Auto,
+    /// The model must call one of the block's tools.
+    Required,
+}
+
+/// What a model block does when the model's tool call is wrong (unknown
+/// tool, bad arguments, unreadable JSON, or no call when one is required).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BadCall {
+    /// Tell the model what was wrong and ask again (up to `retries` times),
+    /// then stop the run.
+    #[default]
+    Retry,
+    /// Stop the run.
+    Fail,
+    /// Use the model's text as its answer and ignore the bad call.
+    Answer,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnToolError {
+    /// Give the error to the model as the tool's result, so it can react.
+    #[default]
+    TellModel,
+    /// Stop the run.
+    Fail,
+}
+
+/// Which messages a Read exchange block looks at.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoleFilter {
+    Any,
+    User,
+    #[default]
+    Assistant,
+    Tool,
+    System,
+}
+
+impl RoleFilter {
+    pub fn matches(self, r: Role) -> bool {
+        match self {
+            RoleFilter::Any => true,
+            RoleFilter::User => r == Role::User,
+            RoleFilter::Assistant => r == Role::Assistant,
+            RoleFilter::Tool => r == Role::Tool,
+            RoleFilter::System => r == Role::System,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -91,6 +167,71 @@ pub struct LlmParams {
     /// Model connection id. `None` uses the agent's model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Tools the model may call. With none, the block has no Tool output.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<String>,
+    #[serde(default)]
+    pub tool_choice: ToolChoice,
+    #[serde(default)]
+    pub on_bad_call: BadCall,
+    /// How many times to ask again after a bad tool call (0–5).
+    #[serde(default = "d_two")]
+    pub retries: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ForEachParams {
+    /// Send at most this many items; 0 sends them all.
+    #[serde(default)]
+    pub limit: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunToolParams {
+    /// Longer results are cut, to keep the model's context small.
+    #[serde(default = "d_result_chars")]
+    pub max_result_chars: u32,
+    #[serde(default)]
+    pub on_error: OnToolError,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StartExchangeParams {
+    /// Optional system message at the start.
+    #[serde(default)]
+    pub system: String,
+    /// Roles for the input's items, in order, repeating. Text input uses
+    /// the first.
+    #[serde(default = "d_roles")]
+    pub roles: Vec<Role>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AugmentParams {
+    #[serde(default = "d_user")]
+    pub role: Role,
+    /// `_INPUT_` is replaced by the added text.
+    #[serde(default = "d_input")]
+    pub format: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReadExchangeParams {
+    #[serde(default)]
+    pub role: RoleFilter,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FunctionParams {
+    /// Id of a function in the loop's `functions`.
+    #[serde(default)]
+    pub function: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -160,7 +301,7 @@ pub enum BlockKind {
     Forward(Empty),
     Remember(Empty),
     Split(SplitParams),
-    ForEach(Empty),
+    ForEach(ForEachParams),
     Separate(SeparateParams),
     Join(JoinParams),
     Regex(PatternParams),
@@ -169,6 +310,14 @@ pub enum BlockKind {
     ReadFile(Empty),
     WriteFile(WriteFileParams),
     ListFiles(Empty),
+    RunTool(RunToolParams),
+    Exchange(StartExchangeParams),
+    Augment(AugmentParams),
+    ReadExchange(ReadExchangeParams),
+    /// A block made of other blocks. Its ports come from the function, so
+    /// [`BlockKind::inputs`] and [`BlockKind::outputs`] are empty here; see
+    /// [`crate::analyze`].
+    Function(FunctionParams),
 }
 
 impl BlockKind {
@@ -190,8 +339,16 @@ impl BlockKind {
         use BlockKind::*;
         use ValueKind::*;
         match self {
-            Input(_) | History(_) | Fixed(_) => vec![],
-            Output(_) | Llm(_) | Split(_) | Regex(_) | Capture(_) => vec![port("in", "In", Text)],
+            Input(_) | History(_) | Fixed(_) | Function(_) => vec![],
+            Output(_) | Split(_) | Regex(_) | Capture(_) => vec![port("in", "In", Text)],
+            Llm(_) => vec![port("in", "In", Any)],
+            RunTool(_) => vec![port("in", "Tool call", ValueKind::Exchange)],
+            BlockKind::Exchange(_) => vec![port("in", "In", Any)],
+            Augment(_) => vec![
+                port("exchange", "Exchange", ValueKind::Exchange),
+                port("in", "Add", Any),
+            ],
+            ReadExchange(_) => vec![port("in", "Exchange", ValueKind::Exchange)],
             Forward(_) | Remember(_) => vec![port("in", "In", Any)],
             ForEach(_) | Separate(_) | Join(_) => vec![port("in", "List", List)],
             Combine(p) => (1..=p.inputs.clamp(1, 10))
@@ -207,9 +364,26 @@ impl BlockKind {
         use BlockKind::*;
         use ValueKind::*;
         match self {
-            Output(_) => vec![],
-            Input(_) | History(_) | Fixed(_) | Llm(_) | Combine(_) | ForEach(_) | Join(_)
-            | ReadFile(_) => vec![port("out", "Out", Text)],
+            Output(_) | Function(_) => vec![],
+            Llm(p) => {
+                let mut v = vec![port("out", "Answer", Text)];
+                if !p.tools.is_empty() {
+                    v.push(port("tool", "Tool call", ValueKind::Exchange));
+                }
+                v.push(port("reasoning", "Reasoning", Text));
+                v
+            }
+            RunTool(_) => vec![port("out", "Results", ValueKind::Exchange)],
+            BlockKind::Exchange(_) | Augment(_) => {
+                vec![port("out", "Exchange", ValueKind::Exchange)]
+            }
+            ReadExchange(_) => vec![
+                port("last", "Last message", Text),
+                port("all", "Transcript", Text),
+            ],
+            Input(_) | History(_) | Fixed(_) | Combine(_) | ForEach(_) | Join(_) | ReadFile(_) => {
+                vec![port("out", "Out", Text)]
+            }
             WriteFile(_) => vec![port("out", "Path", Text)],
             Forward(_) | Remember(_) => vec![port("out", "Out", Any)],
             Split(_) | Regex(_) | ListFiles(_) => vec![port("out", "List", List)],
@@ -249,6 +423,11 @@ impl BlockKind {
             ReadFile(_) => "read_file",
             WriteFile(_) => "write_file",
             ListFiles(_) => "list_files",
+            RunTool(_) => "run_tool",
+            Exchange(_) => "exchange",
+            Augment(_) => "augment",
+            ReadExchange(_) => "read_exchange",
+            Function(_) => "function",
         }
     }
 }
@@ -260,6 +439,7 @@ impl BlockKind {
 pub enum Category {
     Start,
     Think,
+    Exchange,
     Text,
     Flow,
     Workspace,
@@ -283,7 +463,37 @@ pub enum ParamKind {
     Bool,
     /// A model connection id, or empty for the agent's model.
     Model,
+    /// One of a fixed set of values.
+    Choice {
+        options: Vec<ChoiceOption>,
+    },
+    /// A list of message roles.
+    Roles,
+    /// A list of installed tool names.
+    Tools,
 }
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ChoiceOption {
+    pub value: &'static str,
+    pub label: &'static str,
+}
+
+fn choice(options: &[(&'static str, &'static str)]) -> ParamKind {
+    ParamKind::Choice {
+        options: options
+            .iter()
+            .map(|(value, label)| ChoiceOption { value, label })
+            .collect(),
+    }
+}
+
+const ROLE_OPTIONS: &[(&str, &str)] = &[
+    ("user", "User"),
+    ("assistant", "Assistant"),
+    ("system", "System"),
+    ("tool", "Tool"),
+];
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ParamSpec {
@@ -305,6 +515,8 @@ pub struct BlockInfo {
     pub description: &'static str,
     pub params: Vec<ParamSpec>,
     pub default_params: Json,
+    /// Shown in the editor's palette.
+    pub palette: bool,
 }
 
 fn p(key: &'static str, label: &'static str, kind: ParamKind, help: &'static str) -> ParamSpec {
@@ -328,6 +540,7 @@ pub fn catalog() -> Vec<BlockInfo> {
             description,
             params,
             default_params,
+            palette: true,
         };
     vec![
         info(
@@ -363,13 +576,13 @@ pub fn catalog() -> Vec<BlockInfo> {
             "llm",
             "Ask the model",
             Think,
-            "Sends a prompt to the model and passes on its answer. Write _INPUT_ where the input should go; without it, the input is added after the prompt.",
+            "Asks the model. Give it text (with your prompt around it) or an exchange (which it continues). Its answer goes out of Answer; if it calls one of its tools, the exchange goes out of Tool call instead and Answer stays silent. Reasoning carries any thinking the model shows.",
             vec![
                 p(
                     "prompt",
                     "Prompt",
                     K::Multiline,
-                    "Use _INPUT_ for the block's input. Short, specific prompts work best with small models.",
+                    "Use _INPUT_ for the block's input. Short, specific prompts work best with small models. Not used when the input is an exchange.",
                 ),
                 ParamSpec {
                     optional: true,
@@ -408,8 +621,117 @@ pub fn catalog() -> Vec<BlockInfo> {
                     K::Integer { min: 1, max: 32768 },
                     "",
                 ),
+                ParamSpec {
+                    optional: true,
+                    ..p(
+                        "tools",
+                        "Tools",
+                        K::Tools,
+                        "Tools this step may call. Fewer tools means a shorter prompt and fewer mistakes.",
+                    )
+                },
+                p(
+                    "tool_choice",
+                    "Tool use",
+                    choice(&[("auto", "Model decides"), ("required", "Must call a tool")]),
+                    "",
+                ),
+                p(
+                    "on_bad_call",
+                    "If a tool call is wrong",
+                    choice(&[
+                        ("retry", "Explain and ask again"),
+                        ("fail", "Stop the run"),
+                        ("answer", "Use the text as the answer"),
+                    ]),
+                    "Wrong means an unknown tool, bad arguments, or no call when one is required.",
+                ),
+                p(
+                    "retries",
+                    "Times to ask again",
+                    K::Integer { min: 0, max: 5 },
+                    "",
+                ),
             ],
             json!({ "prompt": "_INPUT_", "max_tokens": 1024 }),
+        ),
+        info(
+            "run_tool",
+            "Run tool",
+            Think,
+            "Runs the tool calls at the end of an exchange, in the agent's sandbox, and adds their results. Link it back to the model block so the model can use them.",
+            vec![
+                p(
+                    "max_result_chars",
+                    "Longest result (characters)",
+                    K::Integer {
+                        min: 100,
+                        max: 100000,
+                    },
+                    "Longer results are cut, to keep the conversation short.",
+                ),
+                p(
+                    "on_error",
+                    "If a tool fails",
+                    choice(&[("tell_model", "Tell the model"), ("fail", "Stop the run")]),
+                    "",
+                ),
+            ],
+            json!({ "max_result_chars": 4000, "on_error": "tell_model" }),
+        ),
+        info(
+            "exchange",
+            "Start exchange",
+            Exchange,
+            "Starts a conversation with the model from text (one message) or a list (one message per item, with roles in turn).",
+            vec![
+                ParamSpec {
+                    optional: true,
+                    ..p("system", "System message", K::Multiline, "")
+                },
+                p(
+                    "roles",
+                    "Roles",
+                    K::Roles,
+                    "For a list: the role of item 1, item 2, …, repeating.",
+                ),
+            ],
+            json!({ "system": "", "roles": ["user"] }),
+        ),
+        info(
+            "augment",
+            "Add to exchange",
+            Exchange,
+            "Waits for an exchange and some text, then adds the text as a new message. A list adds one message per item.",
+            vec![
+                p("role", "Role", choice(ROLE_OPTIONS), ""),
+                p(
+                    "format",
+                    "Message",
+                    K::Multiline,
+                    "_INPUT_ is replaced by the added text.",
+                ),
+            ],
+            json!({ "role": "user", "format": "_INPUT_" }),
+        ),
+        info(
+            "read_exchange",
+            "Read exchange",
+            Exchange,
+            "Gets text out of an exchange: the last message (from a chosen role) and the whole transcript.",
+            vec![p(
+                "role",
+                "Last message from",
+                choice(&[
+                    ("assistant", "Assistant"),
+                    ("user", "User"),
+                    ("tool", "Tool"),
+                    ("system", "System"),
+                    ("any", "Anyone"),
+                ]),
+                "",
+            )],
+            json!({ "role": "assistant" }),
         ),
         info(
             "combine",
@@ -535,8 +857,13 @@ pub fn catalog() -> Vec<BlockInfo> {
             "For each",
             Flow,
             "Sends each item of a list on separately, one after another.",
-            vec![],
-            json!({}),
+            vec![p(
+                "limit",
+                "At most (0 = all)",
+                K::Integer { min: 0, max: 1000 },
+                "",
+            )],
+            json!({ "limit": 0 }),
         ),
         info(
             "separate",
@@ -588,6 +915,17 @@ pub fn catalog() -> Vec<BlockInfo> {
             vec![],
             json!({}),
         ),
+        BlockInfo {
+            palette: false,
+            ..info(
+                "function",
+                "Function",
+                Flow,
+                "A block made of other blocks. It waits for all its inputs, runs its blocks, and sends out what reaches its outputs.",
+                vec![],
+                json!({ "function": "" }),
+            )
+        },
     ]
 }
 

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-tool-network"
+description = "Enables the set_tool_network command without any pre-configured scope."
+commands.allow = ["set_tool_network"]
+
+[[permission]]
+identifier = "deny-set-tool-network"
+description = "Denies the set_tool_network command without any pre-configured scope."
+commands.deny = ["set_tool_network"]

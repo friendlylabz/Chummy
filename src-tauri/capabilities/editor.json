@@ -21,6 +21,7 @@
     "allow-export-loop",
     "allow-test-run",
     "allow-stop-run",
-    "allow-list-runs"
+    "allow-list-runs",
+    "allow-tools-status"
   ]
 }

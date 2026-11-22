@@ -3,7 +3,7 @@
 use serde_json::{Map, Value, json};
 
 use crate::types::{
-    ChatEvent, ChatRequest, Role, StopReason, Usage, finish_tool_call, make_call_id,
+    ChatEvent, ChatRequest, Role, StopReason, ToolChoice, Usage, finish_tool_call, make_call_id,
 };
 
 pub(crate) fn body(req: &ChatRequest) -> Value {
@@ -53,6 +53,9 @@ pub(crate) fn body(req: &ChatRequest) -> Value {
         b["tools"] = json!([{ "functionDeclarations": req.tools.iter().map(|t| json!({
             "name": t.name, "description": t.description, "parameters": clean_schema(&t.parameters),
         })).collect::<Vec<_>>() }]);
+        if req.tool_choice == ToolChoice::Required {
+            b["toolConfig"] = json!({ "functionCallingConfig": { "mode": "ANY" } });
+        }
     }
     let mut cfg = Map::new();
     if let Some(t) = req.temperature {

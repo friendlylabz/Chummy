@@ -175,6 +175,7 @@ pub async fn probe(client: &Client) -> ProbeReport {
                 "required": ["city"]
             }),
         }],
+        tool_choice: Default::default(),
         max_tokens: Some(512),
         temperature: Some(0.0),
     };

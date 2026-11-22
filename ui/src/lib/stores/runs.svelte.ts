@@ -17,6 +17,8 @@ export interface RunView {
   /** Short previews of each block's last output. */
   outputs: Record<string, string>;
   replies: string[];
+  /** Tool calls, their results and notices, in order. */
+  activity: { kind: "call" | "result" | "error" | "notice"; block: string; text: string }[];
   outcome: RunOutcome | null;
 }
 
@@ -52,6 +54,15 @@ class RunsStore {
         case "reply":
           r.replies.push(event.text);
           break;
+        case "tool_call":
+          r.activity.push({ kind: "call", block: event.block, text: `${event.tool} ${event.arguments}` });
+          break;
+        case "tool_result":
+          r.activity.push({ kind: event.is_error ? "error" : "result", block: event.block, text: `${event.tool}: ${event.preview}` });
+          break;
+        case "notice":
+          r.activity.push({ kind: "notice", block: event.block, text: event.text });
+          break;
       }
     });
     await events.onRunFinished(({ run_id, outcome }) => {
@@ -73,6 +84,7 @@ class RunsStore {
       streaming: "",
       outputs: {},
       replies: [],
+      activity: [],
       outcome: null,
     };
   }

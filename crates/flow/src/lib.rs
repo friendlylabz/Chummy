@@ -14,21 +14,27 @@
 
 mod blocks;
 mod engine;
+mod exchange;
 mod format;
 mod templates;
 mod text;
 mod validate;
 
 pub use blocks::{
-    BlockInfo, BlockKind, Category, ParamKind, ParamSpec, PortSpec, ValueKind, catalog,
+    BadCall, BlockInfo, BlockKind, Category, ChoiceOption, OnToolError, ParamKind, ParamSpec,
+    PortSpec, RoleFilter, ToolChoice, ValueKind, catalog,
 };
 pub use engine::{
-    BlockState, ChatTurn, Event, Host, LlmCall, RunInputs, RunLimits, RunOutcome, RunStatus, Value,
-    run,
+    BlockState, ChatTurn, Event, Host, LlmAnswer, LlmCall, MalformedCall, RunInputs, RunLimits,
+    RunOutcome, RunStatus, ToolOutput, Value, run,
 };
-pub use format::{Block, FORMAT, Link, LoopFile, PortRef, Position, VERSION};
+pub use exchange::{ExMessage, Exchange, Role, ToolCall, ToolInfo, check_arguments};
+pub use format::{
+    Block, FORMAT, FunctionDef, FunctionInput, FunctionOutput, Link, LoopFile, PortRef, Position,
+    VERSION,
+};
 pub use templates::{Template, templates};
-pub use validate::{Analysis, BlockPorts, Issue, Severity, analyze};
+pub use validate::{Analysis, BlockPorts, FunctionPorts, Issue, Severity, analyze};
 
 #[derive(Debug, thiserror::Error)]
 pub enum FlowError {

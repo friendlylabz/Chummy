@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { richText } from "$lib/format";
   import { tick } from "svelte";
   import { commands, type Agent } from "$lib/ipc";
   import { chat } from "$lib/stores/chat.svelte";
@@ -37,8 +38,8 @@
         <div class="msg assistant">
           <div class="avatar"><Icon name="bot" size={15} /></div>
           <div class="body">
-            <div class="text" data-selectable>{m.text}</div>
-            {#if m.run}<div class="meta">{m.run.llm_calls} model call{m.run.llm_calls === 1 ? "" : "s"} · {m.run.steps} steps</div>{/if}
+            <div class="text" data-selectable>{@html richText(m.text)}</div>
+            {#if m.run}<div class="meta">{m.run.llm_calls} model call{m.run.llm_calls === 1 ? "" : "s"}{m.run.tool_calls ? ` · ${m.run.tool_calls} tool call${m.run.tool_calls === 1 ? "" : "s"}` : ""} · {m.run.steps} steps</div>{/if}
           </div>
         </div>
       {:else}
@@ -67,6 +68,13 @@
 </div>
 
 <style>
+  .text :global(code) {
+    padding: 0 4px;
+    border-radius: 4px;
+    background: var(--surface-2);
+    font-family: var(--font-mono);
+    font-size: 0.92em;
+  }
   .scroller {
     flex: 1;
     min-height: 0;

@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use serde::Serialize;
 
 use crate::blocks::{BlockKind, PortSpec};
-use crate::format::{FORMAT, LoopFile, VERSION};
+use crate::format::{Block, FORMAT, FunctionDef, Link, LoopFile, VERSION};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -21,6 +21,9 @@ pub struct Issue {
     pub severity: Severity,
     /// The block the issue is about, if any.
     pub block: Option<String>,
+    /// The function the block is in; `None` for the loop itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub function: Option<String>,
     pub message: String,
 }
 
@@ -30,16 +33,25 @@ pub struct BlockPorts {
     pub outputs: Vec<PortSpec>,
 }
 
+/// A function's ports (as a block) and its own blocks' ports.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct FunctionPorts {
+    pub ports: BlockPorts,
+    pub blocks: BTreeMap<String, BlockPorts>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct Analysis {
     /// Ports of every block that parsed, by block id.
     pub ports: BTreeMap<String, BlockPorts>,
+    /// Every function that could be read, by id.
+    pub functions: BTreeMap<String, FunctionPorts>,
     pub issues: Vec<Issue>,
     /// True when there are no errors.
     pub ok: bool,
 }
 
-fn valid_id(id: &str) -> bool {
+pub(crate) fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
         && id
@@ -47,124 +59,377 @@ fn valid_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+/// Ports of a block, looking up function signatures.
+pub(crate) fn block_ports(
+    k: &BlockKind,
+    signatures: &HashMap<String, BlockPorts>,
+) -> Option<BlockPorts> {
+    match k {
+        BlockKind::Function(p) => signatures.get(&p.function).cloned(),
+        _ => Some(BlockPorts {
+            inputs: k.inputs(),
+            outputs: k.outputs(),
+        }),
+    }
+}
+
+struct Sink<'a> {
+    issues: &'a mut Vec<Issue>,
+    function: Option<String>,
+}
+
+impl Sink<'_> {
+    fn push(&mut self, severity: Severity, block: Option<&str>, message: String) {
+        self.issues.push(Issue {
+            severity,
+            block: block.map(str::to_string),
+            function: self.function.clone(),
+            message,
+        });
+    }
+    fn err(&mut self, block: Option<&str>, message: String) {
+        self.push(Severity::Error, block, message)
+    }
+    fn warn(&mut self, block: Option<&str>, message: String) {
+        self.push(Severity::Warning, block, message)
+    }
+}
+
 pub fn analyze(l: &LoopFile) -> Analysis {
     let mut issues = Vec::new();
-    let mut err = |block: Option<&str>, msg: String| {
-        issues.push(Issue {
-            severity: Severity::Error,
-            block: block.map(str::to_string),
-            message: msg,
-        })
-    };
+    {
+        let mut top = Sink {
+            issues: &mut issues,
+            function: None,
+        };
+        if l.format != FORMAT || l.version != VERSION {
+            top.err(
+                None,
+                format!(
+                    "This is format {} version {}; expected {FORMAT} version {VERSION}.",
+                    l.format, l.version
+                ),
+            );
+        }
+        if !(1..=10_000).contains(&l.limits.max_steps) {
+            top.err(None, "Max steps must be between 1 and 10,000.".into());
+        }
+        if !(1..=1_000).contains(&l.limits.max_llm_calls) {
+            top.err(None, "Max model calls must be between 1 and 1,000.".into());
+        }
+        if !(1..=1_000).contains(&l.limits.max_tool_calls) {
+            top.err(None, "Max tool calls must be between 1 and 1,000.".into());
+        }
+    }
 
-    if l.format != FORMAT || l.version != VERSION {
-        err(
-            None,
-            format!(
-                "This is format {} version {}; expected {FORMAT} version {VERSION}.",
-                l.format, l.version
-            ),
+    // Functions: ids, then the order to work out their ports in (a function
+    // can use another, but never itself, directly or not).
+    let mut fn_ids = HashSet::new();
+    for f in &l.functions {
+        let mut sink = Sink {
+            issues: &mut issues,
+            function: Some(f.id.clone()),
+        };
+        if !valid_id(&f.id) {
+            sink.err(
+                None,
+                format!(
+                    "Function id “{}” must be 1–64 letters, digits, - or _.",
+                    f.id
+                ),
+            );
+        } else if !fn_ids.insert(f.id.as_str()) {
+            sink.err(None, format!("Two functions share the id “{}”.", f.id));
+        }
+    }
+    let uses = |f: &FunctionDef| -> Vec<String> {
+        f.blocks
+            .iter()
+            .filter(|b| b.kind == "function")
+            .filter_map(|b| match BlockKind::parse(&b.kind, &b.params) {
+                Ok(BlockKind::Function(p)) => Some(p.function),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut order: Vec<&FunctionDef> = Vec::new();
+    let mut state: HashMap<&str, u8> = HashMap::new(); // 1 = visiting, 2 = done
+    let mut cyclic: HashSet<String> = HashSet::new();
+    fn visit<'a>(
+        f: &'a FunctionDef,
+        l: &'a LoopFile,
+        uses: &dyn Fn(&FunctionDef) -> Vec<String>,
+        state: &mut HashMap<&'a str, u8>,
+        order: &mut Vec<&'a FunctionDef>,
+        cyclic: &mut HashSet<String>,
+    ) {
+        match state.get(f.id.as_str()) {
+            Some(2) => return,
+            Some(1) => {
+                cyclic.insert(f.id.clone());
+                return;
+            }
+            _ => {}
+        }
+        state.insert(&f.id, 1);
+        for u in uses(f) {
+            if let Some(g) = l.function(&u) {
+                visit(g, l, uses, state, order, cyclic);
+                if cyclic.contains(&g.id) {
+                    cyclic.insert(f.id.clone());
+                }
+            }
+        }
+        state.insert(&f.id, 2);
+        order.push(f);
+    }
+    for f in &l.functions {
+        visit(f, l, &uses, &mut state, &mut order, &mut cyclic);
+    }
+
+    let mut signatures: HashMap<String, BlockPorts> = HashMap::new();
+    let mut functions = BTreeMap::new();
+    for f in order {
+        let mut sink = Sink {
+            issues: &mut issues,
+            function: Some(f.id.clone()),
+        };
+        if cyclic.contains(&f.id) {
+            sink.err(
+                None,
+                format!(
+                    "The function “{}” uses itself, directly or through another function.",
+                    f.name
+                ),
+            );
+            continue;
+        }
+        let inner = graph(&f.blocks, &f.links, Some(f), &signatures, &mut sink);
+        let sig = signature(f, &inner, &mut sink);
+        signatures.insert(f.id.clone(), sig.clone());
+        functions.insert(
+            f.id.clone(),
+            FunctionPorts {
+                ports: sig,
+                blocks: inner,
+            },
         );
     }
-    if !(1..=10_000).contains(&l.limits.max_steps) {
-        err(None, "Max steps must be between 1 and 10,000.".into());
-    }
-    if !(1..=1_000).contains(&l.limits.max_llm_calls) {
-        err(None, "Max model calls must be between 1 and 1,000.".into());
-    }
 
-    // Blocks.
-    let mut kinds: HashMap<&str, BlockKind> = HashMap::new();
-    let mut seen = HashSet::new();
-    for b in &l.blocks {
-        let name = if b.label.is_empty() {
-            b.id.as_str()
-        } else {
-            b.label.as_str()
+    let ports = {
+        let mut sink = Sink {
+            issues: &mut issues,
+            function: None,
         };
+        graph(&l.blocks, &l.links, None, &signatures, &mut sink)
+    };
+
+    let ok = !issues.iter().any(|i| i.severity == Severity::Error);
+    Analysis {
+        ports,
+        functions,
+        issues,
+        ok,
+    }
+}
+
+/// A function's ports as a block, from its inputs and outputs.
+fn signature(f: &FunctionDef, inner: &BTreeMap<String, BlockPorts>, sink: &mut Sink) -> BlockPorts {
+    let mut names = HashSet::new();
+    let mut sig = BlockPorts::default();
+    let block_label = |id: &str| {
+        f.blocks
+            .iter()
+            .find(|b| b.id == id)
+            .map(|b| {
+                if b.label.is_empty() {
+                    id.to_string()
+                } else {
+                    b.label.clone()
+                }
+            })
+            .unwrap_or_else(|| id.to_string())
+    };
+    for i in &f.inputs {
+        if !valid_id(&i.name) || !names.insert(format!("in:{}", i.name)) {
+            sink.err(
+                None,
+                format!(
+                    "“{}” has a bad or repeated input name “{}”.",
+                    f.name, i.name
+                ),
+            );
+            continue;
+        }
+        match inner
+            .get(&i.to.block)
+            .and_then(|p| p.inputs.iter().find(|x| x.name == i.to.port))
+        {
+            Some(p) => sig.inputs.push(PortSpec {
+                name: i.name.clone(),
+                label: if i.label.is_empty() {
+                    format!("{} · {}", block_label(&i.to.block), p.label)
+                } else {
+                    i.label.clone()
+                },
+                kind: p.kind,
+            }),
+            None => sink.err(
+                Some(&i.to.block),
+                format!(
+                    "“{}”'s input “{}” goes to a missing port {}.{}.",
+                    f.name, i.name, i.to.block, i.to.port
+                ),
+            ),
+        }
+    }
+    for o in &f.outputs {
+        if !valid_id(&o.name) || !names.insert(format!("out:{}", o.name)) {
+            sink.err(
+                None,
+                format!(
+                    "“{}” has a bad or repeated output name “{}”.",
+                    f.name, o.name
+                ),
+            );
+            continue;
+        }
+        match inner
+            .get(&o.from.block)
+            .and_then(|p| p.outputs.iter().find(|x| x.name == o.from.port))
+        {
+            Some(p) => sig.outputs.push(PortSpec {
+                name: o.name.clone(),
+                label: if o.label.is_empty() {
+                    format!("{} · {}", block_label(&o.from.block), p.label)
+                } else {
+                    o.label.clone()
+                },
+                kind: p.kind,
+            }),
+            None => sink.err(
+                Some(&o.from.block),
+                format!(
+                    "“{}”'s output “{}” comes from a missing port {}.{}.",
+                    f.name, o.name, o.from.block, o.from.port
+                ),
+            ),
+        }
+    }
+    sig
+}
+
+/// Checks one graph (the loop, or a function's blocks) and returns its ports.
+fn graph(
+    blocks: &[Block],
+    links: &[Link],
+    func: Option<&FunctionDef>,
+    signatures: &HashMap<String, BlockPorts>,
+    sink: &mut Sink,
+) -> BTreeMap<String, BlockPorts> {
+    let label = |id: &str| -> String {
+        blocks
+            .iter()
+            .find(|b| b.id == id)
+            .map(|b| {
+                if b.label.is_empty() {
+                    id.to_string()
+                } else {
+                    b.label.clone()
+                }
+            })
+            .unwrap_or_else(|| id.to_string())
+    };
+    let mut kinds: HashMap<&str, BlockKind> = HashMap::new();
+    let mut ports: BTreeMap<String, BlockPorts> = BTreeMap::new();
+    let mut seen = HashSet::new();
+    for b in blocks {
+        let name = label(&b.id);
         if !valid_id(&b.id) {
-            err(
+            sink.err(
                 Some(&b.id),
                 format!("Block id “{}” must be 1–64 letters, digits, - or _.", b.id),
             );
             continue;
         }
         if !seen.insert(b.id.as_str()) {
-            err(Some(&b.id), format!("Two blocks share the id “{}”.", b.id));
+            sink.err(Some(&b.id), format!("Two blocks share the id “{}”.", b.id));
             continue;
         }
         match BlockKind::parse(&b.kind, &b.params) {
             Ok(k) => {
                 for problem in param_problems(&k) {
-                    err(Some(&b.id), format!("{name}: {problem}"));
+                    sink.err(Some(&b.id), format!("{name}: {problem}"));
+                }
+                match block_ports(&k, signatures) {
+                    Some(p) => {
+                        ports.insert(b.id.clone(), p);
+                    }
+                    None => {
+                        if let BlockKind::Function(p) = &k {
+                            sink.err(
+                                Some(&b.id),
+                                format!(
+                                    "{name}: the function “{}” doesn't exist or has problems.",
+                                    p.function
+                                ),
+                            );
+                        }
+                    }
                 }
                 kinds.insert(b.id.as_str(), k);
             }
-            Err(e) => err(Some(&b.id), format!("{name}: {e}")),
+            Err(e) => sink.err(Some(&b.id), format!("{name}: {e}")),
         }
     }
 
-    let ports: BTreeMap<String, BlockPorts> = kinds
-        .iter()
-        .map(|(id, k)| {
-            (
-                id.to_string(),
-                BlockPorts {
-                    inputs: k.inputs(),
-                    outputs: k.outputs(),
-                },
-            )
-        })
-        .collect();
-
-    // Links.
     let mut link_set = HashSet::new();
     let mut connected_inputs: HashSet<(&str, &str)> = HashSet::new();
     let mut edges: HashMap<&str, Vec<&str>> = HashMap::new();
-    for link in &l.links {
+    for link in links {
         let (f, t) = (&link.from, &link.to);
         let Some(fp) = ports.get(&f.block) else {
-            err(
+            sink.err(
                 None,
                 format!("A link starts at a missing block “{}”.", f.block),
             );
             continue;
         };
         let Some(tp) = ports.get(&t.block) else {
-            err(
+            sink.err(
                 None,
                 format!("A link ends at a missing block “{}”.", t.block),
             );
             continue;
         };
         let Some(out) = fp.outputs.iter().find(|p| p.name == f.port) else {
-            err(
+            sink.err(
                 Some(&f.block),
-                format!("“{}” has no output “{}”.", label(l, &f.block), f.port),
+                format!("“{}” has no output “{}”.", label(&f.block), f.port),
             );
             continue;
         };
         let Some(inp) = tp.inputs.iter().find(|p| p.name == t.port) else {
-            err(
+            sink.err(
                 Some(&t.block),
-                format!("“{}” has no input “{}”.", label(l, &t.block), t.port),
+                format!("“{}” has no input “{}”.", label(&t.block), t.port),
             );
             continue;
         };
         if !out.kind.fits(inp.kind) {
-            err(
+            sink.err(
                 Some(&t.block),
                 format!(
                     "“{}” sends {} to “{}”, which expects {}.",
-                    label(l, &f.block),
+                    label(&f.block),
                     kind_name(out.kind),
-                    label(l, &t.block),
+                    label(&t.block),
                     kind_name(inp.kind)
                 ),
             );
         }
         if !link_set.insert(link) {
-            err(Some(&t.block), "The same link appears twice.".into());
+            sink.err(Some(&t.block), "The same link appears twice.".into());
         }
         connected_inputs.insert((t.block.as_str(), t.port.as_str()));
         edges
@@ -173,55 +438,71 @@ pub fn analyze(l: &LoopFile) -> Analysis {
             .push(t.block.as_str());
     }
 
-    // Whole-loop checks.
-    let is_start = |k: &BlockKind| {
-        matches!(
-            k,
-            BlockKind::Input(_) | BlockKind::History(_) | BlockKind::Fixed(_)
-        )
-    };
-    let starts: Vec<&str> = kinds
+    // Function inputs count as connected, and as starting points.
+    let exposed: HashSet<(&str, &str)> = func
+        .map(|f| {
+            f.inputs
+                .iter()
+                .map(|i| (i.to.block.as_str(), i.to.port.as_str()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut starts: Vec<&str> = ports
         .iter()
-        .filter(|(_, k)| is_start(k))
-        .map(|(id, _)| *id)
+        .filter(|(_, p)| p.inputs.is_empty())
+        .map(|(id, _)| id.as_str())
         .collect();
-    if !l.blocks.is_empty() && starts.is_empty() {
-        err(
+    starts.extend(
+        exposed
+            .iter()
+            .map(|(b, _)| *b)
+            .filter(|b| ports.contains_key(*b)),
+    );
+    starts.sort();
+    starts.dedup();
+
+    if !blocks.is_empty() && starts.is_empty() {
+        sink.err(
             None,
-            "Nothing starts this loop. Add a Message, Conversation or Fixed text block.".into(),
+            match func {
+                None => {
+                    "Nothing starts this loop. Add a Message, Conversation or Fixed text block."
+                        .into()
+                }
+                Some(f) => format!(
+                    "Nothing in “{}” can start: give it an input or a Fixed text block.",
+                    f.name
+                ),
+            },
         );
     }
-    let has_output = kinds.values().any(|k| matches!(k, BlockKind::Output(_)));
-
-    let mut warn = |block: Option<&str>, msg: String| {
-        issues.push(Issue {
-            severity: Severity::Warning,
-            block: block.map(str::to_string),
-            message: msg,
-        })
-    };
-    if !l.blocks.is_empty() && !has_output {
-        warn(
+    if func.is_none()
+        && !blocks.is_empty()
+        && !kinds.values().any(|k| matches!(k, BlockKind::Output(_)))
+        && !blocks.iter().any(|b| b.kind == "function")
+    {
+        sink.warn(
             None,
             "There's no Reply block, so the agent won't answer in chat.".into(),
         );
     }
-    for b in &l.blocks {
+    for b in blocks {
         let Some(p) = ports.get(&b.id) else { continue };
         for input in &p.inputs {
-            if !connected_inputs.contains(&(b.id.as_str(), input.name.as_str())) {
-                warn(
+            let key = (b.id.as_str(), input.name.as_str());
+            if !connected_inputs.contains(&key) && !exposed.contains(&key) {
+                sink.warn(
                     Some(&b.id),
                     format!(
                         "“{}”: {} has nothing connected, so this block will never run.",
-                        label(l, &b.id),
+                        label(&b.id),
                         input.label
                     ),
                 );
             }
         }
     }
-    // Reachability from start blocks.
     let mut reached: HashSet<&str> = starts.iter().copied().collect();
     let mut queue: VecDeque<&str> = starts.iter().copied().collect();
     while let Some(b) = queue.pop_front() {
@@ -231,41 +512,28 @@ pub fn analyze(l: &LoopFile) -> Analysis {
             }
         }
     }
-    for b in &l.blocks {
-        if kinds.contains_key(b.id.as_str())
+    for b in blocks {
+        if ports.contains_key(b.id.as_str())
             && !reached.contains(b.id.as_str())
             && !starts.is_empty()
         {
-            warn(
+            sink.warn(
                 Some(&b.id),
                 format!(
                     "“{}” can't be reached from any starting block.",
-                    label(l, &b.id)
+                    label(&b.id)
                 ),
             );
         }
     }
-
-    let ok = !issues.iter().any(|i| i.severity == Severity::Error);
-    Analysis { ports, issues, ok }
-}
-
-fn label<'a>(l: &'a LoopFile, id: &'a str) -> &'a str {
-    l.block(id)
-        .map(|b| {
-            if b.label.is_empty() {
-                id
-            } else {
-                b.label.as_str()
-            }
-        })
-        .unwrap_or(id)
+    ports
 }
 
 fn kind_name(k: crate::blocks::ValueKind) -> &'static str {
     match k {
         crate::blocks::ValueKind::Text => "a text",
         crate::blocks::ValueKind::List => "a list",
+        crate::blocks::ValueKind::Exchange => "an exchange",
         crate::blocks::ValueKind::Any => "a value",
     }
 }
@@ -296,7 +564,21 @@ fn param_problems(k: &BlockKind) -> Vec<String> {
             if p.max_tokens == 0 {
                 v.push("max answer length must be at least 1".into());
             }
+            if p.retries > 5 {
+                v.push("times to ask again must be 0–5".into());
+            }
+            let mut seen = HashSet::new();
+            for t in &p.tools {
+                if t.is_empty() || !seen.insert(t) {
+                    v.push(format!("the tool list has a blank or repeated name “{t}”"));
+                }
+            }
         }
+        BlockKind::RunTool(p) if p.max_result_chars < 100 => {
+            v.push("longest result must be at least 100 characters".into())
+        }
+        BlockKind::Exchange(p) if p.roles.is_empty() => v.push("choose at least one role".into()),
+        BlockKind::Function(p) if p.function.is_empty() => v.push("no function chosen".into()),
         BlockKind::Regex(p) | BlockKind::Branch(p) => regex_check(&p.pattern, &mut v),
         BlockKind::Capture(p) => {
             regex_check(&p.pattern, &mut v);

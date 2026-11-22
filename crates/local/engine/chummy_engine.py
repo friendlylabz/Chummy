@@ -313,7 +313,24 @@ class FakeBackend:
     def generate(self, messages, tools, max_tokens, temperature) -> Iterator[str]:
         last = next((m.get("content") or "" for m in reversed(messages) if m["role"] == "user"), "")
         low = last.lower()
-        if tools and "weather" in low:
+        names = [t["function"]["name"] for t in (tools or [])]
+
+        def call(name, args):
+            return '<tool_call>\n{"name": "%s", "arguments": %s}\n</tool_call>' % (name, json.dumps(args))
+
+        if messages and messages[-1]["role"] == "tool":
+            text = "Done: " + (messages[-1].get("content") or "")[:150]
+        elif "current_time" in names and ("date" in low or "time" in low):
+            text = call("current_time", {})
+        elif "calculator" in names and ("work out" in low or "calculate" in low):
+            text = call("calculator", {"expression": "365 - 326"})
+        elif "yes or no" in low:
+            text = "NO" if "write a short summary" in low else "YES"
+        elif "numbered" in low and "too big" in low:
+            text = "1. Gather what is needed\n2. Finish the smaller part"
+        elif "numbered" in low:
+            text = "1. Find out today's date\n2. Work out how many days are left in the year\n3. Write a short summary"
+        elif tools and "weather" in low:
             name = tools[0]["function"]["name"]
             text = 'Let me check.\n<tool_call>\n{"name": "%s", "arguments": {"city": "Paris"}}\n</tool_call>' % name
         elif "think" in low:

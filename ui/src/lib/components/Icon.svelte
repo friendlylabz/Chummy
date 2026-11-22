@@ -1,6 +1,8 @@
 <script lang="ts" module>
   // Simple 24×24 stroke icons. Add new ones here; keep them geometric and quiet.
   const paths = {
+    wrench: "M14.5 5.5a4 4 0 0 0 4.9 4.9L20 11l-9.5 9.5a2.1 2.1 0 0 1-3-3L17 8l.6.6M14.5 5.5 15 4a4 4 0 0 1 5 5",
+    layers: "M12 4 3.5 8.5 12 13l8.5-4.5zM3.5 12.5 12 17l8.5-4.5M3.5 16.5 12 21l8.5-4.5",
     menu: "M4 7h16M4 12h16M4 17h10",
     "panel-right": "M4 5h16v14H4zM15 5v14",
     chat: "M5 6.5A2.5 2.5 0 0 1 7.5 4h9A2.5 2.5 0 0 1 19 6.5v7a2.5 2.5 0 0 1-2.5 2.5H11l-4 3.5V16h0a2.5 2.5 0 0 1-2-2.5z",

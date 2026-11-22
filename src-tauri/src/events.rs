@@ -21,3 +21,7 @@ pub const RUN_EVENT: &str = "run:event";
 pub const RUN_FINISHED: &str = "run:finished";
 /// Payload: `ChatMessageEvent`.
 pub const CHAT_MESSAGE: &str = "chat:message";
+/// Payload: `ToolsStatus`.
+pub const TOOLS_CHANGED: &str = "tools:changed";
+/// Payload: `ToolsProgress`.
+pub const TOOLS_PROGRESS: &str = "tools:progress";

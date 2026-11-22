@@ -15,7 +15,7 @@ serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "net", "process"] }
 futures-util = "0.3"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "http2", "charset"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json", "stream", "http2", "charset"] }
 tempfile = "3"
 
 chummy-sandbox = { path = "crates/sandbox" }
@@ -39,3 +39,14 @@ lto = true
 opt-level = "s"
 panic = "abort"
 strip = true
+
+# Compiling the WebAssembly Python is slow with an unoptimized compiler, so
+# optimize the compiler even in debug builds.
+[profile.dev.package.cranelift-codegen]
+opt-level = 3
+[profile.dev.package.regalloc2]
+opt-level = 3
+[profile.dev.package.wasmtime-internal-cranelift]
+opt-level = 3
+[profile.dev.package.cranelift-frontend]
+opt-level = 3

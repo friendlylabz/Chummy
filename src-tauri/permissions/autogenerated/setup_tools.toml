@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-setup-tools"
+description = "Enables the setup_tools command without any pre-configured scope."
+commands.allow = ["setup_tools"]
+
+[[permission]]
+identifier = "deny-setup-tools"
+description = "Denies the setup_tools command without any pre-configured scope."
+commands.deny = ["setup_tools"]

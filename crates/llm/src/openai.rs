@@ -6,7 +6,8 @@ use std::collections::BTreeMap;
 use serde_json::{Value, json};
 
 use crate::types::{
-    ChatEvent, ChatRequest, Message, Role, StopReason, Usage, finish_tool_call, make_call_id,
+    ChatEvent, ChatRequest, Message, Role, StopReason, ToolChoice, Usage, finish_tool_call,
+    make_call_id,
 };
 
 pub(crate) fn body(model: &str, req: &ChatRequest, include_usage: bool) -> Value {
@@ -28,6 +29,9 @@ pub(crate) fn body(model: &str, req: &ChatRequest, include_usage: bool) -> Value
                 }})
             })
             .collect();
+        if req.tool_choice == ToolChoice::Required {
+            b["tool_choice"] = json!("required");
+        }
     }
     if let Some(t) = req.temperature {
         b["temperature"] = json!(t);
@@ -283,10 +287,12 @@ mod tests {
                 description: "d".into(),
                 parameters: json!({"type":"object"}),
             }],
+            tool_choice: ToolChoice::Required,
             temperature: Some(0.2),
             max_tokens: Some(10),
         };
         let b = body("m", &req, true);
+        assert_eq!(b["tool_choice"], "required");
         assert_eq!(
             b["messages"][2]["tool_calls"][0]["function"]["arguments"],
             "{\"a\":1}"

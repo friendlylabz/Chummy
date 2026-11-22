@@ -45,3 +45,14 @@ export const kindLabel: Record<string, string> = {
   gemini: "Gemini",
   local: "Built-in engine",
 };
+
+/**
+ * Light formatting for agent replies: **bold** and `code`. Everything is
+ * escaped first, so model output can never inject markup.
+ */
+export function richText(s: string): string {
+  const esc = s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  return esc
+    .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*\n][^\n]*?)\*\*/g, "<strong>$1</strong>");
+}

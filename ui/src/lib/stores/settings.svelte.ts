@@ -16,6 +16,7 @@ class SettingsStore {
     default_provider: null,
     local: { device: "auto" },
     hf_token_set: false,
+    tools: {},
   });
   /** The theme actually shown, with "system" resolved. */
   resolvedTheme = $state<"dark" | "light">(prefersDark.matches ? "dark" : "light");

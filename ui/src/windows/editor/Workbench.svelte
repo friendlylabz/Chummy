@@ -12,7 +12,7 @@
   } from "@xyflow/svelte";
   import "@xyflow/svelte/dist/style.css";
 
-  import { commands, events, errorText, type Analysis, type Block, type BlockInfo, type LoopFile, type Template } from "$lib/ipc";
+  import { commands, events, errorText, type Analysis, type Block, type BlockInfo, type FunctionDef, type Link, type LoopFile, type Template } from "$lib/ipc";
   import { settings } from "$lib/stores/settings.svelte";
   import { loops } from "$lib/stores/loops.svelte";
   import { runs } from "$lib/stores/runs.svelte";
@@ -24,7 +24,20 @@
   import Inspector from "./Inspector.svelte";
   import RunPanel from "./RunPanel.svelte";
   import StartScreen from "./StartScreen.svelte";
-  import { blankLoop, clone, newBlock, newBlockId, structureKey, toCanvas, toFile, type BlockNode } from "./loopdoc";
+  import {
+    blankLoop,
+    clone,
+    editorActions,
+    makeFunction,
+    newBlock,
+    newBlockId,
+    outputCandidates,
+    portKey,
+    syncFunctionPorts,
+    toCanvas,
+    toGraph,
+    type BlockNode,
+  } from "./loopdoc";
 
   const nodeTypes = { block: BlockNodeView };
   const flow = useSvelteFlow();
@@ -34,8 +47,16 @@
   let meta = $state<LoopFile>(blankLoop());
   let nodes = $state.raw<BlockNode[]>([]);
   let edges = $state.raw<Edge[]>([]);
-  let analysis = $state<Analysis>({ ports: {}, issues: [], ok: true });
+  let analysis = $state<Analysis>({ ports: {}, functions: {}, issues: [], ok: true });
   let selected = $state<string | null>(null);
+  /** Every selected block (for Make function). */
+  let selection = $state<string[]>([]);
+  /** The function being edited; null means the loop itself. */
+  let scope = $state<string | null>(null);
+  /** The loop's own blocks and links while a function is open. */
+  let stash = $state.raw<{ blocks: Block[]; links: Link[] }>({ blocks: [], links: [] });
+  /** Per function: open outputs already offered, so unticked ones stay unticked. */
+  const known = new Map<string, Set<string>>();
   let savedKey = $state("");
   let saving = $state(false);
   let notice = $state("");
@@ -44,10 +65,30 @@
   let pending = $state<(() => void) | null>(null);
   let canvasEl = $state<HTMLDivElement>();
 
-  const file = () => toFile(meta, nodes, edges);
-  const currentKey = $derived(structureKey(meta, nodes, edges) + JSON.stringify([meta.name, meta.description, nodes.map((n) => [Math.round(n.position.x), Math.round(n.position.y)])]));
+  /** The whole loop file: the open graph merged into the rest. */
+  function file(): LoopFile {
+    const cur = toGraph(nodes, edges);
+    const fns = meta.functions ?? [];
+    if (scope === null) return { ...meta, ...cur, functions: fns };
+    return { ...meta, ...stash, functions: fns.map((f) => (f.id === scope ? { ...f, ...cur } : f)) };
+  }
+  /** The file without positions: changes only when its meaning changes. */
+  function structure(f: LoopFile): string {
+    const strip = (bs: Block[]) => bs.map((b) => ({ ...b, position: null }));
+    return JSON.stringify({ ...f, name: "", description: "", blocks: strip(f.blocks), functions: (f.functions ?? []).map((x) => ({ ...x, blocks: strip(x.blocks) })) });
+  }
+  const currentKey = $derived(JSON.stringify(file()));
+  const scopeDef = $derived(scope ? (meta.functions ?? []).find((f) => f.id === scope) ?? null : null);
+  const scopePorts = $derived(scope ? analysis.functions[scope]?.blocks ?? {} : analysis.ports);
+  const scopeIssues = $derived(analysis.issues.filter((i) => (i.function ?? null) === scope));
+  const uses = $derived.by(() => {
+    if (!scope) return 0;
+    const f = file();
+    return [...f.blocks, ...(f.functions ?? []).flatMap((x) => x.blocks)].filter((b) => b.type === "function" && b.params.function === scope).length;
+  });
   const dirty = $derived(view === "edit" && currentKey !== savedKey);
   const errors = $derived(analysis.issues.filter((i) => i.severity === "error").length);
+  editorActions.openFunction = (id) => enterFunction(id);
   const warnings = $derived(analysis.issues.filter((i) => i.severity === "warning").length);
   const selectedBlock = $derived(nodes.find((n) => n.id === selected)?.data.block ?? null);
 
@@ -74,7 +115,10 @@
 
   function load(f: LoopFile, id: string | null) {
     const c = toCanvas(f);
-    meta = { ...f, blocks: [], links: [] };
+    meta = { ...f, blocks: [], links: [], functions: f.functions ?? [] };
+    scope = null;
+    stash = { blocks: [], links: [] };
+    known.clear();
     nodes = c.nodes;
     edges = c.edges;
     loopId = id;
@@ -82,7 +126,7 @@
     runId = null;
     lastAnalyzed = "";
     view = "edit";
-    savedKey = id ? structureKey(meta, nodes, edges) + JSON.stringify([meta.name, meta.description, nodes.map((n) => [Math.round(n.position.x), Math.round(n.position.y)])]) : "";
+    savedKey = id ? JSON.stringify(file()) : "";
     fitPending = true;
   }
   /** Fit the view once blocks have their real sizes (after the first analysis). */
@@ -134,7 +178,7 @@
   let timer: ReturnType<typeof setTimeout> | undefined;
   $effect(() => {
     if (view !== "edit") return;
-    const key = structureKey(meta, nodes, edges);
+    const key = structure(file());
     if (key === lastAnalyzed) return;
     clearTimeout(timer);
     timer = setTimeout(async () => {
@@ -149,19 +193,108 @@
     }, 120);
   });
 
+  function knownFor(id: string): Set<string> {
+    let k = known.get(id);
+    if (!k) known.set(id, (k = new Set()));
+    return k;
+  }
+
   function applyAnalysis(a: Analysis) {
+    const ports = scope ? a.functions[scope]?.blocks : a.ports;
+    if (!ports) return;
+    let def = scope ? (meta.functions ?? []).find((f) => f.id === scope) : undefined;
+    if (def) {
+      // Keep the function's inputs and outputs matching its blocks.
+      const synced = syncFunctionPorts({ ...def, ...toGraph(nodes, edges) }, ports, knownFor(def.id));
+      if (synced) {
+        def = { ...def, inputs: synced.inputs, outputs: synced.outputs };
+        meta.functions = (meta.functions ?? []).map((f) => (f.id === scope ? def! : f));
+      }
+    }
     nodes = nodes.map((n) => {
-      const p = a.ports[n.id] ?? { inputs: [], outputs: [] };
-      const issues = a.issues.filter((i) => i.block === n.id && i.severity === "error").map((i) => i.message);
-      return { ...n, data: { ...n.data, inputs: p.inputs, outputs: p.outputs, issues } };
+      const p = ports[n.id] ?? { inputs: [], outputs: [] };
+      const issues = a.issues
+        .filter((i) => i.block === n.id && (i.function ?? null) === scope && i.severity === "error")
+        .map((i) => i.message);
+      const exposedIn = def?.inputs.filter((x) => x.to.block === n.id).map((x) => x.to.port);
+      const exposedOut = def?.outputs.filter((x) => x.from.block === n.id).map((x) => x.from.port);
+      return { ...n, data: { ...n.data, inputs: p.inputs, outputs: p.outputs, issues, exposedIn, exposedOut } };
     });
     // Drop links whose ports no longer exist (e.g. fewer Combine inputs).
     const ok = (e: Edge) =>
-      a.ports[e.source]?.outputs.some((p) => p.name === e.sourceHandle) &&
-      a.ports[e.target]?.inputs.some((p) => p.name === e.targetHandle);
-    if (edges.some((e) => a.ports[e.source] && a.ports[e.target] && !ok(e))) {
-      edges = edges.filter((e) => !(a.ports[e.source] && a.ports[e.target]) || ok(e));
+      ports[e.source]?.outputs.some((p) => p.name === e.sourceHandle) &&
+      ports[e.target]?.inputs.some((p) => p.name === e.targetHandle);
+    if (edges.some((e) => ports[e.source] && ports[e.target] && !ok(e))) {
+      edges = edges.filter((e) => !(ports[e.source] && ports[e.target]) || ok(e));
     }
+  }
+
+  // ------------------------------------------------------------ functions
+
+  function show(blocks: Block[], links: Link[], select: string | null = null) {
+    const c = toCanvas({ ...meta, blocks, links });
+    nodes = c.nodes.map((n) => ({ ...n, selected: n.id === select }));
+    edges = c.edges;
+    selected = select;
+    selection = select ? [select] : [];
+    lastAnalyzed = "";
+    fitPending = true;
+  }
+
+  function enterFunction(id: string, select: string | null = null) {
+    const f = file();
+    const def = (f.functions ?? []).find((x) => x.id === id);
+    if (!def) return;
+    if (scope === null) stash = { blocks: f.blocks, links: f.links };
+    meta = { ...meta, functions: f.functions ?? [] };
+    if (!known.has(id)) {
+      const ports = analysis.functions[id]?.blocks ?? {};
+      known.set(id, new Set(outputCandidates(def, ports).map((c) => portKey(c.block, c.port.name))));
+    }
+    scope = id;
+    show(def.blocks, def.links, select);
+  }
+
+  function exitFunction(select: string | null = null) {
+    if (scope === null) return;
+    const f = file();
+    meta = { ...meta, functions: f.functions ?? [] };
+    scope = null;
+    show(stash.blocks, stash.links, select);
+  }
+
+  function makeFn() {
+    const g = toGraph(nodes, edges);
+    const r = makeFunction(g.blocks, g.links, new Set(selection), scopePorts, meta.functions ?? [], new Set(g.blocks.map((b) => b.id)));
+    known.set(r.def.id, new Set(outputCandidates(r.def, scopePorts).map((c) => portKey(c.block, c.port.name))));
+    meta = { ...meta, functions: [...(meta.functions ?? []), r.def] };
+    show(r.blocks, r.links, r.block.id);
+    fitPending = false;
+  }
+
+  function addFunctionBlock(def: FunctionDef) {
+    const info = loops.info("function");
+    if (!info) return;
+    addBlock({ ...info, label: def.name, default_params: { function: def.id } });
+  }
+
+  function updateFunction(def: FunctionDef) {
+    meta.functions = (meta.functions ?? []).map((f) => (f.id === def.id ? { ...def, blocks: f.blocks, links: f.links } : f));
+    applyAnalysis(analysis);
+  }
+
+  function deleteFunction(id: string) {
+    if (scope === id) exitFunction();
+    meta = { ...meta, functions: (meta.functions ?? []).filter((f) => f.id !== id) };
+  }
+
+  function jumpTo(id: string, fn: string | null) {
+    if (fn !== scope) {
+      if (fn) enterFunction(fn, id);
+      else exitFunction(id);
+      return;
+    }
+    selectBlock(id);
   }
 
   // ------------------------------------------------------------ editing
@@ -209,8 +342,8 @@
   }
 
   function isValidConnection(c: Edge | Connection): boolean {
-    const out = analysis.ports[c.source]?.outputs.find((p) => p.name === c.sourceHandle);
-    const inp = analysis.ports[c.target]?.inputs.find((p) => p.name === c.targetHandle);
+    const out = scopePorts[c.source]?.outputs.find((p) => p.name === c.sourceHandle);
+    const inp = scopePorts[c.target]?.inputs.find((p) => p.name === c.targetHandle);
     if (!out || !inp) return false;
     const fits = out.kind === inp.kind || out.kind === "any" || inp.kind === "any";
     const dup = edges.some(
@@ -229,8 +362,21 @@
     void JSON.stringify(states);
     void JSON.stringify(outputs);
     untrack(() => {
-      if (!nodes.some((n) => n.data.state !== states[n.id] || n.data.output !== outputs[n.id])) return;
-      nodes = nodes.map((n) => ({ ...n, data: { ...n.data, state: states[n.id], output: outputs[n.id] } }));
+      // Inside a function, blocks are named "<function block>/<block>".
+      const pick = <T,>(m: Record<string, T>, id: string): T | undefined => {
+        if (scope === null) return m[id];
+        let found: T | undefined;
+        for (const [k, v] of Object.entries(m)) {
+          if (k.includes("/") && k.slice(k.lastIndexOf("/") + 1) === id) {
+            found = v;
+            if (v === "running") break;
+          }
+        }
+        return found;
+      };
+      const next = nodes.map((n) => ({ id: n.id, state: pick(states, n.id), output: pick(outputs, n.id) }));
+      if (!nodes.some((n, i) => n.data.state !== next[i].state || n.data.output !== next[i].output)) return;
+      nodes = nodes.map((n, i) => ({ ...n, data: { ...n.data, state: next[i].state, output: next[i].output } }));
     });
   });
 
@@ -243,12 +389,20 @@
 <div class="editor">
   <header class="toolbar">
     {#if view === "edit"}
-      <Button variant="ghost" icon="chevron-left" onclick={() => guard(() => ((view = "start"), (runId = null), history.replaceState(null, "", "#")))}>Loops</Button>
-      <input class="name" bind:value={meta.name} aria-label="Loop name" spellcheck="false" />
+      {#if scopeDef}
+        <Button variant="ghost" icon="chevron-left" onclick={() => exitFunction()}>{meta.name}</Button>
+        <span class="crumb"><Icon name="layers" size={14} /> {scopeDef.name}</span>
+      {:else}
+        <Button variant="ghost" icon="chevron-left" onclick={() => guard(() => ((view = "start"), (runId = null), history.replaceState(null, "", "#")))}>Loops</Button>
+        <input class="name" bind:value={meta.name} aria-label="Loop name" spellcheck="false" />
+      {/if}
       <span class="state" class:dirty>{dirty ? "Unsaved" : loopId ? "Saved" : ""}</span>
       {#if errors}<span class="badge danger">{errors} error{errors === 1 ? "" : "s"}</span>{/if}
       {#if warnings}<span class="badge warn">{warnings} warning{warnings === 1 ? "" : "s"}</span>{/if}
       <div class="spacer"></div>
+      {#if selection.length > 0}
+        <Button variant="ghost" icon="layers" onclick={makeFn} title="Group the selected blocks into one block">Make function</Button>
+      {/if}
       {#if loopId}<Button variant="ghost" icon="export" onclick={() => commands.exportLoop(loopId!)}>Export</Button>{/if}
       <Button icon="play" onclick={() => (showRun = !showRun)}>{showRun ? "Hide run" : "Test run"}</Button>
       <Button variant="primary" onclick={save} disabled={saving || (!dirty && !!loopId)}>{loopId ? "Save" : "Save loop"}</Button>
@@ -263,7 +417,7 @@
     <StartScreen onopen={(id) => openLoop(id)} ontemplate={fromTemplate} onimport={importLoop} />
   {:else}
     <div class="body">
-      <Palette onadd={(b) => addBlock(b)} />
+      <Palette onadd={(b) => addBlock(b)} functions={meta.functions ?? []} current={scope} onaddfunction={addFunctionBlock} />
       <div class="canvas" bind:this={canvasEl} ondragover={(e) => { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"; }} ondrop={onDrop} role="application">
         <SvelteFlow
           bind:nodes
@@ -273,7 +427,10 @@
           forceColorMode={settings.resolvedTheme}
           deleteKey={["Delete", "Backspace"]}
           defaultEdgeOptions={{ type: "default" }}
-          onselectionchange={({ nodes: sel }) => (selected = sel.length === 1 ? sel[0].id : null)}
+          onselectionchange={({ nodes: sel }) => {
+            selected = sel.length === 1 ? sel[0].id : null;
+            selection = sel.map((n) => n.id);
+          }}
           minZoom={0.2}
           maxZoom={2}
         >
@@ -291,7 +448,20 @@
       {#if showRun}
         <RunPanel {file} canRun={analysis.ok} bind:runId onclose={closeRun} />
       {:else}
-        <Inspector block={selectedBlock} bind:meta issues={analysis.issues} onchange={updateBlock} ondelete={deleteBlock} onselect={selectBlock} />
+        <Inspector
+          block={selectedBlock}
+          bind:meta
+          issues={selectedBlock ? scopeIssues : scope ? scopeIssues : analysis.issues}
+          onchange={updateBlock}
+          ondelete={deleteBlock}
+          onselect={jumpTo}
+          scope={scopeDef}
+          innerPorts={scopePorts}
+          {uses}
+          onfunctionchange={updateFunction}
+          onopenfunction={(id) => enterFunction(id)}
+          ondeletefunction={deleteFunction}
+        />
       {/if}
     </div>
   {/if}
@@ -344,6 +514,12 @@
   .name:focus {
     border-color: var(--border-strong);
     background: var(--surface-2);
+  }
+  .crumb {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
   }
   .state {
     color: var(--text-faint);

@@ -9,12 +9,13 @@ until you say so.
 
 ![Chatting with an agent](docs/screenshot-main.png)
 
-> **Status:** passes 1–3 of the roadmap are done: the app shell, the folder
+> **Status:** passes 1–4 of the roadmap are done: the app shell, the folder
 > jail, settings, model connections (including a basic built-in engine), the
-> loop engine, the loop editor, agents and chat. Next: script-based tools and
-> the scheduler.
+> loop engine and editor, agents and chat, sandboxed Python tools, exchanges,
+> block functions, and the *5 step recursive plan* template. Next: the
+> scheduler.
 
-![The loop editor running the Draft and self-check loop](docs/screenshot-editor.png)
+![The 5 step recursive plan answering in chat, using tools](docs/screenshot-plan-chat.png)
 
 ## What works today
 
@@ -29,6 +30,31 @@ until you say so.
 - **Loop editor.** A node editor with a block palette, an inspector for every
   parameter, live checks, templates, import and export, and test runs that
   light up each block as it works.
+- **Tools.** A tool is one Python file with a standard PEP 723 header. It runs
+  as WebAssembly (CPython for WASI, under Wasmtime) and can see only the
+  agent's workspace. It can't go online except through Chummy, and only if
+  it asks for that, Internet access is on, and you allowed that tool. There
+  is no unsandboxed mode. Dependencies come from a checksummed PEP 751 lock
+  and must be pure Python. Seven built-in tools ship with Chummy: read,
+  write, list and search files, calculator, current time, and fetch web page.
+  See [docs/tool-format.md](docs/tool-format.md).
+- **Model block with tools.** Ask the model has three outputs: **Answer**,
+  **Tool call** (fires instead of Answer when the model calls a tool) and
+  **Reasoning**. Each block picks its own tools, which keeps prompts short
+  for small models. Bad calls (unknown tool, wrong arguments, no call when
+  one is required) can be explained to the model and retried, stop the run,
+  or fall back to the text. A **Run tool** block runs the calls and passes
+  the results back.
+- **Exchanges.** A conversation with the model that flows between blocks:
+  *Start exchange*, *Add to exchange* and *Read exchange* build and read it,
+  and model blocks continue it.
+- **Block functions.** Select some blocks and choose **Make function**: they
+  become one block whose ports are exactly the inputs and outputs you left
+  open. Double-click to edit inside. Functions are saved in the loop file.
+- **Templates.** Blank, Simple chat, Draft and self-check, and **5 step
+  recursive plan**: it plans your goal in 5 steps or fewer, does each step it
+  can (with tools), and breaks down the rest into smaller steps, breadth-first,
+  showing you the plan as it goes.
 - **Agents.** An agent is a loop, a model, and **its own workspace folder**.
   Each folder belongs to exactly one agent, and no agent's folder can be inside
   another's. Chat with an agent from the main window; its loop runs inside its
@@ -39,8 +65,9 @@ until you say so.
   refused, along with any folder that contains one of them. File access goes
   through a `cap-std` capability handle, so symlinks and junctions can't
   escape the folder.
-- **Permissions.** Internet access and tools are off by default. Turning either
-  on needs a native confirmation, shown by Rust, not by the web UI.
+- **Permissions.** Internet access and tools are off by default, and so is
+  every tool, and every tool's internet access. Turning any of them on needs
+  a native confirmation, shown by Rust, not by the web UI.
 - **Model connections.** Ollama, LM Studio, llama.cpp, vLLM, any
   OpenAI-compatible server, OpenAI, Anthropic, Gemini, OpenRouter, Groq,
   Mistral, DeepSeek, xAI and Together. API keys live in the OS keychain. **Test
@@ -56,9 +83,11 @@ until you say so.
   Chummy's folder; none of them ship with the app. The engine is much slower
   than vLLM or llama.cpp, and the app says so.
 
+![A block function open in the editor: the model block and Run tool in a cycle](docs/screenshot-function.png)
+
 <p>
+  <img src="docs/screenshot-tools.png" width="49%" alt="Settings: built-in tools, each off until switched on">
   <img src="docs/screenshot-settings-models.png" width="49%" alt="Model connections">
-  <img src="docs/screenshot-local-model.png" width="49%" alt="Checking a Hugging Face model for the built-in engine">
 </p>
 
 ## Where Chummy keeps things
@@ -71,7 +100,8 @@ until you say so.
 
 It holds `settings.json` (versioned, written atomically, with a `.bak`
 backup), `loops/` (your loops, one JSON file each), `chats/` (chat history,
-one file per agent), `models/`, `runtime/` (the built-in engine) and `logs/`.
+one file per agent), `models/`, `runtime/` (the built-in engine), `tools/`
+(the WebAssembly Python and installed tools) and `logs/`.
 Secrets are never stored here; they go to the system keychain (Keychain,
 Credential Manager, or Secret Service on Linux). Set `HF_ENDPOINT` to use a
 Hugging Face mirror.
@@ -110,6 +140,15 @@ cargo test --workspace                                 # includes an end-to-end 
 python3 -m unittest discover -s crates/local/engine    # engine parsers and server
 ```
 
+The sandbox tests run real tools on the real WebAssembly Python. Point them at
+the archive (CI downloads it), and allow PyPI downloads for the tools with
+dependencies:
+
+```sh
+curl -LO https://github.com/brettcannon/cpython-wasi-build/releases/download/v3.14.7/python-3.14.7-wasi_sdk-24.zip
+CHUMMY_TEST_PYTHON_ZIP=$PWD/python-3.14.7-wasi_sdk-24.zip CHUMMY_TEST_PYPI=1 cargo test -p chummy-tools
+```
+
 Pushing a tag like `v0.1.0` runs `.github/workflows/release.yml`, which builds
 installers for all platforms and attaches them to a draft GitHub release.
 
@@ -123,7 +162,10 @@ crates/          Pure Rust libraries, no Tauri dependency, tested on their own
     engine/      chummy_engine.py: the OpenAI-compatible transformers server
   store/         Chummy folder layout, atomic versioned JSON, keychain secrets
   flow/          Loop format, block catalog, validation, the loop engine, templates
-  tools/         Wasm (WASI) tool host
+    templates/   Template loop files (the 5 step recursive plan)
+  tools/         Python tools as WebAssembly: format, locks, installer, sandbox host
+    builtin/     The built-in tools and their pylock files
+    support/     The in-sandbox runner and the `chummy` helper module
   scheduler/     Jobs, triggers, input sources
 src-tauri/       Thin app shell: state, IPC commands, native dialogs, windows
   capabilities/  One permission file per window
@@ -172,11 +214,14 @@ OpenAI-compatible endpoint (127.0.0.1, random bearer token, offline).
 1. **Skeleton & build system.** Done.
 2. **Sandbox, settings, models.** Done.
 3. **Loop engine & editor.** Done.
-4. **Tools & scheduler.** A Wasmtime tool runtime, plus scheduled jobs with
-   file, web, folder-watch and timer inputs.
+4. **Tools, exchanges, functions.** Done.
+5. **Scheduler.** Scheduled jobs with file, web, folder-watch and timer
+   inputs, running agents' loops.
 
 ## License
 
 [MIT](LICENSE) © 2026 friendlylabz. The built-in engine downloads third-party
 open-source software at runtime (uv, CPython, PyTorch, transformers and their
 dependencies) under their own licenses; none of it is bundled with Chummy.
+Tools likewise download the CPython WASI build (PSF license) and their
+packages from PyPI at setup.

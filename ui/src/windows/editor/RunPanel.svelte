@@ -37,7 +37,7 @@
     if (!o) return "";
     switch (o.status.status) {
       case "completed":
-        return `Finished: ${o.steps} steps, ${o.llm_calls} model call${o.llm_calls === 1 ? "" : "s"}.`;
+        return `Finished: ${o.steps} steps, ${o.llm_calls} model call${o.llm_calls === 1 ? "" : "s"}${o.tool_calls ? `, ${o.tool_calls} tool call${o.tool_calls === 1 ? "" : "s"}` : ""}.`;
       case "stopped":
         return "Stopped.";
       case "limit_reached":
@@ -91,6 +91,17 @@
       <div class="section">Model output</div>
       <div class="box stream">{run.streaming.slice(-1200)}</div>
     {/if}
+    {#if run.activity.length}
+      <div class="section">Tools and notices</div>
+      <ul class="activity">
+        {#each run.activity.slice(-40) as a, i (i)}
+          <li class={a.kind}>
+            <span class="tag">{a.kind === "call" ? "Call" : a.kind === "result" ? "Result" : a.kind === "error" ? "Error" : "Note"}</span>
+            <span class="mono">{a.text}</span>
+          </li>
+        {/each}
+      </ul>
+    {/if}
     <div class="section">Reply</div>
     {#if run.replies.length}
       <div class="box" data-selectable>{run.replies.join("\n\n")}</div>
@@ -107,6 +118,36 @@
 </aside>
 
 <style>
+  .activity {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 4px;
+    font-size: var(--text-xs);
+  }
+  .activity li {
+    display: flex;
+    gap: var(--space-2);
+    align-items: baseline;
+    word-break: break-word;
+  }
+  .activity .mono {
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+  }
+  .tag {
+    flex: none;
+    width: 46px;
+    color: var(--text-faint);
+    font-weight: 600;
+  }
+  .activity .error .tag {
+    color: var(--danger);
+  }
+  .activity .call .tag {
+    color: var(--accent);
+  }
   .run {
     flex: none;
     width: 300px;

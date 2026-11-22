@@ -48,6 +48,10 @@ fn main() {
             "set_local_device",
             "stop_engine",
             "engine_log",
+            "tools_status",
+            "setup_tools",
+            "set_tool_enabled",
+            "set_tool_network",
         ]),
     ))
     .expect("failed to run tauri-build");
