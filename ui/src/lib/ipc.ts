@@ -41,9 +41,12 @@ export interface ProviderConfig {
   temperature?: number | null;
   /** Tokens this model may use per day; `null` means no limit. */
   daily_tokens?: number | null;
+  /** Longest answer, unless a model block sets its own. */
+  max_tokens?: number;
 }
 
 export const DEFAULT_DAILY_TOKENS = 1_000_000;
+export const DEFAULT_MAX_TOKENS = 1024;
 
 export interface ProviderView extends ProviderConfig {
   has_key: boolean;
@@ -83,6 +86,7 @@ export interface Settings {
   hf_token_set: boolean;
   tools: Record<string, { enabled: boolean; network: boolean; ask: boolean }>;
   general: General;
+  logging: Logging;
 }
 
 export type CloseAction = "ask" | "quit" | "tray";
@@ -90,6 +94,22 @@ export interface General {
   close: CloseAction;
   notifications: boolean;
   max_job_runs: number;
+  /** Format replies as Markdown. */
+  markdown: boolean;
+  /** Show LaTeX math in replies. */
+  math: boolean;
+}
+
+export type RunLogLevel = "off" | "summary" | "standard" | "verbose";
+export type SystemLogLevel = "off" | "errors" | "warnings" | "info" | "debug";
+export interface Logging {
+  runs: RunLogLevel;
+  encrypt: boolean;
+  system: SystemLogLevel;
+}
+export interface LogKeyStatus {
+  fingerprint: string | null;
+  error: string | null;
 }
 
 /** What's going on, when the user closes or quits. */
@@ -491,12 +511,16 @@ export type LogEntry =
   | { type: "asked"; at: number; block: string; text: string }
   | { type: "answered"; at: number; block: string }
   | { type: "reply"; at: number; block: string; text: string }
-  | ({ type: "end" } & RunEnd);
+  | ({ type: "end" } & RunEnd)
+  | { type: "unreadable"; lines: number; reason: string };
 export interface RunListItem {
   header: RunHeader;
   end: RunEnd | null;
   bytes: number;
   day: string;
+  encrypted: boolean;
+  /** Why it can't be read here, if it can't. */
+  locked: string | null;
   /** "completed", "stopped", "failed", "limit", "interrupted" or "running". */
   status: string;
 }
@@ -675,7 +699,8 @@ const mock = {
     agents: [],
     active_agent: null,
     tools: {},
-    general: { close: "ask", notifications: true, max_job_runs: 1 },
+    general: { close: "ask", notifications: true, max_job_runs: 1, markdown: true, math: true },
+    logging: { runs: "verbose", encrypt: true, system: "info" },
   } as Settings,
   listeners: new Set<(s: Settings) => void>(),
 };
@@ -755,6 +780,13 @@ export const commands = {
   systemLogDays: () => call<string[]>("system_log_days", undefined, () => []),
   readSystemLog: (day: string) => call<SysEntry[]>("read_system_log", { day }, () => []),
   revealLogs: () => call<void>("reveal_logs"),
+  setLogging: (logging: Logging) => call<Logging>("set_logging", { logging }, () => logging),
+  logKeyStatus: () =>
+    call<LogKeyStatus>("log_key_status", undefined, () => ({ fingerprint: null, error: null })),
+  exportLogKey: (passphrase: string) => call<boolean>("export_log_key", { passphrase }, () => false),
+  importLogKey: (passphrase: string) => call<string | null>("import_log_key", { passphrase }, () => null),
+  /** Opens a link from a reply, after Rust asks. */
+  openLink: (url: string) => call<void>("open_link", { url }),
   listRuns: () => call<RunInfo[]>("list_runs", undefined, () => []),
   setPermission: (kind: "network" | "tools" | "confirm_online_tools", enabled: boolean) =>
     call<boolean>("set_permission", { kind, enabled }, () => false),

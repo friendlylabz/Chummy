@@ -24,6 +24,8 @@
     "allow-list-asks",
     "allow-answer-ask",
     "allow-close-activity",
-    "allow-close-choice"
+    "allow-close-choice",
+    "allow-log-key-status",
+    "allow-open-link"
   ]
 }

@@ -14,12 +14,38 @@ use chummy_flow::log::{LoggedValue, ModelLog, StepLog, cut};
 use chummy_flow::{Event, RunOutcome, RunStatus};
 use serde::{Deserialize, Serialize};
 
+use crate::crypt::{self, LogKey, OpenError};
 use crate::{day_of, now_ms, valid_day};
 
 /// Days of run logs kept.
 pub const KEEP_DAYS: usize = 30;
 /// Most bytes of run logs kept in all; the oldest days go first.
 pub const KEEP_BYTES: u64 = 1024 * 1024 * 1024;
+/// How much a run log records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Detail {
+    /// Which blocks ran, model and tool calls, questions, notices and
+    /// replies, without the text that went in and out.
+    Summary,
+    /// Also the text, cut to [`STANDARD_VALUE`] characters.
+    Standard,
+    /// Everything, cut only past 6,000 characters a value.
+    #[default]
+    Verbose,
+}
+
+/// Value length at [`Detail::Standard`].
+pub const STANDARD_VALUE: usize = 500;
+
+/// How a run log is written.
+#[derive(Debug, Clone, Default)]
+pub struct LogOptions {
+    pub detail: Detail,
+    /// Seal every line with this key.
+    pub key: Option<LogKey>,
+}
+
 /// After this many bytes, a run's values are cut much shorter.
 const FULL_BYTES: u64 = 32 * 1024 * 1024;
 /// Value length once a run's log is past [`FULL_BYTES`].
@@ -141,6 +167,11 @@ pub enum Entry {
         text: String,
     },
     End(RunEnd),
+    /// Lines that couldn't be read (only made when reading).
+    Unreadable {
+        lines: u32,
+        reason: String,
+    },
 }
 
 impl Entry {
@@ -208,11 +239,49 @@ pub fn valid_run_id(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-fn shorten(v: &mut LoggedValue) {
-    if v.text.chars().count() > SHORT_VALUE {
-        let (t, left) = cut(&v.text, SHORT_VALUE);
+fn shorten(v: &mut LoggedValue, max: usize) {
+    if max == 0 {
+        v.cut = v.chars;
+        v.text.clear();
+    } else if v.text.chars().count() > max {
+        let (t, left) = cut(&v.text, max);
         v.text = t;
         v.cut += left;
+    }
+}
+
+fn shorten_text(s: &mut String, max: usize) {
+    if max == 0 {
+        s.clear();
+    } else {
+        *s = cut(s, max).0;
+    }
+}
+
+/// Cuts the values in `e` to `max` characters (0: none at all).
+fn trim(e: &mut Entry, max: usize) {
+    match e {
+        Entry::Step(s) => {
+            for p in s.inputs.iter_mut().chain(s.outputs.iter_mut()) {
+                shorten(&mut p.value, max);
+            }
+        }
+        Entry::Model(m) => {
+            shorten(&mut m.sent, max);
+            shorten(&mut m.answer, max);
+            shorten_text(&mut m.reasoning, max);
+            for c in &mut m.calls {
+                // Keep which tool, drop the arguments.
+                if max == 0 {
+                    *c = c.split('(').next().unwrap_or("").to_string();
+                } else {
+                    shorten_text(c, max);
+                }
+            }
+        }
+        Entry::ToolCall { arguments, .. } => shorten_text(arguments, max),
+        Entry::ToolResult { text, .. } => shorten_text(text, max),
+        _ => {}
     }
 }
 
@@ -221,12 +290,13 @@ pub struct RunLog {
     path: PathBuf,
     out: Mutex<Option<BufWriter<File>>>,
     bytes: Mutex<u64>,
+    opts: LogOptions,
 }
 
 impl RunLog {
     /// Starts a run's log under `root` (`logs/runs`). If it can't be created,
     /// the run goes ahead without one.
-    pub fn create(root: &Path, header: RunHeader) -> Option<RunLog> {
+    pub fn create(root: &Path, header: RunHeader, opts: LogOptions) -> Option<RunLog> {
         if !valid_run_id(&header.run_id) {
             return None;
         }
@@ -242,6 +312,7 @@ impl RunLog {
             path,
             out: Mutex::new(Some(BufWriter::new(file))),
             bytes: Mutex::new(0),
+            opts,
         };
         let mut header = header;
         header.message = cut(&header.message, 4000).0;
@@ -256,23 +327,29 @@ impl RunLog {
     pub fn write(&self, e: &Entry) {
         let mut bytes = self.bytes.lock().unwrap_or_else(|e| e.into_inner());
         let mut e = e.clone();
-        if *bytes > FULL_BYTES {
-            match &mut e {
-                Entry::Step(s) => {
-                    for p in s.inputs.iter_mut().chain(s.outputs.iter_mut()) {
-                        shorten(&mut p.value);
-                    }
-                }
-                Entry::Model(m) => {
-                    shorten(&mut m.sent);
-                    shorten(&mut m.answer);
-                    m.reasoning = cut(&m.reasoning, SHORT_VALUE).0;
-                }
-                _ => {}
-            }
+        let max = match self.opts.detail {
+            Detail::Summary => Some(0),
+            Detail::Standard => Some(STANDARD_VALUE),
+            Detail::Verbose => None,
+        };
+        let max = if *bytes > FULL_BYTES {
+            Some(max.unwrap_or(SHORT_VALUE).min(SHORT_VALUE))
+        } else {
+            max
+        };
+        if let Some(max) = max {
+            trim(&mut e, max);
         }
         let Ok(line) = serde_json::to_string(&e) else {
             return;
+        };
+        let line = match &self.opts.key {
+            Some(k) => match k.seal(&line) {
+                Ok(l) => l,
+                // Never fall back to plain text.
+                Err(_) => return,
+            },
+            None => line,
         };
         let mut out = self.out.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(w) = out.as_mut() {
@@ -319,6 +396,10 @@ pub struct RunSummary {
     pub header: RunHeader,
     pub end: Option<RunEnd>,
     pub bytes: u64,
+    /// Written encrypted.
+    pub encrypted: bool,
+    /// Why it can't be read here, if it can't.
+    pub locked: Option<String>,
     /// The day folder it's in.
     pub day: String,
 }
@@ -359,6 +440,11 @@ pub fn days(root: &Path) -> Vec<String> {
     days
 }
 
+fn decode(line: &str, key: Option<&LogKey>) -> Result<Entry, OpenError> {
+    let text = crypt::open(line, key)?;
+    serde_json::from_str(&text).map_err(|_| OpenError::Damaged)
+}
+
 fn first_line(path: &Path) -> Option<String> {
     let f = File::open(path).ok()?;
     let mut line = String::new();
@@ -379,12 +465,31 @@ fn last_line(path: &Path) -> Option<String> {
         .map(String::from)
 }
 
-fn summary(path: &Path, day: &str) -> Option<RunSummary> {
-    let header = match serde_json::from_str(&first_line(path)?).ok()? {
-        Entry::Start(h) => h,
-        _ => return None,
+fn summary(path: &Path, day: &str, key: Option<&LogKey>) -> Option<RunSummary> {
+    let first = first_line(path)?;
+    let (header, locked) = match decode(first.trim_end(), key) {
+        Ok(Entry::Start(h)) => (h, None),
+        Ok(_) => return None,
+        Err(e) => {
+            let run_id = path.file_stem()?.to_str()?.to_string();
+            let started_at = std::fs::metadata(path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            (
+                RunHeader {
+                    run_id,
+                    title: "Encrypted run".into(),
+                    started_at,
+                    ..Default::default()
+                },
+                Some(reason(&e)),
+            )
+        }
     };
-    let end = last_line(path).and_then(|l| match serde_json::from_str(&l) {
+    let end = last_line(path).and_then(|l| match decode(&l, key) {
         Ok(Entry::End(e)) => Some(e),
         _ => None,
     });
@@ -393,7 +498,25 @@ fn summary(path: &Path, day: &str) -> Option<RunSummary> {
         end,
         bytes: std::fs::metadata(path).map(|m| m.len()).unwrap_or(0),
         day: day.to_string(),
+        encrypted: first.starts_with(crypt::PREFIX),
+        locked,
     })
+}
+
+/// Why lines can't be read, for people.
+pub fn reason(e: &OpenError) -> String {
+    match e {
+        OpenError::NoKey => "This log is encrypted, and there's no log key on this computer. Import the key it was written with (Settings → Logs).".into(),
+        OpenError::OtherKey(id) => format!(
+            "This log was encrypted with another log key ({}). Import that key to read it.",
+            id.as_bytes()
+                .chunks(4)
+                .map(|c| std::str::from_utf8(c).unwrap_or(""))
+                .collect::<Vec<_>>()
+                .join("-")
+        ),
+        OpenError::Damaged => "Some lines are damaged or were changed, so they can't be read.".into(),
+    }
 }
 
 fn contains_all(hay: &str, words: &[String]) -> bool {
@@ -401,7 +524,7 @@ fn contains_all(hay: &str, words: &[String]) -> bool {
     words.iter().all(|w| hay.contains(w.as_str()))
 }
 
-fn file_contains_all(path: &Path, words: &[String]) -> bool {
+fn file_contains_all(path: &Path, words: &[String], key: Option<&LogKey>) -> bool {
     let Ok(f) = File::open(path) else {
         return false;
     };
@@ -409,12 +532,25 @@ fn file_contains_all(path: &Path, words: &[String]) -> bool {
     if f.take(SEARCH_BYTES).read_to_string(&mut buf).is_err() {
         return false;
     }
-    contains_all(&buf, words)
+    if !buf.starts_with(crypt::PREFIX) {
+        return contains_all(&buf, words);
+    }
+    let text: String = buf
+        .lines()
+        .filter_map(|l| crypt::open(l, key).ok())
+        .collect::<Vec<_>>()
+        .join("\n");
+    contains_all(&text, words)
 }
 
 /// Runs matching `q`, newest first. Runs in `running` with no end yet are
 /// "running"; others with no end were interrupted.
-pub fn search(root: &Path, q: &RunQuery, running: &HashSet<String>) -> Vec<RunSummary> {
+pub fn search(
+    root: &Path,
+    q: &RunQuery,
+    running: &HashSet<String>,
+    key: Option<&LogKey>,
+) -> Vec<RunSummary> {
     let limit = if q.limit == 0 {
         MAX_RESULTS
     } else {
@@ -443,7 +579,7 @@ pub fn search(root: &Path, q: &RunQuery, running: &HashSet<String>) -> Vec<RunSu
                 (p.extension().is_some_and(|x| x == "jsonl")).then_some(p)
             })
             .filter_map(|p| {
-                let s = summary(&p, &day)?;
+                let s = summary(&p, &day, key)?;
                 let h = &s.header;
                 if !q.source.is_empty() && h.source != q.source {
                     return None;
@@ -465,7 +601,7 @@ pub fn search(root: &Path, q: &RunQuery, running: &HashSet<String>) -> Vec<RunSu
                         h.message
                     );
                     if !contains_all(&meta, &words)
-                        && !(q.full_text && file_contains_all(&p, &words))
+                        && !(q.full_text && file_contains_all(&p, &words, key))
                     {
                         return None;
                     }
@@ -503,16 +639,35 @@ pub fn find(root: &Path, run_id: &str) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
-/// Every entry of a run's log, in the order written.
-pub fn read(root: &Path, run_id: &str) -> Option<Vec<Entry>> {
+/// Every entry of a run's log, in the order written. Lines that can't be
+/// read are counted in one [`Entry::Unreadable`] after the first entry.
+pub fn read(root: &Path, run_id: &str, key: Option<&LogKey>) -> Option<Vec<Entry>> {
     let f = File::open(find(root, run_id)?).ok()?;
-    Some(
-        BufReader::new(f)
-            .lines()
-            .map_while(Result::ok)
-            .filter_map(|l| serde_json::from_str(&l).ok())
-            .collect(),
-    )
+    let mut out = Vec::new();
+    let mut bad = 0u32;
+    let mut why = None;
+    for line in BufReader::new(f).lines().map_while(Result::ok) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        match decode(&line, key) {
+            Ok(e) => out.push(e),
+            Err(e) => {
+                bad += 1;
+                why.get_or_insert(e);
+            }
+        }
+    }
+    if let Some(e) = why {
+        out.insert(
+            out.len().min(1),
+            Entry::Unreadable {
+                lines: bad,
+                reason: reason(&e),
+            },
+        );
+    }
+    Some(out)
 }
 
 /// Deletes one run's log.
@@ -591,7 +746,12 @@ mod tests {
     #[test]
     fn writes_and_reads_a_run() {
         let tmp = tempfile::tempdir().unwrap();
-        let log = RunLog::create(tmp.path(), header("run-1", "Helper", now_ms())).unwrap();
+        let log = RunLog::create(
+            tmp.path(),
+            header("run-1", "Helper", now_ms()),
+            LogOptions::default(),
+        )
+        .unwrap();
         log.event(&step(1, "Sunny"));
         log.event(&Event::LlmText {
             block: "m".into(),
@@ -608,19 +768,26 @@ mod tests {
         });
         log.event(&step(2, "ignored after the end"));
         drop(log);
-        let entries = read(tmp.path(), "run-1").unwrap();
+        let entries = read(tmp.path(), "run-1", None).unwrap();
         assert_eq!(entries.len(), 4, "{entries:?}");
         assert!(matches!(&entries[0], Entry::Start(h) if h.title == "Helper"));
         assert!(matches!(&entries[1], Entry::Step(s) if s.inputs[0].value.text == "Sunny"));
         assert!(matches!(&entries[3], Entry::End(e) if e.status == "completed"));
-        assert!(read(tmp.path(), "../x").is_none());
+        assert!(read(tmp.path(), "../x", None).is_none());
     }
 
     #[test]
     fn a_dropped_log_is_marked_interrupted() {
         let tmp = tempfile::tempdir().unwrap();
-        drop(RunLog::create(tmp.path(), header("run-2", "Helper", now_ms())).unwrap());
-        let s = search(tmp.path(), &RunQuery::default(), &HashSet::new());
+        drop(
+            RunLog::create(
+                tmp.path(),
+                header("run-2", "Helper", now_ms()),
+                LogOptions::default(),
+            )
+            .unwrap(),
+        );
+        let s = search(tmp.path(), &RunQuery::default(), &HashSet::new(), None);
         assert_eq!(s[0].end.as_ref().unwrap().status, "interrupted");
     }
 
@@ -628,7 +795,12 @@ mod tests {
     fn searches_by_fields_and_full_text() {
         let tmp = tempfile::tempdir().unwrap();
         let now = now_ms();
-        let a = RunLog::create(tmp.path(), header("run-a", "Researcher", now - 1000)).unwrap();
+        let a = RunLog::create(
+            tmp.path(),
+            header("run-a", "Researcher", now - 1000),
+            LogOptions::default(),
+        )
+        .unwrap();
         a.event(&step(1, "the secret word is pineapple"));
         a.end(RunEnd {
             status: "completed".into(),
@@ -636,11 +808,11 @@ mod tests {
         });
         let mut h = header("run-b", "Writer", now);
         h.source = "job".into();
-        let b = RunLog::create(tmp.path(), h).unwrap();
+        let b = RunLog::create(tmp.path(), h, LogOptions::default()).unwrap();
         b.event(&step(1, "plain"));
         let running: HashSet<String> = ["run-b".to_string()].into();
 
-        let all = search(tmp.path(), &RunQuery::default(), &running);
+        let all = search(tmp.path(), &RunQuery::default(), &running, None);
         assert_eq!(
             all.iter()
                 .map(|s| s.header.run_id.as_str())
@@ -650,7 +822,7 @@ mod tests {
         let q = |f: fn(&mut RunQuery)| {
             let mut q = RunQuery::default();
             f(&mut q);
-            search(tmp.path(), &q, &running)
+            search(tmp.path(), &q, &running, None)
                 .into_iter()
                 .map(|s| s.header.run_id)
                 .collect::<Vec<_>>()
@@ -669,6 +841,71 @@ mod tests {
         );
         assert!(q(|q| q.to_day = "2000-01-01".into()).is_empty());
         drop(b);
+    }
+
+    #[test]
+    fn encrypted_logs_read_only_with_their_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let key = LogKey::generate().unwrap();
+        let opts = LogOptions {
+            detail: Detail::Verbose,
+            key: Some(key.clone()),
+        };
+        let log = RunLog::create(tmp.path(), header("run-e", "Helper", now_ms()), opts).unwrap();
+        log.event(&step(1, "my api key is sk-secret"));
+        log.end(RunEnd {
+            status: "completed".into(),
+            ..Default::default()
+        });
+        drop(log);
+        let raw = std::fs::read_to_string(find(tmp.path(), "run-e").unwrap()).unwrap();
+        assert!(!raw.contains("sk-secret") && !raw.contains("Helper"));
+        assert!(raw.lines().all(|l| l.starts_with(crypt::PREFIX)));
+
+        let entries = read(tmp.path(), "run-e", Some(&key)).unwrap();
+        assert!(
+            matches!(&entries[1], Entry::Step(s) if s.inputs[0].value.text.contains("sk-secret"))
+        );
+        let found = |k: Option<&LogKey>| {
+            let q = RunQuery {
+                text: "sk-secret".into(),
+                full_text: true,
+                ..Default::default()
+            };
+            search(tmp.path(), &q, &HashSet::new(), k).len()
+        };
+        assert_eq!(found(Some(&key)), 1);
+        assert_eq!(found(None), 0);
+
+        // Without the key: listed as locked, and reading says why.
+        let s = search(tmp.path(), &RunQuery::default(), &HashSet::new(), None);
+        assert!(s[0].encrypted && s[0].locked.is_some());
+        let entries = read(tmp.path(), "run-e", None).unwrap();
+        assert!(matches!(&entries[0], Entry::Unreadable { lines: 3, .. }));
+        let other = LogKey::generate().unwrap();
+        let entries = read(tmp.path(), "run-e", Some(&other)).unwrap();
+        assert!(
+            matches!(&entries[0], Entry::Unreadable { reason, .. } if reason.contains("another log key"))
+        );
+    }
+
+    #[test]
+    fn detail_levels_cut_values() {
+        let tmp = tempfile::tempdir().unwrap();
+        for (detail, id) in [(Detail::Summary, "run-s"), (Detail::Standard, "run-t")] {
+            let opts = LogOptions { detail, key: None };
+            let log = RunLog::create(tmp.path(), header(id, "Helper", now_ms()), opts).unwrap();
+            log.event(&step(1, &"x".repeat(2000)));
+            log.end(RunEnd::default());
+        }
+        let text = |id: &str| match &read(tmp.path(), id, None).unwrap()[1] {
+            Entry::Step(s) => s.inputs[0].value.clone(),
+            e => panic!("{e:?}"),
+        };
+        let s = text("run-s");
+        assert!(s.text.is_empty() && s.cut == 2000 && s.chars == 2000);
+        let t = text("run-t");
+        assert!(t.text.chars().count() < 600 && t.cut > 1400);
     }
 
     #[test]

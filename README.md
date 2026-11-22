@@ -9,7 +9,7 @@ until you say so.
 
 ![Chatting with an agent](docs/screenshot-main.png)
 
-> **Status:** passes 1–7 of the roadmap are done: the app shell, the folder
+> **Status:** passes 1–8 of the roadmap are done: the app shell, the folder
 > jail, settings, model connections (including a basic built-in engine), the
 > loop engine and editor, agents and chat, sandboxed Python tools, exchanges,
 > block functions, the scheduler with tray mode and questions for you, and
@@ -77,6 +77,18 @@ until you say so.
   and date, searches inside logs, and sorts them; within a run you can
   search, show or hide each kind of entry, pick block types, show only
   failures, and sort by order or time taken. Logs are kept for 30 days.
+- **Encrypted logs.** Run logs can hold anything that passed through a run,
+  so by default every line is sealed with XChaCha20-Poly1305 under a 256-bit
+  key made on first use and kept in the OS keychain. Export the key (main
+  menu or Settings → Logs) to a file locked with a passphrase (Argon2id), and
+  import it on another computer to read the logs there. Settings → Logs sets
+  run logs to everything, shortened, steps only or off, turns encryption
+  off (after a warning), and sets the system log's level, down to off.
+- **Formatted replies.** Replies show Markdown (headings, lists, task lists,
+  quotes, tables, code blocks with a Copy button, emphasis, links) and LaTeX
+  math via KaTeX ($…$, $$…$$, \(…\), \[…\]; “$5 and $10” stays money).
+  Model text is escaped before any formatting, links ask before opening, and
+  both can be turned off in Settings → Appearance.
 - **What happened, under each reply.** Every reply in chat has a collapsed
   **What happened** view of that run: the model's reasoning and answers,
   tool calls and questions, and (one click) every block step, with the same
@@ -136,6 +148,9 @@ until you say so.
   when it's on at every level: app-wide, for the agent, and in the block. See
   [docs/security.md](docs/security.md) for the threat model and the latest
   audit.
+- **Answer length per model.** Each model connection has a longest answer
+  (1,024 tokens to start), used by every model block that doesn't set its
+  own; a block can override it in the editor or Agent Loop Configuration.
 - **Model connections.** Ollama, LM Studio, llama.cpp, vLLM, any
   OpenAI-compatible server, OpenAI, Anthropic, Gemini, OpenRouter, Groq,
   Mistral, DeepSeek, xAI and Together. API keys live in the OS keychain. **Test
@@ -253,7 +268,7 @@ crates/          Pure Rust libraries, no Tauri dependency, tested on their own
     support/     The in-sandbox runner and the `chummy` helper module
   scheduler/     Jobs, triggers, the run planner, folder watching, history, questions
   runner/        Runs an agent: models, tools, jail, questions; shared with chummyd
-  log/           The system log and run logs (JSON lines), search and retention
+  log/           The system log and run logs (JSON lines), encryption, search and retention
 src-tauri/       Thin app shell: state, IPC commands, native dialogs, windows
   capabilities/  One permission file per window
 ui/              Svelte 5 frontend, one Vite page per window
@@ -318,7 +333,9 @@ OpenAI-compatible endpoint (127.0.0.1, random bearer token, offline).
 7. **Logs: run logs with every block's inputs and outputs, the system log,
    the Logs window, step views in chat, and the whole plan in the
    assistant's output.** Done.
-8. **chummyd.** An optional, separately installed background service for jobs,
+8. **Formatted replies (Markdown and math), encrypted and configurable logs
+   with an exportable key, and answer length per model.** Done.
+9. **chummyd.** An optional, separately installed background service for jobs,
    with an authenticated API, configured from the app. See
    [docs/chummyd-plan.md](docs/chummyd-plan.md).
 

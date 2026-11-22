@@ -171,7 +171,8 @@ pub struct LlmCall {
     pub tools: Vec<ToolInfo>,
     pub tool_choice: ToolChoice,
     pub temperature: Option<f32>,
-    pub max_tokens: u32,
+    /// `None`: the model connection's own setting.
+    pub max_tokens: Option<u32>,
     /// Model connection id; `None` means the agent's model.
     pub model: Option<String>,
 }

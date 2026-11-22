@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { DEFAULT_DAILY_TOKENS, commands, errorText, type Preset, type ProbeReport, type ProviderView, type UsageView } from "$lib/ipc";
+  import { DEFAULT_DAILY_TOKENS, DEFAULT_MAX_TOKENS, commands, errorText, type Preset, type ProbeReport, type ProviderView, type UsageView } from "$lib/ipc";
   import { kindLabel, precisionLabel } from "$lib/format";
   import { settings } from "$lib/stores/settings.svelte";
   import { local } from "$lib/stores/local.svelte";
@@ -23,6 +23,7 @@
   /** The local model whose limit is being changed, and the draft. */
   let limitFor = $state<string | null>(null);
   let limitDraft = $state("");
+  let maxDraft = $state("");
   let limitError = $state("");
 
   async function loadUsage() {
@@ -46,9 +47,14 @@
       limitError = "At least 1,000 tokens.";
       return;
     }
+    const max = Math.round(Number(maxDraft.replace(/[,_\s]/g, "")));
+    if (!Number.isFinite(max) || max < 16 || max > 32768) {
+      limitError = "The longest answer must be 16 to 32,768 tokens.";
+      return;
+    }
     try {
       const { has_key: _k, ...config } = p;
-      await commands.saveProvider({ ...config, daily_tokens: on ? n : null }, null);
+      await commands.saveProvider({ ...config, daily_tokens: on ? n : null, max_tokens: max }, null);
       limitFor = null;
       loadUsage();
     } catch (e) {
@@ -192,13 +198,15 @@
           <span class="faint xs">Today {fmt(u?.used ?? 0)} tokens · no daily limit</span>
         {/if}
         {#if p.kind === "local"}
-          <button type="button" class="link" onclick={() => { limitFor = limitFor === p.id ? null : p.id; limitDraft = String(cap ?? DEFAULT_DAILY_TOKENS); limitError = ""; }}>Change limit</button>
+          <button type="button" class="link" onclick={() => { limitFor = limitFor === p.id ? null : p.id; limitDraft = String(cap ?? DEFAULT_DAILY_TOKENS); maxDraft = String(p.max_tokens ?? DEFAULT_MAX_TOKENS); limitError = ""; }}>Change limits</button>
         {/if}
       </div>
       {#if limitFor === p.id}
         <div class="p-body limit-edit">
           <input class="input" style="width: 150px" bind:value={limitDraft} inputmode="numeric" aria-label="Tokens per day" />
-          <span class="muted small">tokens a day</span>
+          <span class="muted small">tokens a day ·</span>
+          <input class="input" style="width: 100px" bind:value={maxDraft} inputmode="numeric" aria-label="Longest answer in tokens" />
+          <span class="muted small">longest answer</span>
           <Button variant="primary" onclick={() => saveLimit(p, true)}>Set limit</Button>
           <Button variant="ghost" onclick={() => saveLimit(p, false)}>No limit</Button>
           {#if limitError}<span class="danger-text small">{limitError}</span>{/if}

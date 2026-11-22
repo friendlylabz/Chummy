@@ -3,6 +3,9 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+use chummy_log::crypt::LogKey;
+use chummy_log::runs::LogOptions;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -23,6 +26,8 @@ use crate::settings::{self, Settings};
 
 /// Keychain service name for all of Chummy's secrets.
 pub const KEYCHAIN_SERVICE: &str = "com.friendlylabz.chummy";
+/// The keychain entry holding the run log key.
+pub const LOG_KEY_SECRET: &str = "log-key";
 /// Keychain entry for the Hugging Face token.
 pub const HF_TOKEN_KEY: &str = "huggingface";
 
@@ -72,6 +77,8 @@ pub struct AppState {
     pub usage: Arc<chummy_runner::usage::UsageLedger>,
     /// `logs/runs`: one log per run of a loop.
     pub run_logs: PathBuf,
+    /// The run log key, once read from (or made in) the keychain.
+    log_key: Mutex<Option<chummy_log::crypt::LogKey>>,
     /// The job scheduler, started once the app is up.
     pub jobs: OnceLock<Manager<AppJobs>>,
     /// Set once the user chose to quit, so closing windows really quits.
@@ -163,6 +170,7 @@ impl AppState {
                 &dirs.root.join("usage.json"),
             )),
             run_logs: dirs.logs.join("runs"),
+            log_key: Mutex::new(None),
             jobs: OnceLock::new(),
             quitting: AtomicBool::new(false),
             tray_ready: AtomicBool::new(false),
@@ -233,6 +241,71 @@ impl AppState {
 
     pub fn has_secret(&self, key: &str) -> bool {
         matches!(self.secrets.get(key), Ok(Some(_)))
+    }
+
+    /// The run log key from the keychain. With `create`, a new one is made
+    /// (and saved there) if there's none yet.
+    pub fn log_key(&self, create: bool) -> Result<Option<LogKey>, String> {
+        let mut cached = lock(&self.log_key);
+        if let Some(k) = cached.as_ref() {
+            return Ok(Some(k.clone()));
+        }
+        let stored = self
+            .secrets
+            .get(LOG_KEY_SECRET)
+            .map_err(|e| format!("The keychain couldn't be read: {e}"))?;
+        let key = match stored {
+            Some(s) => LogKey::from_base64(&s)?,
+            None if create => {
+                let k = LogKey::generate()?;
+                self.secrets
+                    .set(LOG_KEY_SECRET, &k.to_base64())
+                    .map_err(|e| format!("The log key couldn't be saved in the keychain: {e}"))?;
+                chummy_log::system::log(
+                    chummy_log::system::Level::Info,
+                    "security",
+                    "Made a new log key and saved it in the keychain",
+                    &[("fingerprint", &k.fingerprint())],
+                );
+                k
+            }
+            None => return Ok(None),
+        };
+        *cached = Some(key.clone());
+        Ok(Some(key))
+    }
+
+    /// Replaces the run log key (after an import).
+    pub fn set_log_key(&self, key: LogKey) -> Result<(), String> {
+        self.secrets
+            .set(LOG_KEY_SECRET, &key.to_base64())
+            .map_err(|e| format!("The log key couldn't be saved in the keychain: {e}"))?;
+        *lock(&self.log_key) = Some(key);
+        Ok(())
+    }
+
+    /// How to write a new run's log, or `None` for no log. A log that should
+    /// be encrypted but can't be (no keychain) isn't written at all.
+    pub fn run_log_options(&self) -> Option<LogOptions> {
+        let logging = self.settings().logging;
+        let detail = logging.runs.detail()?;
+        let key = if logging.encrypt {
+            match self.log_key(true) {
+                Ok(k) => k,
+                Err(e) => {
+                    chummy_log::system::log(
+                        chummy_log::system::Level::Warn,
+                        "security",
+                        "This run isn't logged: its log should be encrypted, but there's no log key",
+                        &[("error", &e)],
+                    );
+                    return None;
+                }
+            }
+        } else {
+            None
+        };
+        Some(LogOptions { detail, key })
     }
 }
 

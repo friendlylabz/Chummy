@@ -3,6 +3,7 @@
   import { setup } from "$lib/stores/setup.svelte";
   import Button from "$lib/components/Button.svelte";
   import Icon from "$lib/components/Icon.svelte";
+  import KeyTip from "$lib/components/KeyTip.svelte";
 
   const s = $derived(setup.status);
   // The first step that isn't done is the one to highlight.
@@ -77,6 +78,11 @@
   <p class="note">
     <Icon name="shield" size={14} />
     Each agent only ever sees its own folder, and stays offline unless you allow it.
+  </p>
+  <p class="note">
+    <Icon name="key" size={14} />
+    Every run is logged, encrypted with a key in your keychain.
+    <KeyTip />
   </p>
 </section>
 

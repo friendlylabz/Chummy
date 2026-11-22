@@ -280,7 +280,11 @@ impl<S: Services> Host for AgentHost<S> {
                 chummy_flow::ToolChoice::Required => chummy_llm::ToolChoice::Required,
             },
             temperature: call.temperature,
-            max_tokens: Some(call.max_tokens),
+            max_tokens: Some(
+                call.max_tokens
+                    .unwrap_or(provider.max_tokens)
+                    .clamp(1, 32_768),
+            ),
         };
         let mut malformed = Vec::new();
         let sent_chars: usize = req.messages.iter().map(|m| m.content.len()).sum::<usize>()
@@ -760,6 +764,7 @@ mod tests {
             local: None,
             temperature: None,
             daily_tokens: limit,
+            max_tokens: chummy_llm::DEFAULT_MAX_TOKENS,
         };
         let ledger = Arc::new(usage::UsageLedger::in_memory());
         let mut s = setup(None);

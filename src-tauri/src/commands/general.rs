@@ -11,7 +11,9 @@ use tauri_plugin_opener::OpenerExt;
 use super::{CmdResult, err};
 use std::collections::BTreeMap;
 
-use crate::settings::{Agent, General, LocalSettings, Permissions, Settings, Theme, ToolPref};
+use crate::settings::{
+    Agent, General, LocalSettings, Logging, Permissions, Settings, Theme, ToolPref,
+};
 use crate::state::{AppState, HF_TOKEN_KEY, SetupStatus};
 use crate::windows::{self, AppWindow};
 
@@ -36,6 +38,7 @@ pub struct SettingsView {
     pub hf_token_set: bool,
     pub tools: BTreeMap<String, ToolPref>,
     pub general: General,
+    pub logging: Logging,
 }
 
 pub fn settings_view(state: &AppState, s: &Settings) -> SettingsView {
@@ -57,6 +60,7 @@ pub fn settings_view(state: &AppState, s: &Settings) -> SettingsView {
         hf_token_set: state.has_secret(HF_TOKEN_KEY),
         tools: s.tools.clone(),
         general: s.general.clone(),
+        logging: s.logging.clone(),
     }
 }
 
@@ -123,5 +127,35 @@ pub fn set_general(app: AppHandle, state: State<'_, AppState>, general: General)
         m.set_max_running(max);
     }
     crate::tray::refresh(&app);
+    Ok(())
+}
+
+/// Opens a link from a reply in the browser, after showing the full address
+/// and asking. Only web and mail links.
+#[tauri::command]
+pub async fn open_link(app: AppHandle, window: tauri::WebviewWindow, url: String) -> CmdResult<()> {
+    let url = url.trim().to_string();
+    let lower = url.to_ascii_lowercase();
+    let ok_scheme = ["https://", "http://", "mailto:"]
+        .iter()
+        .any(|p| lower.starts_with(p));
+    if !ok_scheme || url.len() > 2000 || url.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err("Only web and email links can be opened.".into());
+    }
+    let msg = format!(
+        "{url}\n\nThis link came from a model's reply. Check the address before you open it."
+    );
+    if crate::dialogs::confirm(
+        &app,
+        window.label(),
+        "Open this link in your browser?",
+        &msg,
+        "Open",
+        false,
+    )
+    .await
+    {
+        app.opener().open_url(&url, None::<&str>).map_err(err)?;
+    }
     Ok(())
 }

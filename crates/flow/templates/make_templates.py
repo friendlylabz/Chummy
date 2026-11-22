@@ -458,7 +458,7 @@ def a_attempt_fn():
         b("entry", "forward", "Exchange", 0, 0),
         b("which", "read_exchange", "Which task", 0, -220, {"role": "user"}),
         b("work", "llm", "Try the task", 300, 0, {
-            "system": A_ATTEMPT, "max_tokens": 800, "tools": TOOLS, "retries": 2, "network": True,
+            "system": A_ATTEMPT, "tools": TOOLS, "retries": 2, "network": True,
             "on_limit": "ask"},
             "Can use tools (all three switches must allow each one), answer, say TOO BIG, or ask a QUESTION."),
         b("check", "function", "Check the tool call", 300, 300, {"function": "check_call"},

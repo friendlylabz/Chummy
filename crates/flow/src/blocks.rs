@@ -47,9 +47,6 @@ fn port(name: impl Into<String>, label: impl Into<String>, kind: ValueKind) -> P
     }
 }
 
-fn d_max_tokens() -> u32 {
-    1024
-}
 fn d_two() -> u32 {
     2
 }
@@ -199,8 +196,9 @@ pub struct LlmParams {
     pub system: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
-    #[serde(default = "d_max_tokens")]
-    pub max_tokens: u32,
+    /// Longest answer; `None` uses the model connection's setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
     /// Model connection id. `None` uses the agent's model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -801,12 +799,15 @@ pub fn catalog() -> Vec<BlockInfo> {
                         "Leave empty for the model's default.",
                     )
                 },
-                p(
-                    "max_tokens",
-                    "Max answer length (tokens)",
-                    K::Integer { min: 1, max: 32768 },
-                    "",
-                ),
+                ParamSpec {
+                    optional: true,
+                    ..p(
+                        "max_tokens",
+                        "Max answer length (tokens)",
+                        K::Integer { min: 1, max: 32768 },
+                        "Leave empty to use the model's own setting (Settings → Models).",
+                    )
+                },
                 ParamSpec {
                     optional: true,
                     ..p(
@@ -865,7 +866,7 @@ pub fn catalog() -> Vec<BlockInfo> {
                     "Each model connection has a daily token limit (Settings → Models).",
                 ),
             ],
-            json!({ "prompt": "_INPUT_", "max_tokens": 1024, "tool_mode": "native", "network": false, "on_limit": "ask" }),
+            json!({ "prompt": "_INPUT_", "tool_mode": "native", "network": false, "on_limit": "ask" }),
         ),
         info(
             "run_tool",
@@ -1294,7 +1295,7 @@ mod tests {
         assert!(matches!(
             k,
             BlockKind::Llm(LlmParams {
-                max_tokens: 1024,
+                max_tokens: None,
                 ..
             })
         ));

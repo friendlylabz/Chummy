@@ -172,6 +172,33 @@ without noticing.
   them. Run ids are checked before they're used as file names, so a log
   can't be read from outside the logs folder.
 
+## Pass 8: encrypted logs, formatted replies
+
+- **Run logs are encrypted by default.** Each line is sealed separately
+  with XChaCha20-Poly1305 (random 192-bit nonce per line, bound to a fixed
+  context string), as `enc1:<key id>:<base64>`. The 256-bit key comes from
+  the OS's secure random source on first use and lives only in the OS
+  keychain (entry `log-key`); the key id is the first 8 bytes of its
+  SHA-256. If the keychain can't be used, encrypted run logs simply aren't
+  written: Chummy never falls back to plain text on its own.
+- **Exporting the key** seals it with a key derived from a passphrase of at
+  least 10 characters by Argon2id (64 MiB, 3 passes), again with
+  XChaCha20-Poly1305. Importing checks the passphrase and the fingerprint,
+  refuses unreasonable Argon2 settings, and asks before replacing a
+  different key (logs written with the old key then can't be read here).
+  Exports and imports are written to the system log.
+- **Turning encryption off asks first**, and only affects new logs.
+  Detail can be lowered to shortened values (500 characters), steps only (no
+  text) or off; the system log's level goes down to off.
+- **What it doesn't cover:** chat history and job history are still plain
+  text in the Chummy folder, and anything that can use your unlocked
+  keychain as you can read the key.
+- **Formatted replies stay inert.** Model text is escaped before any
+  Markdown is applied, so it can never add HTML; links become buttons that
+  Rust opens only after showing the full address and asking (web and mail
+  links only). Math goes through KaTeX with `trust` off (so `\href` and
+  similar are refused) and size and macro-expansion limits.
+
 ## Known risks and what to do next
 
 In rough order of importance:
@@ -207,9 +234,10 @@ In rough order of importance:
 7. **No record of exactly what tools sent.** Run logs show every tool
    call's arguments and result, and the system log every tool run, but not
    each web request a tool made. *Next:* log each request's address.
-8. **History is plain text.** Chats, job histories and run logs are stored unencrypted
-   in the Chummy folder, protected only by OS permissions. Full-disk
-   encryption is recommended.
+8. **History is plain text.** Chats and job histories are stored unencrypted
+   in the Chummy folder, protected only by OS permissions (run logs are
+   encrypted since pass 8). *Next:* encrypt chat and job history with the
+   same key. Full-disk encryption is recommended.
 
 chummyd, the planned background service, raises the stakes (a listening
 API, remote answers, unattended hosts). Its own security design is in

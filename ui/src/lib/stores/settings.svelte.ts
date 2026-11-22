@@ -17,7 +17,8 @@ class SettingsStore {
     local: { device: "auto" },
     hf_token_set: false,
     tools: {},
-    general: { close: "ask", notifications: true, max_job_runs: 1 },
+    general: { close: "ask", notifications: true, max_job_runs: 1, markdown: true, math: true },
+    logging: { runs: "verbose", encrypt: true, system: "info" },
   });
   /** The theme actually shown, with "system" resolved. */
   resolvedTheme = $state<"dark" | "light">(prefersDark.matches ? "dark" : "light");

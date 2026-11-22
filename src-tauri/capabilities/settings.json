@@ -53,6 +53,11 @@
     "allow-export-agent-loop-config",
     "allow-import-agent-loop-config",
     "allow-usage-today",
-    "allow-block-catalog"
+    "allow-block-catalog",
+    "allow-set-logging",
+    "allow-log-key-status",
+    "allow-export-log-key",
+    "allow-import-log-key",
+    "allow-open-link"
   ]
 }

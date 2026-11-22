@@ -151,6 +151,12 @@
     </span>
   </div>
 
+  {#if t.unreadable}
+    <div class="locked" role="alert">
+      <Icon name="key" size={14} />
+      <span>{t.unreadable.lines} line{t.unreadable.lines === 1 ? "" : "s"} can't be read. {t.unreadable.reason}</span>
+    </div>
+  {/if}
   <div class="count">
     {filtered.length === t.items.length ? `${t.items.length} entries` : `${filtered.length} of ${t.items.length} entries`}
   </div>
@@ -336,6 +342,16 @@
     color: var(--accent);
     font-size: var(--text-xs);
     cursor: pointer;
+  }
+  .locked {
+    display: flex;
+    gap: var(--space-2);
+    align-items: flex-start;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--warn) 12%, transparent);
+    color: var(--text);
+    font-size: var(--text-xs);
   }
   .count {
     color: var(--text-faint);

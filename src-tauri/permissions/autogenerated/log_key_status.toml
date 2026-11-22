@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-log-key-status"
+description = "Enables the log_key_status command without any pre-configured scope."
+commands.allow = ["log_key_status"]
+
+[[permission]]
+identifier = "deny-log-key-status"
+description = "Denies the log_key_status command without any pre-configured scope."
+commands.deny = ["log_key_status"]

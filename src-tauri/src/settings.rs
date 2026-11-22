@@ -107,6 +107,10 @@ pub struct General {
     pub notifications: bool,
     /// Most scheduled runs going at once (1–4).
     pub max_job_runs: u32,
+    /// Show replies with Markdown formatting (headings, lists, code…).
+    pub markdown: bool,
+    /// Show LaTeX math in replies.
+    pub math: bool,
 }
 
 impl Default for General {
@@ -115,6 +119,8 @@ impl Default for General {
             close: CloseAction::Ask,
             notifications: true,
             max_job_runs: 1,
+            markdown: true,
+            math: true,
         }
     }
 }
@@ -147,6 +153,74 @@ impl Default for LocalSettings {
     }
 }
 
+/// How much the system log records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SystemLogLevel {
+    Off,
+    Errors,
+    Warnings,
+    #[default]
+    Info,
+    Debug,
+}
+
+impl SystemLogLevel {
+    pub fn min(self) -> Option<chummy_log::system::Level> {
+        use chummy_log::system::Level;
+        match self {
+            SystemLogLevel::Off => None,
+            SystemLogLevel::Errors => Some(Level::Error),
+            SystemLogLevel::Warnings => Some(Level::Warn),
+            SystemLogLevel::Info => Some(Level::Info),
+            SystemLogLevel::Debug => Some(Level::Debug),
+        }
+    }
+}
+
+/// How much each run's log records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RunLogLevel {
+    /// No run logs.
+    Off,
+    Summary,
+    Standard,
+    #[default]
+    Verbose,
+}
+
+impl RunLogLevel {
+    pub fn detail(self) -> Option<chummy_log::runs::Detail> {
+        use chummy_log::runs::Detail;
+        match self {
+            RunLogLevel::Off => None,
+            RunLogLevel::Summary => Some(Detail::Summary),
+            RunLogLevel::Standard => Some(Detail::Standard),
+            RunLogLevel::Verbose => Some(Detail::Verbose),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Logging {
+    pub runs: RunLogLevel,
+    /// Encrypt run logs with the log key in the OS keychain.
+    pub encrypt: bool,
+    pub system: SystemLogLevel,
+}
+
+impl Default for Logging {
+    fn default() -> Self {
+        Self {
+            runs: RunLogLevel::Verbose,
+            encrypt: true,
+            system: SystemLogLevel::Info,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -163,6 +237,7 @@ pub struct Settings {
     /// Per-tool switches, by tool name.
     pub tools: BTreeMap<String, ToolPref>,
     pub general: General,
+    pub logging: Logging,
 }
 
 impl Default for Settings {
@@ -178,6 +253,7 @@ impl Default for Settings {
             local: LocalSettings::default(),
             tools: BTreeMap::new(),
             general: General::default(),
+            logging: Logging::default(),
         }
     }
 }
@@ -387,6 +463,25 @@ pub fn log_changes(old: &Settings, new: &Settings) {
         if !new.providers.iter().any(|x| x.id == p.id) {
             changes.push((Level::Info, format!("Model connection {} removed", p.name)));
         }
+    }
+    let (a, b) = (&old.logging, &new.logging);
+    if a.encrypt != b.encrypt {
+        changes.push((
+            Level::Warn,
+            format!("Run log encryption turned {}", on(b.encrypt)),
+        ));
+    }
+    if a.runs != b.runs {
+        changes.push((
+            Level::Info,
+            format!("Run logs set to {:?}", b.runs).to_lowercase(),
+        ));
+    }
+    if a.system != b.system {
+        changes.push((
+            Level::Warn,
+            format!("System log set to {:?}", b.system).to_lowercase(),
+        ));
     }
     for (level, message) in changes {
         log(level, "settings", message, &[]);

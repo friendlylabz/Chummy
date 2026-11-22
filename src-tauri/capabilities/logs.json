@@ -18,6 +18,7 @@
     "allow-read-system-log",
     "allow-reveal-logs",
     "allow-list-runs",
-    "allow-stop-run"
+    "allow-stop-run",
+    "allow-log-key-status"
   ]
 }

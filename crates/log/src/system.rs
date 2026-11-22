@@ -52,6 +52,8 @@ pub struct SystemLog {
     file: Mutex<Option<(String, File)>>,
     recent: Mutex<VecDeque<SysEntry>>,
     listener: Mutex<Option<Listener>>,
+    /// Lowest level written; `None` writes nothing.
+    min: Mutex<Option<Level>>,
     /// Also print to stderr (for development).
     echo: bool,
 }
@@ -67,6 +69,7 @@ impl SystemLog {
             file: Mutex::new(None),
             recent: Mutex::new(VecDeque::new()),
             listener: Mutex::new(None),
+            min: Mutex::new(Some(Level::Info)),
             echo: cfg!(debug_assertions),
         }
     }
@@ -80,7 +83,16 @@ impl SystemLog {
         *self.listener.lock().unwrap_or_else(|e| e.into_inner()) = Some(Box::new(f));
     }
 
+    /// Lowest level to write (`None`: no system log at all).
+    pub fn set_min_level(&self, min: Option<Level>) {
+        *self.min.lock().unwrap_or_else(|e| e.into_inner()) = min;
+    }
+
     pub fn write(&self, e: SysEntry) {
+        let min = *self.min.lock().unwrap_or_else(|e| e.into_inner());
+        if min.is_none_or(|m| e.level < m) {
+            return;
+        }
         if self.echo {
             eprintln!("[{:?}] {}: {}", e.level, e.source, e.message);
         }
@@ -214,6 +226,7 @@ mod tests {
     fn writes_reads_and_tells_listeners() {
         let tmp = tempfile::tempdir().unwrap();
         let log = SystemLog::new(tmp.path());
+        log.set_min_level(Some(Level::Debug));
         let seen = std::sync::Arc::new(Mutex::new(0));
         let s2 = seen.clone();
         log.set_listener(move |_| *s2.lock().unwrap() += 1);
@@ -236,6 +249,28 @@ mod tests {
         assert_eq!(*seen.lock().unwrap(), 3);
         assert_eq!(log.recent().len(), 3);
         assert!(log.read_day("../../etc").is_empty());
+    }
+
+    #[test]
+    fn levels_filter_and_off_writes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log = SystemLog::new(tmp.path());
+        let e = |level| SysEntry {
+            at: now_ms(),
+            level,
+            source: "app".into(),
+            message: "m".into(),
+            fields: Default::default(),
+        };
+        log.write(e(Level::Debug));
+        log.write(e(Level::Info));
+        log.set_min_level(Some(Level::Error));
+        log.write(e(Level::Warn));
+        log.write(e(Level::Error));
+        log.set_min_level(None);
+        log.write(e(Level::Error));
+        let levels: Vec<Level> = log.recent().into_iter().map(|e| e.level).collect();
+        assert_eq!(levels, [Level::Info, Level::Error]);
     }
 
     #[test]

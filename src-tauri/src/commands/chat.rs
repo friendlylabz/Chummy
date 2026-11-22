@@ -382,22 +382,27 @@ pub struct RunMeta {
 pub fn track(app: &AppHandle, state: &AppState, info: RunInfo, meta: RunMeta) -> RunGuard {
     lock(&state.runs).insert(info.run_id.clone(), info.clone());
     let started_at = chummy_log::now_ms();
-    let log = RunLog::create(
-        &state.run_logs,
-        RunHeader {
-            run_id: info.run_id.clone(),
-            title: info.title.clone(),
-            source: info.source.into(),
-            agent_id: info.agent_id.clone(),
-            agent_name: meta.agent_name,
-            job_id: info.job_id.clone(),
-            loop_name: meta.loop_name.clone(),
-            model: meta.model.clone(),
-            message: meta.message,
-            started_at,
-        },
-    )
-    .map(Arc::new);
+    let opts = state.run_log_options();
+    let log = opts
+        .and_then(|opts| {
+            RunLog::create(
+                &state.run_logs,
+                RunHeader {
+                    run_id: info.run_id.clone(),
+                    title: info.title.clone(),
+                    source: info.source.into(),
+                    agent_id: info.agent_id.clone(),
+                    agent_name: meta.agent_name,
+                    job_id: info.job_id.clone(),
+                    loop_name: meta.loop_name.clone(),
+                    model: meta.model.clone(),
+                    message: meta.message,
+                    started_at,
+                },
+                opts,
+            )
+        })
+        .map(Arc::new);
     syslog::log(
         Level::Info,
         "runs",

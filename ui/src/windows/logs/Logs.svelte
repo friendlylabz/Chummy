@@ -34,8 +34,9 @@
         <Icon name="monitor" size={15} /> System log
       </button>
     </div>
-    <span class="hint">Kept for 30 days, on this computer only.</span>
+    <span class="hint">Kept for 30 days, on this computer only. Run logs are encrypted unless you turned that off.</span>
     <span class="spacer"></span>
+    <Button variant="ghost" icon="key" onclick={() => commands.openWindow("settings", "logs")}>Log settings and key</Button>
     <Button variant="ghost" icon="folder" onclick={() => commands.revealLogs()}>Open logs folder</Button>
   </header>
   <div class="body">

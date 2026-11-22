@@ -41,6 +41,8 @@ export interface Timeline {
   header: RunHeader | null;
   end: RunEnd | null;
   items: Item[];
+  /** Lines that couldn't be read, and why. */
+  unreadable: { lines: number; reason: string } | null;
 }
 
 let catalog: Promise<BlockInfo[]> | null = null;
@@ -63,6 +65,7 @@ function depthOf(block: string) {
 export function timeline(entries: LogEntry[], blocks: BlockInfo[] = []): Timeline {
   let header: RunHeader | null = null;
   let end: RunEnd | null = null;
+  let unreadable: Timeline["unreadable"] = null;
   const info = new Map(blocks.map((b) => [b.kind, b]));
   const items: Item[] = [];
   entries.forEach((e, i) => {
@@ -73,6 +76,9 @@ export function timeline(entries: LogEntry[], blocks: BlockInfo[] = []): Timelin
         return;
       case "end":
         end = e;
+        return;
+      case "unreadable":
+        unreadable = { lines: e.lines, reason: e.reason };
         return;
       case "step": {
         const b = info.get(e.kind);
@@ -184,7 +190,7 @@ export function timeline(entries: LogEntry[], blocks: BlockInfo[] = []): Timelin
   });
   // Steps are written when they finish; show everything in start order.
   items.sort((a, b) => a.at - b.at || rank(a) - rank(b) || a.i - b.i);
-  return { header, end, items };
+  return { header, end, items, unreadable };
 }
 
 /** At the same moment, a step comes first (it started first), in step order. */

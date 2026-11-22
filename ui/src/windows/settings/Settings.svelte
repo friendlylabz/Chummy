@@ -13,29 +13,39 @@
   import LocalEnginePane from "./LocalEnginePane.svelte";
   import AgentsPane from "./AgentsPane.svelte";
   import ToolsPane from "./ToolsPane.svelte";
+  import LogsPane from "./LogsPane.svelte";
 
-  type Section = "agents" | "models" | "engine" | "tools" | "permissions" | "general" | "appearance" | "about";
+  type Section = "agents" | "models" | "engine" | "tools" | "permissions" | "logs" | "general" | "appearance" | "about";
 
   const sections: {
     id: Section;
     label: string;
-    icon: "bot" | "cpu" | "shield" | "palette" | "info" | "chat" | "wrench" | "sliders";
+    icon: "bot" | "cpu" | "shield" | "palette" | "info" | "chat" | "wrench" | "sliders" | "history";
   }[] = [
     { id: "agents", label: "Agents", icon: "chat" },
     { id: "models", label: "Models", icon: "bot" },
     { id: "engine", label: "Local engine", icon: "cpu" },
     { id: "tools", label: "Tools", icon: "wrench" },
     { id: "permissions", label: "Permissions", icon: "shield" },
+    { id: "logs", label: "Logs", icon: "history" },
     { id: "general", label: "General", icon: "sliders" },
     { id: "appearance", label: "Appearance", icon: "palette" },
     { id: "about", label: "About", icon: "info" },
   ];
 
   const fromHash = (h: string): Section | null => {
-    const id = h.replace(/^#/, "");
+    const id = h.replace(/^#/, "").split(":")[0];
     return sections.some((x) => x.id === id) ? (id as Section) : null;
   };
+  /** `logs:export` and `logs:import` open those dialogs. */
+  const logsAction = (h: string) => {
+    const a = h.replace(/^#/, "").split(":")[1];
+    return a === "export" || a === "import" ? a : null;
+  };
   let active = $state<Section>(fromHash(location.hash) ?? "models");
+  let logsStart = $state<"export" | "import" | null>(logsAction(location.hash));
+  /** Re-mounts the Logs pane when asked to open a dialog again. */
+  let logsKey = $state(0);
   let modelsView = $state<"list" | "pick" | "form" | "local">("list");
   let info = $state<AppInfo | null>(null);
   const perms = $derived(settings.current.permissions);
@@ -55,7 +65,11 @@
     loops.init();
     events.onGoto((section) => {
       const s = fromHash(section);
-      if (s) go(s);
+      if (s) {
+        logsStart = logsAction(section);
+        logsKey++;
+        go(s);
+      }
     });
     info = await commands.appInfo();
   });
@@ -171,6 +185,8 @@
             </select>
           </div>
         </div>
+      {:else if active === "logs"}
+        {#key logsKey}<LogsPane start={logsStart} />{/key}
       {:else if active === "appearance"}
         <h1>Appearance</h1>
         <p class="pane-sub">How Chummy looks. Changes apply to every window.</p>
@@ -178,6 +194,23 @@
           <div class="row">
             <div><div class="row-title">Theme</div><div class="row-sub">Follow the system, or pick one.</div></div>
             <ThemeSwitch />
+          </div>
+        </div>
+        <div class="section-label">Replies in chat</div>
+        <div class="card rows">
+          <div class="row">
+            <div>
+              <div class="row-title">Format replies</div>
+              <div class="row-sub">Show Markdown as formatting: headings, lists, tables, quotes, code blocks, bold and links. Off shows the text exactly as the model wrote it.</div>
+            </div>
+            <Toggle checked={general.markdown} label="Format replies" onchange={(v) => setGeneral({ markdown: v })} />
+          </div>
+          <div class="row">
+            <div>
+              <div class="row-title">Show math</div>
+              <div class="row-sub">Typeset LaTeX between $…$, $$…$$, \(…\) or \[…\]. Amounts like “$5 and $10” are left alone.</div>
+            </div>
+            <Toggle checked={general.math} label="Show math" onchange={(v) => setGeneral({ math: v })} />
           </div>
         </div>
       {:else}

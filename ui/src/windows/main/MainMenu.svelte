@@ -44,7 +44,11 @@
     },
     {
       title: "History",
-      items: [{ label: "Logs", icon: "history", run: () => commands.openWindow("logs") }],
+      items: [
+        { label: "Logs", icon: "history", run: () => commands.openWindow("logs") },
+        { label: "Export log key…", icon: "export", run: () => commands.openWindow("settings", "logs:export") },
+        { label: "Import log key…", icon: "import", run: () => commands.openWindow("settings", "logs:import") },
+      ],
     },
   ]);
 

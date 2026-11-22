@@ -10,11 +10,13 @@
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
     "tauri": "tauri",
-    "icons": "tauri icon assets/app-icon.png && node -e \"for (const d of ['android','ios']) require('fs').rmSync('src-tauri/icons/'+d,{recursive:true,force:true})\""
+    "icons": "tauri icon assets/app-icon.png && node -e \"for (const d of ['android','ios']) require('fs').rmSync('src-tauri/icons/'+d,{recursive:true,force:true})\"",
+    "test:ui": "node --experimental-strip-types ui/src/lib/markdown.test.mts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.5",
-    "@xyflow/svelte": "^2.0.2"
+    "@xyflow/svelte": "^2.0.2",
+    "katex": "^0.19.1"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.1",

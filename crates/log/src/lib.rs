@@ -8,8 +8,12 @@
 //!   every block it executed with its inputs and outputs, every model call,
 //!   tool call, question and reply, and how it ended.
 //!
+//! Run logs can be encrypted ([`crypt`]) with a key the app keeps in the OS
+//! keychain, and written at three levels of detail ([`runs::Detail`]).
+//!
 //! Nothing here depends on Tauri, so chummyd can use it as is.
 
+pub mod crypt;
 pub mod runs;
 pub mod system;
 

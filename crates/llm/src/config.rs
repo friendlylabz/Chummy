@@ -89,6 +89,16 @@ pub struct ProviderConfig {
     /// Missing in older files means the default limit.
     #[serde(default = "default_daily_tokens")]
     pub daily_tokens: Option<u64>,
+    /// Longest answer, in tokens, unless a model block sets its own.
+    #[serde(default = "default_max_tokens")]
+    pub max_tokens: u32,
+}
+
+/// The answer length new connections start with.
+pub const DEFAULT_MAX_TOKENS: u32 = 1024;
+
+fn default_max_tokens() -> u32 {
+    DEFAULT_MAX_TOKENS
 }
 
 /// The daily token limit new connections start with.
@@ -274,6 +284,7 @@ mod tests {
             local: None,
             temperature: None,
             daily_tokens: Some(crate::DEFAULT_DAILY_TOKENS),
+            max_tokens: crate::DEFAULT_MAX_TOKENS,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         assert!(json.contains("\"kind\":\"ollama\""));

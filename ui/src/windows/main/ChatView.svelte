@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { richText } from "$lib/format";
+  import Formatted from "$lib/components/Formatted.svelte";
   import { tick } from "svelte";
   import { commands, type Agent } from "$lib/ipc";
   import { chat } from "$lib/stores/chat.svelte";
@@ -62,7 +62,7 @@
         <div class="msg assistant">
           <div class="avatar"><Icon name="bot" size={15} /></div>
           <div class="body">
-            <div class="text" data-selectable>{@html richText(m.text)}</div>
+            <Formatted text={m.text} />
             {#if m.run?.run_id && lastOfRun.has(m.id)}
               <MessageSteps runId={m.run.run_id} summary={counts(m.run)} />
             {:else if m.run}<div class="meta">{counts(m.run)}</div>{/if}
@@ -73,7 +73,7 @@
           <div class="avatar"><Icon name="ask" size={15} /></div>
           <div class="body">
             {#if m.from}<div class="from">{m.from} asked</div>{/if}
-            <div class="text" data-selectable>{m.text}</div>
+            <Formatted text={m.text} />
           </div>
         </div>
       {:else if m.role === "answer"}
@@ -95,7 +95,7 @@
       <div class="msg assistant live">
         <div class="avatar"><Icon name="bot" size={15} /></div>
         <div class="body">
-          {#if run.replies.length}<div class="text" data-selectable>{run.replies.join("\n\n")}</div>{/if}
+          {#if run.replies.length}<Formatted text={run.replies.join("\n\n")} />{/if}
           <div class="activity">
             <span class="pulse"></span>
             <span class="step">{run.currentLabel ? `${run.currentLabel}…` : "Working…"}</span>
@@ -122,13 +122,6 @@
 </div>
 
 <style>
-  .text :global(code) {
-    padding: 0 4px;
-    border-radius: 4px;
-    background: var(--surface-2);
-    font-family: var(--font-mono);
-    font-size: 0.92em;
-  }
   .scroller {
     flex: 1;
     min-height: 0;
@@ -195,11 +188,6 @@
     flex: 1;
     min-width: 0;
     padding-top: 3px;
-  }
-  .text {
-    white-space: pre-wrap;
-    word-break: break-word;
-    line-height: 1.6;
   }
   .meta {
     margin-top: var(--space-1);

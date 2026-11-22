@@ -162,6 +162,7 @@
           <div class="r-top">
             <span class="status {r.status}" title={statusLabel[r.status] ?? r.status}></span>
             <span class="r-title">{r.header.title}</span>
+            {#if r.encrypted}<span class="lock" title={r.locked ?? "Encrypted"} class:locked={!!r.locked}><Icon name="key" size={12} /></span>{/if}
             <span class="r-when">{dateTime(r.header.started_at)}</span>
           </div>
           <div class="r-msg">{r.header.message || "(no message)"}</div>
@@ -211,6 +212,7 @@
           {/if}
         </dl>
         {#if h.message}<div class="message" data-selectable><span class="label">Message</span>{h.message}</div>{/if}
+        {#if current?.locked}<div class="error" data-selectable>{current.locked}</div>{/if}
         {#if end?.error}<div class="error" data-selectable>{end.error}{end.block ? ` (block ${end.block})` : ""}</div>{/if}
       {/if}
     </div>
@@ -351,6 +353,13 @@
     white-space: nowrap;
     font-weight: 600;
     font-size: var(--text-sm);
+  }
+  .lock {
+    color: var(--text-faint);
+    display: inline-flex;
+  }
+  .lock.locked {
+    color: var(--warn);
   }
   .r-when,
   .r-meta {

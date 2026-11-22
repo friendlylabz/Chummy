@@ -79,6 +79,7 @@ pub fn run() {
             general::setup_status,
             general::open_window,
             general::get_settings,
+            general::open_link,
             general::set_theme,
             general::app_info,
             general::reveal_data_dir,
@@ -150,6 +151,10 @@ pub fn run() {
             logs::system_log_days,
             logs::read_system_log,
             logs::reveal_logs,
+            logs::set_logging,
+            logs::log_key_status,
+            logs::export_log_key,
+            logs::import_log_key,
             tray::close_activity,
             tray::close_choice,
         ])

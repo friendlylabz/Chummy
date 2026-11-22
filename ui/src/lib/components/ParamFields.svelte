@@ -106,7 +106,7 @@
               min={p.min}
               max={p.max}
               step={p.kind === "number" ? p.step : 1}
-              placeholder={p.optional ? "Default" : ""}
+              placeholder={p.optional ? (p.key === "max_tokens" ? "The model's setting" : "Default") : ""}
               value={value(p) ?? ""}
               oninput={(e) => numberInput(p, (e.currentTarget as HTMLInputElement).value)}
             />

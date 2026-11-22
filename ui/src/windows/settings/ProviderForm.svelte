@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import { DEFAULT_DAILY_TOKENS, commands, errorText, type Preset, type ProbeReport, type ProviderConfig, type ProviderView } from "$lib/ipc";
+  import { DEFAULT_DAILY_TOKENS, DEFAULT_MAX_TOKENS, commands, errorText, type Preset, type ProbeReport, type ProviderConfig, type ProviderView } from "$lib/ipc";
   import { kindLabel } from "$lib/format";
   import Button from "$lib/components/Button.svelte";
   import Icon from "$lib/components/Icon.svelte";
@@ -26,6 +26,9 @@
   let model = $state(start?.model ?? "");
   let temperature = $state(start?.temperature != null ? String(start.temperature) : "");
   let apiKey = $state("");
+  let maxTokens = $state(String(start?.max_tokens ?? DEFAULT_MAX_TOKENS));
+  const maxValue = $derived(Math.round(Number(maxTokens.replace(/[,_\s]/g, ""))));
+  const maxBad = $derived(!Number.isFinite(maxValue) || maxValue < 16 || maxValue > 32768);
   const limit0 = start ? (start.daily_tokens ?? null) : DEFAULT_DAILY_TOKENS;
   let limitOn = $state(limit0 !== null);
   let limit = $state(String(limit0 ?? DEFAULT_DAILY_TOKENS));
@@ -55,6 +58,7 @@
       local: start?.local ?? null,
       temperature: t != null && !isNaN(t) ? t : null,
       daily_tokens: limitOn ? limitValue : null,
+      max_tokens: maxBad ? DEFAULT_MAX_TOKENS : maxValue,
     };
   }
 
@@ -160,6 +164,15 @@
   </div>
 
   <div class="field">
+    <label for="pf-max">Longest answer (tokens)</label>
+    <input id="pf-max" class="input" style="width: 150px" bind:value={maxTokens} inputmode="numeric" aria-invalid={maxBad} />
+    <span class="hint">
+      {#if maxBad}16 to 32,768 tokens.{:else}Used by every model block that doesn't set its own (in the loop editor or
+        Agent Loop Configuration). Small models often ramble: a lower limit keeps answers short.{/if}
+    </span>
+  </div>
+
+  <div class="field">
     <span class="label">Daily token limit</span>
     <div class="input-row limit">
       <label class="inline first"><input type="checkbox" bind:checked={limitOn} /> Limit to</label>
@@ -194,7 +207,7 @@
     </Button>
     <span class="spacer"></span>
     <Button variant="ghost" onclick={oncancel}>Cancel</Button>
-    <Button variant="primary" onclick={save} disabled={saving || !name.trim() || !model.trim() || limitBad}>
+    <Button variant="primary" onclick={save} disabled={saving || !name.trim() || !model.trim() || limitBad || maxBad}>
       {start ? "Save" : "Add model"}
     </Button>
   </div>

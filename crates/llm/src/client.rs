@@ -329,6 +329,7 @@ mod tests {
             local: None,
             temperature: None,
             daily_tokens: Some(crate::DEFAULT_DAILY_TOKENS),
+            max_tokens: crate::DEFAULT_MAX_TOKENS,
         }
     }
 
