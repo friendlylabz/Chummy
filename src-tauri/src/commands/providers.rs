@@ -284,8 +284,12 @@ mod tests {
         assert!(validate(&c).is_err());
         c.base_url = "http://localhost:8080/v1".into();
         assert!(validate(&c).is_ok());
+        // Plain http off the local network is allowed (saving asks first).
         c.base_url = "http://api.example.com/v1".into();
-        assert!(validate(&c).is_err(), "no plain http to the internet");
+        assert!(validate(&c).is_ok());
+        assert!(chummy_llm::unencrypted_remote(&c.base_url));
+        c.base_url = "http://user:key@api.example.com/v1".into();
+        assert!(validate(&c).is_err(), "no credentials in addresses");
         c.base_url = "http://localhost:8080/v1".into();
         c.temperature = Some(5.0);
         assert!(validate(&c).is_err());
