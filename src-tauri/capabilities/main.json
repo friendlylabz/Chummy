@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Main chat window: setup status, opening other windows, theme.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "allow-setup-status",
+    "allow-open-window",
+    "allow-get-settings",
+    "allow-set-theme"
+  ]
+}

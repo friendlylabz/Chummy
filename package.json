@@ -1,0 +1,28 @@
+{
+  "name": "chummy",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
+    "tauri": "tauri",
+    "icons": "tauri icon assets/app-icon.png && node -e \"for (const d of ['android','ios']) require('fs').rmSync('src-tauri/icons/'+d,{recursive:true,force:true})\""
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.12.5",
+    "@xyflow/svelte": "^2.0.2"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.3.1",
+    "@tauri-apps/cli": "^2.12.6",
+    "@tsconfig/svelte": "^5.0.9",
+    "svelte": "^5.59.1",
+    "svelte-check": "^4.7.8",
+    "typescript": "~5.9.3",
+    "vite": "^8.3.8"
+  }
+}

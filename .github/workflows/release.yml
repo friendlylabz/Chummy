@@ -1,0 +1,68 @@
+name: Release
+
+# Push a tag like v0.1.0 to build installers for every platform and attach
+# them to a draft GitHub release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (Apple Silicon)
+            os: macos-latest
+            args: --target aarch64-apple-darwin
+            target: aarch64-apple-darwin
+          - name: macOS (Intel)
+            os: macos-latest
+            args: --target x86_64-apple-darwin
+            target: x86_64-apple-darwin
+          - name: Linux
+            os: ubuntu-22.04
+            args: ""
+            target: ""
+          - name: Windows
+            os: windows-latest
+            args: ""
+            target: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
+
+      - name: Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install
+          if [ -n "${{ matrix.target }}" ]; then rustup target add ${{ matrix.target }}; fi
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: Chummy ${{ github.ref_name }}
+          releaseBody: See the assets below to download Chummy for your platform.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}

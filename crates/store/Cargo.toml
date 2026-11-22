@@ -1,0 +1,18 @@
+[package]
+name = "chummy-store"
+description = "Internal persistence for Chummy settings, sessions and libraries."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+
+[lints]
+workspace = true
