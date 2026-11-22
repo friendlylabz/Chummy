@@ -2,31 +2,38 @@
 //!
 //! The single enforcement point for what an agent may touch.
 //!
-//! Every agent is locked to one folder that the user chose and confirmed (its
-//! [`Workspace`]). Anything beyond reading and writing inside that folder (network
-//! access, running a tool, executing on the host) needs an explicit [`Grant`],
-//! and the default [`Grants`] set is empty.
+//! Every agent is locked to one folder the user chose and confirmed: its
+//! workspace. The protection has three layers:
 //!
-//! The UI never makes these decisions. It can only ask Rust to change them, and
-//! Rust asks the user to confirm.
+//! 1. **Choosing a workspace** ([`validate_workspace`]). A folder is refused if
+//!    it is a drive root or mount point, the home folder, a hidden settings
+//!    folder in home, a system folder, or Chummy's own folder, or if it
+//!    *contains* any of those. These rules apply even when the user asks
+//!    otherwise. See [`Protected`].
+//! 2. **Naming paths** ([`RelPath`]). Agents only ever give paths relative to
+//!    the workspace. Absolute paths, `..`, drive prefixes and similar tricks are
+//!    rejected before touching the disk.
+//! 3. **Touching files** ([`Jail`]). All file access goes through a
+//!    capability handle (`cap-std`) opened on the workspace. Every path is
+//!    resolved beneath that handle, so symlinks, junctions and races that try
+//!    to escape fail at the OS level, not just in a check we wrote.
 //!
-//! Status: pass 1 defines the types. Path resolution (resolving the real path,
-//! following symlinks, refusing escapes) arrives in pass 2.
+//! Beyond file access inside the workspace, everything needs an explicit
+//! [`Grant`], and the default [`Grants`] set is empty.
+
+mod jail;
+mod paths;
+mod protected;
+mod workspace;
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-/// A folder the user picked and confirmed as an agent's whole world.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Workspace {
-    /// Absolute, canonical path of the jail root.
-    pub root: PathBuf,
-    /// Whether the user explicitly confirmed this folder. Unconfirmed
-    /// workspaces must never be handed to an agent.
-    pub confirmed: bool,
-}
+pub use jail::{DirEntry, Jail, JailError};
+pub use paths::{RelPath, RelPathError};
+pub use protected::{Protected, ProtectedPath, Scope};
+pub use workspace::{WorkspaceError, validate_workspace};
 
 /// A capability beyond plain file access inside the workspace.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -45,7 +52,6 @@ pub enum Grant {
 pub struct Grants(BTreeSet<Grant>);
 
 impl Grants {
-    /// Returns true if `grant` has been given.
     pub fn allows(&self, grant: &Grant) -> bool {
         self.0.contains(grant)
     }
@@ -55,26 +61,13 @@ impl Grants {
         self.0.insert(grant);
     }
 
-    /// Removes a grant.
     pub fn revoke(&mut self, grant: &Grant) {
         self.0.remove(grant);
     }
 
-    /// True when the agent holds no grants at all.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
-}
-
-/// Errors raised when an agent tries to leave its sandbox.
-#[derive(Debug, thiserror::Error)]
-pub enum SandboxError {
-    #[error("no confirmed workspace folder is set")]
-    NoWorkspace,
-    #[error("path escapes the workspace: {0}")]
-    Escape(PathBuf),
-    #[error("not permitted without a grant: {0:?}")]
-    Denied(Grant),
 }
 
 #[cfg(test)]
@@ -86,9 +79,6 @@ mod tests {
         let grants = Grants::default();
         assert!(grants.is_empty());
         assert!(!grants.allows(&Grant::Network { hosts: vec![] }));
-        assert!(!grants.allows(&Grant::Tool {
-            name: "read_file".into()
-        }));
     }
 
     #[test]

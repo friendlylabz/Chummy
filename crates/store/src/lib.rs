@@ -1,46 +1,27 @@
 //! # chummy-store
 //!
-//! Internal persistence: settings, the loop library, sessions and jobs.
+//! Where Chummy keeps its own data.
 //!
-//! Users never edit these files. Everything is configured in the app, and this
-//! crate stores it in the app data directory. Secrets (API keys) are not stored
-//! here; they go to the OS keychain.
+//! Everything lives in one per-user folder, the **Chummy folder** ([`ChummyDirs`]):
 //!
-//! Status: pass 1 provides the [`Settings`] type and an in-memory store. Disk
-//! persistence arrives in pass 2.
+//! | OS      | Location                                              |
+//! |---------|-------------------------------------------------------|
+//! | Linux   | `~/.local/share/com.friendlylabz.chummy`              |
+//! | macOS   | `~/Library/Application Support/com.friendlylabz.chummy` |
+//! | Windows | `%LOCALAPPDATA%\com.friendlylabz.chummy`              |
+//!
+//! The app shell resolves that path (through Tauri) and hands it to this crate.
+//! The sandbox treats the whole folder as off-limits: no workspace may be inside
+//! it or contain it.
+//!
+//! Users never edit files here. Settings are versioned JSON documents written
+//! atomically with a backup ([`JsonDoc`]). API keys and tokens are not stored in
+//! the folder at all; they go to the OS keychain ([`secrets`]).
 
-use serde::{Deserialize, Serialize};
+pub mod secrets;
 
-/// UI theme preference.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Theme {
-    /// Follow the operating system.
-    #[default]
-    System,
-    Dark,
-    Light,
-}
+mod doc;
+mod layout;
 
-/// App-wide settings.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct Settings {
-    pub theme: Theme,
-}
-
-/// Holds app data in memory. Pass 2 backs this with the app data directory.
-#[derive(Debug, Default)]
-pub struct Store {
-    pub settings: Settings,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn theme_defaults_to_system() {
-        assert_eq!(Store::default().settings.theme, Theme::System);
-        assert_eq!(serde_json::to_string(&Theme::Dark).unwrap(), "\"dark\"");
-    }
-}
+pub use doc::{JsonDoc, Loaded, Recovery, StoreError};
+pub use layout::ChummyDirs;

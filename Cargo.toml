@@ -7,12 +7,16 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 rust-version = "1.90"
-authors = ["Friendly Labs"]
+authors = ["friendlylabz"]
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "net", "process"] }
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "http2", "charset"] }
+tempfile = "3"
 
 chummy-sandbox = { path = "crates/sandbox" }
 chummy-llm = { path = "crates/llm" }
@@ -20,6 +24,7 @@ chummy-flow = { path = "crates/flow" }
 chummy-tools = { path = "crates/tools" }
 chummy-scheduler = { path = "crates/scheduler" }
 chummy-store = { path = "crates/store" }
+chummy-local = { path = "crates/local" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

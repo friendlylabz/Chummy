@@ -9,8 +9,53 @@ until you say so.
 
 ![Chummy on first launch](docs/screenshot-main.png)
 
-> **Status:** pass 1 of the roadmap: the app shell, windows and build system.
-> See [the architecture plan](#architecture) for what comes next.
+> **Status:** passes 1–2 of the roadmap are done: the app shell, the folder
+> jail, settings, and model connections (including a basic built-in engine).
+> Chat unlocks in pass 3, with the loop engine.
+
+## What works today
+
+- **Workspace jail.** Agents are locked to one folder that you pick and confirm
+  in a native dialog. Whole drives, your home folder, system folders, hidden
+  settings folders (`.ssh`, `.config`, …) and Chummy's own folder are always
+  refused, along with any folder that contains one of them. File access goes
+  through a `cap-std` capability handle, so symlinks and junctions can't
+  escape the folder.
+- **Permissions.** Internet access and tools are off by default. Turning either
+  on needs a native confirmation, shown by Rust, not by the web UI.
+- **Model connections.** Ollama, LM Studio, llama.cpp, vLLM, any
+  OpenAI-compatible server, OpenAI, Anthropic, Gemini, OpenRouter, Groq,
+  Mistral, DeepSeek, xAI and Together. API keys live in the OS keychain. **Test
+  connection** checks that the server is reachable, that the model replies,
+  and whether it can call a tool.
+- **Built-in engine (basic).** Paste a Hugging Face repo and Chummy checks it
+  before downloading: it must be a text model, run without custom code, ship
+  safetensors weights, and have a chat template with tools in a format Chummy
+  can parse. The check shows the download size and estimated memory needs on
+  common setups and on this computer. Downloads resume and are checksummed.
+  Python, PyTorch (with the right CUDA, Metal or CPU build) and transformers
+  are installed on first use with [uv](https://github.com/astral-sh/uv), inside
+  Chummy's folder; none of them ship with the app. The engine is much slower
+  than vLLM or llama.cpp, and the app says so.
+
+<p>
+  <img src="docs/screenshot-settings-models.png" width="49%" alt="Model connections">
+  <img src="docs/screenshot-local-model.png" width="49%" alt="Checking a Hugging Face model for the built-in engine">
+</p>
+
+## Where Chummy keeps things
+
+| OS      | Chummy folder                                           |
+|---------|---------------------------------------------------------|
+| Linux   | `~/.local/share/com.friendlylabz.chummy`                |
+| macOS   | `~/Library/Application Support/com.friendlylabz.chummy` |
+| Windows | `%LOCALAPPDATA%\com.friendlylabz.chummy`                |
+
+It holds `settings.json` (versioned, written atomically, with a `.bak`
+backup), `loops/`, `models/`, `runtime/` (the built-in engine) and `logs/`.
+Secrets are never stored here; they go to the system keychain (Keychain,
+Credential Manager, or Secret Service on Linux). Set `HF_ENDPOINT` to use a
+Hugging Face mirror.
 
 ## Development
 
@@ -18,8 +63,8 @@ until you say so.
 
 - [Rust](https://rustup.rs). The version is pinned in `rust-toolchain.toml`, and rustup installs it automatically.
 - Node.js 22+
-- Platform libraries for Tauri:
-  - **Linux:** `sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev build-essential`
+- Platform libraries:
+  - **Linux:** `sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev libdbus-1-dev build-essential`. Saving API keys at runtime needs a Secret Service provider (GNOME Keyring, KWallet).
   - **macOS:** Xcode Command Line Tools (`xcode-select --install`)
   - **Windows:** Microsoft C++ Build Tools and WebView2 (preinstalled on Windows 10/11)
 
@@ -40,9 +85,10 @@ npm run tauri build    # MSI/NSIS · .dmg/.app · .deb/AppImage/.rpm
 **Checks**
 
 ```sh
-npm run check                                  # Svelte + TypeScript
+npm run check                                          # Svelte + TypeScript
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo test --workspace                                 # includes an end-to-end engine test (needs python on PATH)
+python3 -m unittest discover -s crates/local/engine    # engine parsers and server
 ```
 
 Pushing a tag like `v0.1.0` runs `.github/workflows/release.yml`, which builds
@@ -52,13 +98,15 @@ installers for all platforms and attaches them to a draft GitHub release.
 
 ```
 crates/          Pure Rust libraries, no Tauri dependency, tested on their own
-  sandbox/       Folder jail, permission grants, network policy
-  llm/           Provider configs + adapters (OpenAI-compatible, Anthropic, Gemini)
+  sandbox/       Workspace validation, protected locations, cap-std jail, grants
+  llm/           Provider configs, adapters (OpenAI-compatible, Anthropic, Gemini), probe
+  local/         Built-in engine: HF inspection, estimates, downloads, runtime, process
+    engine/      chummy_engine.py: the OpenAI-compatible transformers server
+  store/         Chummy folder layout, atomic versioned JSON, keychain secrets
   flow/          Loop graph schema (JSON) + interpreter
   tools/         Wasm (WASI) tool host
   scheduler/     Jobs, triggers, input sources
-  store/         Internal persistence (settings, library, sessions)
-src-tauri/       Thin app shell: state, IPC commands, window management
+src-tauri/       Thin app shell: state, IPC commands, native dialogs, windows
   capabilities/  One permission file per window
 ui/              Svelte 5 frontend, one Vite page per window
   index.html     Main window: chat, menu, sessions panel
@@ -68,24 +116,34 @@ ui/              Svelte 5 frontend, one Vite page per window
   src/lib/ipc.ts The only file that talks to Rust
 ```
 
+**Model pipeline:** `ProviderConfig` → `Client` → adapter → server-sent events →
+`ChatEvent` (`Text`, `Reasoning`, `ToolCall`, `MalformedToolCall`, `Done`). Tool
+calls are fully assembled and parsed before they're emitted. Invalid arguments
+come back as `MalformedToolCall` with the raw text, so a verification step can
+ask the model to fix them. The built-in engine is just another
+OpenAI-compatible endpoint (127.0.0.1, random bearer token, offline).
+
 **Rules of the road**
 
 - Rust is the source of truth and the only place sandbox decisions are made.
   Windows read state through commands and hear about changes through events.
+- The UI never sends a filesystem path to Rust for the workspace: Rust shows
+  the picker, validates the choice and asks for confirmation.
 - Each window only gets the commands it needs (`src-tauri/capabilities/`).
 - Adding a command: implement it in `src-tauri/src/commands/`, register it in
   `lib.rs`, list it in `build.rs`, allow it in the relevant capability files,
   and add a typed wrapper in `ui/src/lib/ipc.ts`.
 - Adding a window: add an HTML page in `ui/`, an entry in `vite.config.ts`, a
   variant in `src-tauri/src/windows.rs` and a capability file.
+- Settings schema changes: add a field with a default, or bump `VERSION` and add
+  a migration step in `src-tauri/src/settings.rs`.
 - Themes are sets of CSS variables (`ui/src/theme/`); components use only those
   variables.
 
 ## Roadmap
 
-1. **Skeleton & build system.** (this pass)
-2. **Sandbox, settings, models.** Folder jail, deny-by-default grants, the
-   Settings window, API keys in the OS keychain, and LLM adapters.
+1. **Skeleton & build system.** Done.
+2. **Sandbox, settings, models.** Done.
 3. **Loop engine & editor.** A versioned loop schema, a block registry, a Rust
    interpreter, and the full editor with JSON import/export. Chat unlocks here.
 4. **Tools & scheduler.** A Wasmtime tool runtime, plus scheduled jobs with
@@ -93,4 +151,6 @@ ui/              Svelte 5 frontend, one Vite page per window
 
 ## License
 
-[MIT](LICENSE) © 2026 Friendly Labs
+[MIT](LICENSE) © 2026 friendlylabz. The built-in engine downloads third-party
+open-source software at runtime (uv, CPython, PyTorch, transformers and their
+dependencies) under their own licenses; none of it is bundled with Chummy.

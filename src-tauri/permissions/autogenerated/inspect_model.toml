@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-inspect-model"
+description = "Enables the inspect_model command without any pre-configured scope."
+commands.allow = ["inspect_model"]
+
+[[permission]]
+identifier = "deny-inspect-model"
+description = "Denies the inspect_model command without any pre-configured scope."
+commands.deny = ["inspect_model"]

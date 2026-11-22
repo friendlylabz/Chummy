@@ -7,7 +7,15 @@ import { commands, events, type Settings, type Theme } from "$lib/ipc";
 const prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
 
 class SettingsStore {
-  current = $state<Settings>({ theme: "system" });
+  current = $state<Settings>({
+    theme: "system",
+    workspace: null,
+    permissions: { network: false, tools: false },
+    providers: [],
+    default_provider: null,
+    local: { device: "auto" },
+    hf_token_set: false,
+  });
   /** The theme actually shown, with "system" resolved. */
   resolvedTheme = $state<"dark" | "light">(prefersDark.matches ? "dark" : "light");
 
@@ -23,8 +31,7 @@ class SettingsStore {
 
   private apply(s: Settings) {
     this.current = s;
-    this.resolvedTheme =
-      s.theme === "system" ? (prefersDark.matches ? "dark" : "light") : s.theme;
+    this.resolvedTheme = s.theme === "system" ? (prefersDark.matches ? "dark" : "light") : s.theme;
     document.documentElement.dataset.theme = this.resolvedTheme;
   }
 }

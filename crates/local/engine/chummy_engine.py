@@ -1,0 +1,670 @@
+"""Chummy's built-in local engine.
+
+A deliberately small OpenAI-compatible server around Hugging Face
+`transformers`. It loads one model with `from_pretrained`, generates one answer
+at a time, and turns the model's tool-call text into OpenAI `tool_calls`.
+
+It is much simpler (and slower) than vLLM, llama.cpp or Ollama: no batching,
+no paged attention, no speculative decoding. It exists so a model can be run
+straight from a Hugging Face repo with no other software installed.
+
+Security:
+  * listens on 127.0.0.1 only, and every request must carry the bearer token
+    Chummy generated for this run;
+  * runs fully offline (HF_HUB_OFFLINE) from a folder Chummy downloaded;
+  * never sets trust_remote_code, and only loads safetensors weights.
+
+Only the Python standard library is needed at import time, so the parsers and
+the `--fake` backend can be tested without torch.
+
+This file is part of Chummy (MIT license).
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+import threading
+import time
+import uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Iterable, Iterator
+
+# --------------------------------------------------------------------------
+# Tool-call parsers
+#
+# Each parser knows the text that starts a tool-call section ("markers") and
+# how to turn the model's full output into (visible_text, calls). A call's
+# "arguments" is a JSON string; if the model wrote invalid JSON the raw text is
+# passed through and Chummy reports it as a malformed call.
+# --------------------------------------------------------------------------
+
+
+def _call(name: str, args) -> dict:
+    if isinstance(args, str):
+        raw = args
+    else:
+        raw = json.dumps(args if args is not None else {}, ensure_ascii=False)
+    return {"name": str(name), "arguments": raw}
+
+
+def _json_or_raw(text: str):
+    try:
+        return json.loads(text)
+    except (ValueError, TypeError):
+        return None
+
+
+def _calls_from_obj(obj) -> list[dict]:
+    """Accepts {"name", "arguments"|"parameters"} or a list of them."""
+    items = obj if isinstance(obj, list) else [obj]
+    calls = []
+    for it in items:
+        if isinstance(it, dict) and "name" in it:
+            args = it.get("arguments", it.get("parameters", {}))
+            calls.append(_call(it["name"], args))
+    return calls
+
+
+class Parser:
+    name = "none"
+    markers: tuple[str, ...] = ()
+
+    def parse(self, text: str) -> tuple[str, list[dict]]:
+        return text, []
+
+
+class HermesParser(Parser):
+    """<tool_call>{"name": ..., "arguments": {...}}</tool_call> (Qwen, Hermes, …)."""
+
+    name = "hermes"
+    markers = ("<tool_call>",)
+    _re = re.compile(r"<tool_call>\s*(.*?)\s*(?:</tool_call>|$)", re.S)
+
+    def parse(self, text):
+        start = text.find("<tool_call>")
+        if start < 0:
+            return text, []
+        calls = []
+        for body in self._re.findall(text[start:]):
+            obj = _json_or_raw(body)
+            if obj is None:
+                m = re.search(r'"name"\s*:\s*"([^"]+)"', body)
+                calls.append(_call(m.group(1) if m else "", body))
+            else:
+                calls.extend(_calls_from_obj(obj))
+        return text[:start].rstrip(), calls
+
+
+class MistralParser(Parser):
+    """[TOOL_CALLS][{...}] (older) or [TOOL_CALLS]name[ARGS]{...} (newer)."""
+
+    name = "mistral"
+    markers = ("[TOOL_CALLS]",)
+
+    def parse(self, text):
+        start = text.find("[TOOL_CALLS]")
+        if start < 0:
+            return text, []
+        calls = []
+        for part in text[start:].split("[TOOL_CALLS]"):
+            part = part.strip()
+            if not part:
+                continue
+            if "[ARGS]" in part:
+                name, _, args = part.partition("[ARGS]")
+                obj = _json_or_raw(args.strip())
+                calls.append(_call(name.strip(), obj if obj is not None else args.strip()))
+            else:
+                obj = _json_or_raw(part)
+                calls.extend(_calls_from_obj(obj) if obj is not None else [_call("", part)])
+        return text[:start].rstrip(), calls
+
+
+class Llama3JsonParser(Parser):
+    """Llama 3.x: optional <|python_tag|>, then {"name", "parameters"} objects
+    separated by ';'."""
+
+    name = "llama3_json"
+    markers = ("<|python_tag|>",)
+
+    def parse(self, text):
+        stripped = text.strip()
+        if "<|python_tag|>" in stripped:
+            before, _, body = stripped.partition("<|python_tag|>")
+        elif stripped.startswith("{") and '"name"' in stripped:
+            before, body = "", stripped
+        else:
+            return text, []
+        calls = []
+        for chunk in _split_top_level(body, ";"):
+            obj = _json_or_raw(chunk)
+            if obj is None:
+                calls.append(_call("", chunk))
+            else:
+                calls.extend(_calls_from_obj(obj))
+        return before.rstrip(), calls
+
+
+class GraniteParser(Parser):
+    """<|tool_call|>[{...}] (Granite, Phi-4-mini)."""
+
+    name = "granite"
+    markers = ("<|tool_call|>",)
+
+    def parse(self, text):
+        start = text.find("<|tool_call|>")
+        if start < 0:
+            return text, []
+        body = text[start + len("<|tool_call|>"):].replace("<|/tool_call|>", "").strip()
+        obj = _json_or_raw(body)
+        calls = _calls_from_obj(obj) if obj is not None else [_call("", body)]
+        return text[:start].rstrip(), calls
+
+
+def _split_top_level(s: str, sep: str) -> list[str]:
+    """Splits on `sep` outside of JSON strings/brackets."""
+    out, depth, cur, in_str, esc = [], 0, [], False, False
+    for ch in s:
+        if in_str:
+            cur.append(ch)
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            depth += 1
+        elif ch in "}]":
+            depth -= 1
+        if ch == sep and depth == 0:
+            out.append("".join(cur).strip())
+            cur = []
+        else:
+            cur.append(ch)
+    if "".join(cur).strip():
+        out.append("".join(cur).strip())
+    return [c for c in out if c]
+
+
+PARSERS = {p.name: p for p in (HermesParser(), MistralParser(), Llama3JsonParser(), GraniteParser())}
+
+
+# --------------------------------------------------------------------------
+# Streaming splitter: routes generated text into reasoning / visible text /
+# a held-back tool-call section, without ever showing a marker to the user.
+# --------------------------------------------------------------------------
+
+
+class StreamSplitter:
+    THINK_OPEN, THINK_CLOSE = "<think>", "</think>"
+
+    def __init__(self, parser: Parser):
+        self.parser = parser
+        self.full = ""  # everything after reasoning, for final parsing
+        self.pending = ""  # text not yet emitted (could start a marker)
+        self.in_think = False
+        self.in_tools = False
+        self.seen_visible = False
+
+    def _markers(self):
+        ms = list(self.parser.markers)
+        if self.parser.name == "llama3_json" and not self.seen_visible:
+            ms.append("{")  # Llama may answer with a bare JSON call
+        return ms
+
+    def feed(self, piece: str) -> list[tuple[str, str]]:
+        """Returns a list of ("reasoning"|"text", chunk)."""
+        out = []
+        self.pending += piece
+        while self.pending:
+            if self.in_think:
+                i = self.pending.find(self.THINK_CLOSE)
+                if i < 0:
+                    keep = _partial_suffix(self.pending, [self.THINK_CLOSE])
+                    emit = self.pending[: len(self.pending) - keep]
+                    if emit:
+                        out.append(("reasoning", emit))
+                    self.pending = self.pending[len(emit):]
+                    break
+                if i:
+                    out.append(("reasoning", self.pending[:i]))
+                self.pending = self.pending[i + len(self.THINK_CLOSE):].lstrip("\n")
+                self.in_think = False
+                continue
+            if self.in_tools:
+                self.full += self.pending
+                self.pending = ""
+                break
+            if not self.seen_visible and self.pending.lstrip().startswith(self.THINK_OPEN):
+                self.pending = self.pending.lstrip()[len(self.THINK_OPEN):]
+                self.in_think = True
+                continue
+            markers = self._markers()
+            hits = [(self.pending.find(m), m) for m in markers if m in self.pending]
+            if hits:
+                i, _ = min(hits)
+                before = self.pending[:i]
+                if before.strip() or (before and self.seen_visible):
+                    out.append(("text", before))
+                self.full += self.pending
+                self.pending = ""
+                self.in_tools = True
+                break
+            keep = _partial_suffix(self.pending, markers + ([self.THINK_OPEN] if not self.seen_visible else []))
+            emit = self.pending[: len(self.pending) - keep]
+            if emit:
+                if emit.strip():
+                    self.seen_visible = True
+                if self.seen_visible:
+                    out.append(("text", emit))
+                self.full += emit
+            self.pending = self.pending[len(emit):]
+            break
+        return out
+
+    def finish(self) -> tuple[list[tuple[str, str]], list[dict]]:
+        out = []
+        if self.pending and not self.in_tools and not self.in_think:
+            out.append(("text", self.pending))
+        self.full += self.pending if not self.in_think else ""
+        self.pending = ""
+        if not self.in_tools:
+            return out, []
+        _, calls = self.parser.parse(self.full)
+        return out, calls
+
+
+def _partial_suffix(s: str, markers: Iterable[str]) -> int:
+    """Length of the longest suffix of s that is a proper prefix of a marker."""
+    best = 0
+    for m in markers:
+        for n in range(min(len(m) - 1, len(s)), 0, -1):
+            if s.endswith(m[:n]):
+                best = max(best, n)
+                break
+    return best
+
+
+# --------------------------------------------------------------------------
+# Backends
+# --------------------------------------------------------------------------
+
+
+class FakeBackend:
+    """Deterministic stand-in used by tests: no torch needed."""
+
+    name = "fake-model"
+    device = "cpu"
+
+    def __init__(self, parser: Parser):
+        self.parser = parser
+
+    def load(self):
+        time.sleep(0.05)
+
+    def generate(self, messages, tools, max_tokens, temperature) -> Iterator[str]:
+        last = next((m.get("content") or "" for m in reversed(messages) if m["role"] == "user"), "")
+        if tools and "weather" in last.lower():
+            name = tools[0]["function"]["name"]
+            text = 'Let me check.\n<tool_call>\n{"name": "%s", "arguments": {"city": "Paris"}}\n</tool_call>' % name
+        elif "think" in last.lower():
+            text = "<think>Pondering.</think>Done thinking."
+        else:
+            text = "ready"
+        for i in range(0, len(text), 3):
+            yield text[i:i + 3]
+
+    def count(self, text: str) -> int:
+        return max(1, len(text) // 4)
+
+
+class TransformersBackend:
+    def __init__(self, model_dir: str, precision: str, device: str):
+        self.model_dir = model_dir
+        self.precision = precision
+        self.want_device = device
+        self.name = os.path.basename(os.path.normpath(model_dir))
+        self.device = "cpu"
+        self.tok = None
+        self.model = None
+        self.lock = threading.Lock()
+
+    def load(self):
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        dev = self.want_device
+        if dev == "auto":
+            if torch.cuda.is_available():
+                dev = "cuda"
+            elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+                dev = "mps"
+            else:
+                dev = "cpu"
+        self.device = dev
+
+        kwargs = {"trust_remote_code": False, "use_safetensors": True, "low_cpu_mem_usage": True}
+        if self.precision in ("int8", "int4"):
+            if dev != "cuda":
+                raise RuntimeError("8-bit and 4-bit loading need an NVIDIA GPU (bitsandbytes).")
+            from transformers import BitsAndBytesConfig
+
+            kwargs["quantization_config"] = (
+                BitsAndBytesConfig(load_in_8bit=True)
+                if self.precision == "int8"
+                else BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
+                                        bnb_4bit_compute_dtype=torch.bfloat16)
+            )
+            kwargs["device_map"] = "auto"
+        else:
+            if dev == "cuda":
+                half = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+            elif dev == "mps":
+                half = torch.float16
+            else:
+                half = torch.bfloat16
+            kwargs["dtype"] = half
+            if dev == "cuda":
+                kwargs["device_map"] = "auto"
+
+        self.tok = AutoTokenizer.from_pretrained(self.model_dir, trust_remote_code=False)
+        try:
+            self.model = AutoModelForCausalLM.from_pretrained(self.model_dir, **kwargs)
+        except TypeError:
+            # transformers < 4.56 calls it torch_dtype
+            if "dtype" in kwargs:
+                kwargs["torch_dtype"] = kwargs.pop("dtype")
+            self.model = AutoModelForCausalLM.from_pretrained(self.model_dir, **kwargs)
+        if dev in ("mps", "cpu") and "device_map" not in kwargs:
+            self.model.to(dev)
+        self.model.eval()
+
+    def _keep_tokens(self, parser: Parser) -> set[str]:
+        return set(parser.markers) | {"<think>", "</think>", "<|/tool_call|>", "[ARGS]", "</tool_call>"}
+
+    def generate(self, messages, tools, max_tokens, temperature, parser: Parser) -> Iterator[str]:
+        import torch
+        from transformers import TextIteratorStreamer
+
+        with self.lock:
+            enc = self.tok.apply_chat_template(
+                messages,
+                tools=tools or None,
+                add_generation_prompt=True,
+                return_tensors="pt",
+                return_dict=True,
+            )
+            enc = {k: v.to(self.model.device) for k, v in enc.items()}
+            streamer = TextIteratorStreamer(self.tok, skip_prompt=True, skip_special_tokens=False)
+            gen = dict(enc, streamer=streamer, max_new_tokens=max_tokens)
+            if temperature and temperature > 0:
+                gen.update(do_sample=True, temperature=float(temperature))
+            else:
+                gen.update(do_sample=False)
+            if self.tok.pad_token_id is None:
+                gen["pad_token_id"] = self.tok.eos_token_id
+
+            drop = [t for t in self.tok.all_special_tokens if t not in self._keep_tokens(parser)]
+            err = []
+
+            def run():
+                try:
+                    with torch.inference_mode():
+                        self.model.generate(**gen)
+                except Exception as e:  # surfaced after the stream ends
+                    err.append(e)
+                    streamer.end()
+
+            th = threading.Thread(target=run, daemon=True)
+            th.start()
+            for piece in streamer:
+                for t in drop:
+                    if t:
+                        piece = piece.replace(t, "")
+                if piece:
+                    yield piece
+            th.join()
+            if err:
+                raise err[0]
+
+    def count(self, text: str) -> int:
+        return len(self.tok.encode(text, add_special_tokens=False)) if self.tok else 0
+
+
+# --------------------------------------------------------------------------
+# OpenAI message conversion
+# --------------------------------------------------------------------------
+
+
+def to_hf_messages(messages: list[dict]) -> list[dict]:
+    out = []
+    for m in messages:
+        role = m.get("role")
+        content = m.get("content")
+        if isinstance(content, list):  # content parts → plain text
+            content = "".join(p.get("text", "") for p in content if isinstance(p, dict))
+        msg = {"role": role, "content": content or ""}
+        if role == "assistant" and m.get("tool_calls"):
+            calls = []
+            for c in m["tool_calls"]:
+                fn = c.get("function", {})
+                args = fn.get("arguments", {})
+                if isinstance(args, str):
+                    args = _json_or_raw(args) or {}
+                calls.append({"id": c.get("id"), "type": "function",
+                              "function": {"name": fn.get("name"), "arguments": args}})
+            msg["tool_calls"] = calls
+        if role == "tool":
+            if m.get("tool_call_id"):
+                msg["tool_call_id"] = m["tool_call_id"]
+            if m.get("name"):
+                msg["name"] = m["name"]
+        out.append(msg)
+    return out
+
+
+# --------------------------------------------------------------------------
+# HTTP server
+# --------------------------------------------------------------------------
+
+
+class State:
+    def __init__(self, backend, parser: Parser, token: str):
+        self.backend = backend
+        self.parser = parser
+        self.token = token
+        self.status = "loading"
+        self.error = None
+        self.gen_lock = threading.Lock()
+
+
+def make_handler(state: State):
+    class Handler(BaseHTTPRequestHandler):
+        server_version = "ChummyEngine/1"
+
+        def log_message(self, fmt, *args):  # quiet
+            pass
+
+        def _auth(self) -> bool:
+            if self.headers.get("Authorization", "") == f"Bearer {state.token}":
+                return True
+            self._json(401, {"error": {"message": "missing or wrong token"}})
+            return False
+
+        def _json(self, code, obj):
+            body = json.dumps(obj).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            if not self._auth():
+                return
+            if self.path == "/health":
+                self._json(200, {"status": state.status, "error": state.error,
+                                 "model": state.backend.name, "device": state.backend.device,
+                                 "parser": state.parser.name})
+            elif self.path == "/v1/models":
+                self._json(200, {"object": "list", "data": [{"id": state.backend.name, "object": "model"}]})
+            else:
+                self._json(404, {"error": {"message": "not found"}})
+
+        def do_POST(self):
+            if not self._auth():
+                return
+            if self.path != "/v1/chat/completions":
+                return self._json(404, {"error": {"message": "not found"}})
+            if state.status != "ready":
+                return self._json(503, {"error": {"message": f"model is {state.status}: {state.error or ''}"}})
+            try:
+                n = int(self.headers.get("Content-Length", "0"))
+                req = json.loads(self.rfile.read(n) or b"{}")
+            except ValueError:
+                return self._json(400, {"error": {"message": "invalid JSON"}})
+            with state.gen_lock:  # one answer at a time
+                self._complete(req)
+
+        def _complete(self, req: dict):
+            messages = to_hf_messages(req.get("messages", []))
+            tools = req.get("tools") or []
+            max_tokens = int(req.get("max_tokens") or req.get("max_completion_tokens") or 2048)
+            temperature = req.get("temperature")
+            stream = bool(req.get("stream"))
+            cid = "chatcmpl-" + uuid.uuid4().hex[:24]
+            created = int(time.time())
+            model = state.backend.name
+
+            def chunk(delta, finish=None, usage=None):
+                obj = {"id": cid, "object": "chat.completion.chunk", "created": created, "model": model,
+                       "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
+                if usage is not None:
+                    obj["choices"] = []
+                    obj["usage"] = usage
+                return obj
+
+            splitter = StreamSplitter(state.parser)
+            text_parts, reasoning_parts, produced = [], [], []
+
+            def pieces():
+                if isinstance(state.backend, FakeBackend):
+                    yield from state.backend.generate(messages, tools, max_tokens, temperature)
+                else:
+                    yield from state.backend.generate(messages, tools, max_tokens, temperature, state.parser)
+
+            if stream:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "close")
+                self.end_headers()
+
+            def send(obj):
+                self.wfile.write(b"data: " + json.dumps(obj, ensure_ascii=False).encode() + b"\n\n")
+                self.wfile.flush()
+
+            try:
+                for piece in pieces():
+                    produced.append(piece)
+                    for kind, s in splitter.feed(piece):
+                        if kind == "text":
+                            text_parts.append(s)
+                            if stream:
+                                send(chunk({"content": s}))
+                        else:
+                            reasoning_parts.append(s)
+                            if stream:
+                                send(chunk({"reasoning_content": s}))
+                tail, calls = splitter.finish()
+                for kind, s in tail:
+                    (text_parts if kind == "text" else reasoning_parts).append(s)
+                    if stream:
+                        send(chunk({"content": s} if kind == "text" else {"reasoning_content": s}))
+            except Exception as e:  # noqa: BLE001
+                if stream:
+                    send({"error": {"message": f"generation failed: {e}"}})
+                    return
+                return self._json(500, {"error": {"message": f"generation failed: {e}"}})
+
+            tool_calls = [{"index": i, "id": "call_" + uuid.uuid4().hex[:16], "type": "function",
+                           "function": {"name": c["name"], "arguments": c["arguments"]}}
+                          for i, c in enumerate(calls)]
+            out_text = "".join(produced)
+            usage = {"prompt_tokens": 0, "completion_tokens": state.backend.count(out_text)}
+            usage["total_tokens"] = usage["completion_tokens"]
+            finish = "tool_calls" if tool_calls else "stop"
+            if len(produced) and usage["completion_tokens"] >= max_tokens:
+                finish = "length" if not tool_calls else finish
+
+            if stream:
+                if tool_calls:
+                    send(chunk({"tool_calls": tool_calls}))
+                send(chunk({}, finish))
+                send(chunk({}, usage=usage))
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+            else:
+                msg = {"role": "assistant", "content": "".join(text_parts)}
+                if reasoning_parts:
+                    msg["reasoning_content"] = "".join(reasoning_parts)
+                if tool_calls:
+                    msg["tool_calls"] = [{k: v for k, v in c.items() if k != "index"} for c in tool_calls]
+                self._json(200, {"id": cid, "object": "chat.completion", "created": created, "model": model,
+                                 "choices": [{"index": 0, "message": msg, "finish_reason": finish}],
+                                 "usage": usage})
+
+    return Handler
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--model", help="folder with config.json, tokenizer and *.safetensors")
+    ap.add_argument("--parser", default="hermes", choices=sorted(PARSERS))
+    ap.add_argument("--port", type=int, required=True)
+    ap.add_argument("--precision", default="half", choices=["half", "int8", "int4"])
+    ap.add_argument("--device", default="auto", choices=["auto", "cuda", "mps", "cpu"])
+    ap.add_argument("--fake", action="store_true", help="use a canned model (tests)")
+    a = ap.parse_args(argv)
+
+    token = os.environ.get("CHUMMY_ENGINE_TOKEN", "")
+    if len(token) < 16:
+        print("CHUMMY_ENGINE_TOKEN must be set", file=sys.stderr)
+        return 2
+
+    parser = PARSERS[a.parser]
+    backend = FakeBackend(parser) if a.fake else TransformersBackend(a.model, a.precision, a.device)
+    state = State(backend, parser, token)
+
+    def load():
+        try:
+            print(f"loading {backend.name}…", flush=True)
+            backend.load()
+            state.status = "ready"
+            print(f"ready on {backend.device}", flush=True)
+        except Exception as e:  # noqa: BLE001
+            state.status = "error"
+            state.error = f"{type(e).__name__}: {e}"
+            print(f"failed to load: {state.error}", file=sys.stderr, flush=True)
+
+    threading.Thread(target=load, daemon=True).start()
+    httpd = ThreadingHTTPServer(("127.0.0.1", a.port), make_handler(state))
+    httpd.daemon_threads = True
+    print(f"listening on 127.0.0.1:{a.port}", flush=True)
+    try:
+        httpd.serve_forever(poll_interval=0.2)
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

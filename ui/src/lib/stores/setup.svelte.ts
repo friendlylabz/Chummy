@@ -1,15 +1,20 @@
 /**
- * First-run setup state. Chat stays disabled until Rust reports that both a
- * model and an agent loop are configured.
+ * First-run setup state. Chat stays disabled until Rust reports a workspace
+ * folder, a model and an agent loop are all configured.
  */
 import { commands, events, type SetupStatus } from "$lib/ipc";
 
 class SetupStore {
-  status = $state<SetupStatus>({ model_configured: false, loop_configured: false });
+  status = $state<SetupStatus>({
+    workspace_configured: false,
+    model_configured: false,
+    loop_configured: false,
+  });
   loaded = $state(false);
 
   get ready() {
-    return this.status.model_configured && this.status.loop_configured;
+    const s = this.status;
+    return s.workspace_configured && s.model_configured && s.loop_configured;
   }
 
   async init() {

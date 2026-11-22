@@ -5,21 +5,77 @@
 //! dependency and are tested on their own.
 
 mod commands;
+mod dialogs;
 mod events;
+mod settings;
 mod state;
 mod windows;
 
+use tauri::{Manager, RunEvent};
+
+use commands::{general, local, providers, workspace};
 use state::AppState;
 
 pub fn run() {
-    tauri::Builder::default()
-        .manage(AppState::default())
+    let app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            // The Chummy folder: one per-user folder for settings, loops,
+            // models and the local engine runtime.
+            let data_dir = app.path().app_local_data_dir()?;
+            // The app's own install location is protected too.
+            let exe_dir = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|p| p.to_path_buf()));
+            let resource_dir = app.path().resource_dir().ok();
+            let extra: Vec<&std::path::Path> = exe_dir
+                .iter()
+                .chain(resource_dir.iter())
+                .map(|p| p.as_path())
+                .collect();
+            let state = AppState::open(&data_dir, &extra)?;
+            app.manage(state);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
-            commands::setup_status,
-            commands::open_window,
-            commands::get_settings,
-            commands::set_theme,
+            general::setup_status,
+            general::open_window,
+            general::get_settings,
+            general::set_theme,
+            general::app_info,
+            general::reveal_data_dir,
+            workspace::choose_workspace,
+            workspace::clear_workspace,
+            workspace::set_permission,
+            providers::list_presets,
+            providers::save_provider,
+            providers::delete_provider,
+            providers::set_default_provider,
+            providers::list_models,
+            providers::test_provider,
+            local::local_status,
+            local::inspect_model,
+            local::download_model,
+            local::cancel_download,
+            local::delete_local_model,
+            local::install_runtime,
+            local::cancel_runtime_install,
+            local::remove_runtime,
+            local::set_hf_token,
+            local::set_local_device,
+            local::stop_engine,
+            local::engine_log,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Chummy");
+        .build(tauri::generate_context!())
+        .expect("error while building Chummy");
+
+    app.run(|app, event| {
+        if let RunEvent::Exit = event
+            && let Some(state) = app.try_state::<AppState>()
+        {
+            // Never leave a model loaded in the background.
+            tauri::async_runtime::block_on(state.engine.stop());
+        }
+    });
 }

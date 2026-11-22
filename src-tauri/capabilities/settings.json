@@ -1,12 +1,38 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "settings",
-  "description": "Settings window.",
-  "windows": ["settings"],
+  "description": "Settings window: everything configurable.",
+  "windows": [
+    "settings"
+  ],
   "permissions": [
     "core:default",
-    "allow-setup-status",
+    "allow-open-window",
     "allow-get-settings",
-    "allow-set-theme"
+    "allow-set-theme",
+    "allow-app-info",
+    "allow-reveal-data-dir",
+    "allow-choose-workspace",
+    "allow-clear-workspace",
+    "allow-set-permission",
+    "allow-list-presets",
+    "allow-save-provider",
+    "allow-delete-provider",
+    "allow-set-default-provider",
+    "allow-list-models",
+    "allow-test-provider",
+    "allow-local-status",
+    "allow-inspect-model",
+    "allow-download-model",
+    "allow-cancel-download",
+    "allow-delete-local-model",
+    "allow-install-runtime",
+    "allow-cancel-runtime-install",
+    "allow-remove-runtime",
+    "allow-set-hf-token",
+    "allow-set-local-device",
+    "allow-stop-engine",
+    "allow-engine-log",
+    "allow-setup-status"
   ]
 }

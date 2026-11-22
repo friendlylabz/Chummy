@@ -9,11 +9,15 @@
 
   const disabled = $derived(!setup.ready);
   const placeholder = $derived.by(() => {
-    if (!setup.status.model_configured && !setup.status.loop_configured)
-      return "Connect a model and add an agent loop to start chatting";
-    if (!setup.status.model_configured) return "Connect a model to start chatting";
-    if (!setup.status.loop_configured) return "Add an agent loop to start chatting";
-    return "Message your agent…";
+    const s = setup.status;
+    const missing = [
+      !s.workspace_configured && "choose a workspace folder",
+      !s.model_configured && "connect a model",
+      !s.loop_configured && "add an agent loop",
+    ].filter(Boolean) as string[];
+    if (!missing.length) return "Message your agent…";
+    const list = missing.length > 1 ? `${missing.slice(0, -1).join(", ")} and ${missing.at(-1)}` : missing[0];
+    return `To start chatting, ${list}`;
   });
 
   function send() {

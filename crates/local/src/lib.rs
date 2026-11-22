@@ -1,0 +1,85 @@
+//! # chummy-local
+//!
+//! Chummy's **basic** built-in local engine. It runs a Hugging Face model with
+//! `transformers` (`from_pretrained`), one request at a time. It is far less
+//! capable than vLLM, llama.cpp or Ollama, which Chummy also supports. Its
+//! appeal is that it needs nothing else installed.
+//!
+//! The pipeline, start to finish:
+//!
+//! 1. [`hf::Hub::inspect`] checks a repo before anything is downloaded: is it
+//!    a text model, does it run without custom code, are the weights in
+//!    safetensors, does its chat template support tools, and do we have a
+//!    parser for its tool-call format? It also reports the download size and
+//!    estimates memory use on common setups ([`estimate`]) and on this
+//!    computer ([`hardware`]).
+//! 2. [`download::download`] fetches only the files needed, resumably, checks
+//!    each file's SHA-256, and reports progress.
+//! 3. [`runtime`] installs Python, PyTorch (with the right CUDA/Metal/CPU
+//!    build) and transformers the first time a local model is run, using
+//!    `uv`. Nothing is bundled with the app.
+//! 4. [`engine::Engine`] starts `chummy_engine.py`, an OpenAI-compatible server
+//!    on 127.0.0.1 protected by a random token, and stops it on request or when
+//!    the app exits. The rest of Chummy talks to it like any other endpoint.
+
+pub mod download;
+pub mod engine;
+pub mod estimate;
+pub mod hardware;
+pub mod hf;
+pub mod runtime;
+
+/// The engine script, embedded so it always matches this build.
+pub const ENGINE_SCRIPT: &str = include_str!("../engine/chummy_engine.py");
+
+#[derive(Debug, thiserror::Error)]
+pub enum LocalError {
+    #[error("“{0}” isn't a valid Hugging Face model id (expected owner/name)")]
+    BadRepoId(String),
+    #[error("no model called “{0}” on Hugging Face")]
+    NotFound(String),
+    #[error(
+        "this model needs permission: accept its license on huggingface.co, then add your \
+         Hugging Face token in Settings → Local engine"
+    )]
+    NeedsAccess,
+    #[error("Hugging Face rejected the token (HTTP {0})")]
+    BadToken(u16),
+    #[error("couldn't reach {0}")]
+    Network(String),
+    #[error("HTTP {status} from {url}")]
+    Http { status: u16, url: String },
+    #[error("{0}")]
+    Check(String),
+    #[error("not enough free disk space: need {need_gb:.1} GB, have {have_gb:.1} GB")]
+    DiskSpace { need_gb: f64, have_gb: f64 },
+    #[error("{file} is damaged (checksum mismatch); it will be downloaded again next time")]
+    Checksum { file: String },
+    #[error("cancelled")]
+    Cancelled,
+    #[error("{context}: {source}")]
+    Io {
+        context: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{0}")]
+    Runtime(String),
+}
+
+impl LocalError {
+    pub(crate) fn io(context: impl Into<String>) -> impl FnOnce(std::io::Error) -> LocalError {
+        let context = context.into();
+        move |source| LocalError::Io { context, source }
+    }
+}
+
+/// Shared HTTP client settings.
+pub(crate) fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .read_timeout(std::time::Duration::from_secs(60))
+        .user_agent(concat!("Chummy/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .expect("http client")
+}

@@ -1,36 +1,47 @@
 <script lang="ts">
   import { commands } from "$lib/ipc";
   import { setup } from "$lib/stores/setup.svelte";
+  import { settings } from "$lib/stores/settings.svelte";
   import Button from "$lib/components/Button.svelte";
   import Icon from "$lib/components/Icon.svelte";
+
+  const s = $derived(setup.status);
+  const folderName = $derived(settings.current.workspace?.path.split(/[\\/]/).filter(Boolean).pop() ?? "");
 </script>
 
 <section class="card" aria-labelledby="welcome-title">
   <div class="mark" aria-hidden="true"></div>
   <h1 id="welcome-title">Welcome to Chummy</h1>
-  <p class="lede">Two things to set up before your first chat.</p>
+  <p class="lede">Three things to set up before your first chat.</p>
 
   <ol class="steps">
-    <li class:done={setup.status.model_configured}>
-      <span class="num">
-        {#if setup.status.model_configured}<Icon name="check" size={14} />{:else}1{/if}
-      </span>
+    <li class:done={s.workspace_configured}>
+      <span class="num">{#if s.workspace_configured}<Icon name="check" size={14} />{:else}1{/if}</span>
       <div class="text">
-        <h2>Connect a model</h2>
-        <p>Ollama, any OpenAI-compatible server, OpenAI, Anthropic or Gemini.</p>
+        <h2>Choose a workspace folder</h2>
+        <p>{s.workspace_configured ? `Using “${folderName}”.` : "The one folder agents may read and change."}</p>
       </div>
-      <Button
-        variant={setup.status.model_configured ? "secondary" : "primary"}
-        onclick={() => commands.openWindow("settings")}
-      >
-        Open settings
+      <Button variant={s.workspace_configured ? "secondary" : "primary"} icon="folder" onclick={() => commands.chooseWorkspace()}>
+        {s.workspace_configured ? "Change" : "Choose…"}
       </Button>
     </li>
 
-    <li class:done={setup.status.loop_configured}>
-      <span class="num">
-        {#if setup.status.loop_configured}<Icon name="check" size={14} />{:else}2{/if}
-      </span>
+    <li class:done={s.model_configured}>
+      <span class="num">{#if s.model_configured}<Icon name="check" size={14} />{:else}2{/if}</span>
+      <div class="text">
+        <h2>Connect a model</h2>
+        <p>Ollama, LM Studio, llama.cpp, vLLM, a cloud provider, or the built-in engine.</p>
+      </div>
+      <Button
+        variant={!s.model_configured && s.workspace_configured ? "primary" : "secondary"}
+        onclick={() => commands.openWindow("settings")}
+      >
+        {s.model_configured ? "Manage" : "Open settings"}
+      </Button>
+    </li>
+
+    <li class:done={s.loop_configured}>
+      <span class="num">{#if s.loop_configured}<Icon name="check" size={14} />{:else}3{/if}</span>
       <div class="text">
         <h2>Add an agent loop</h2>
         <p>Import a loop file or build your own, block by block.</p>
@@ -41,13 +52,13 @@
 
   <p class="note">
     <Icon name="shield" size={14} />
-    Agents only ever see the one folder you choose, and stay offline unless you allow it.
+    Agents only ever see the folder you choose, and stay offline unless you allow it.
   </p>
 </section>
 
 <style>
   .card {
-    width: min(520px, 100%);
+    width: min(540px, 100%);
     margin: auto;
     padding: var(--space-6) var(--space-6) var(--space-5);
     border-radius: var(--radius-xl);
@@ -71,7 +82,6 @@
     margin-top: var(--space-1);
     color: var(--text-muted);
   }
-
   .steps {
     list-style: none;
     margin: var(--space-5) 0 0;
@@ -83,7 +93,7 @@
     display: flex;
     align-items: center;
     gap: var(--space-3);
-    padding: var(--space-3) var(--space-3) var(--space-3) var(--space-3);
+    padding: var(--space-3);
     border-radius: var(--radius-lg);
     background: var(--surface-2);
     border: 1px solid var(--border);
@@ -115,8 +125,9 @@
   .text p {
     color: var(--text-muted);
     font-size: var(--text-sm);
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-
   .note {
     display: flex;
     align-items: center;

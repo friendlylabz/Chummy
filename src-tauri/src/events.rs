@@ -1,9 +1,13 @@
 //! Event names broadcast from Rust to every window. Keep in sync with
 //! `ui/src/lib/ipc.ts`.
 
-/// Payload: [`chummy_store::Settings`].
+/// Payload: `SettingsView`.
 pub const SETTINGS_CHANGED: &str = "settings:changed";
-/// Payload: [`crate::state::SetupStatus`]. Emitted once providers and loops
-/// can be configured (pass 2+).
-#[allow(dead_code)]
+/// Payload: `SetupStatus`.
 pub const SETUP_CHANGED: &str = "setup:changed";
+/// Payload: `DownloadEvent`.
+pub const LOCAL_DOWNLOAD: &str = "local:download";
+/// Payload: `RuntimeEvent`.
+pub const LOCAL_RUNTIME: &str = "local:runtime";
+/// Payload: `chummy_local::engine::EngineStatus`.
+pub const LOCAL_ENGINE: &str = "local:engine";

@@ -12,6 +12,9 @@ publish = false
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+reqwest.workspace = true
+futures-util.workspace = true
+tokio.workspace = true
 
 
 [lints]

@@ -1,71 +1,41 @@
 //! # chummy-llm
 //!
-//! LLM backends, configured entirely in the app.
+//! One pipeline from any model endpoint to the loop engine.
 //!
-//! One OpenAI-compatible adapter covers OpenAI, Ollama, llama.cpp, LM Studio,
-//! vLLM and OpenRouter. Anthropic and Gemini get native adapters. Every adapter
-//! streams and normalizes tool calls into one internal format, so the loop engine
-//! never sees provider differences.
+//! ```text
+//! ProviderConfig ──► Client ──► adapter (OpenAI-compatible | Anthropic | Gemini)
+//!                                  │  HTTP + server-sent events
+//!                                  ▼
+//!                     ChatEvent stream: Text · Reasoning · ToolCall · MalformedToolCall · Done
+//! ```
 //!
-//! Status: pass 1 defines configuration types. Adapters arrive in pass 2.
+//! Every adapter turns its provider's wire format into the same [`ChatEvent`]s,
+//! so nothing downstream knows which provider is in use. Tool-call arguments
+//! are always fully assembled and parsed before they are emitted. Arguments a
+//! model got wrong become [`ChatEvent::MalformedToolCall`] (with the raw text)
+//! instead of an error, so a verification step can ask the model to fix them.
+//!
+//! The OpenAI-compatible adapter covers OpenAI, Ollama, LM Studio, llama.cpp,
+//! vLLM, OpenRouter, Groq, Mistral, DeepSeek, xAI and Chummy's own built-in
+//! engine.
+//!
+//! Model connections are made by the app on the user's behalf and are separate
+//! from an agent's network permission, which stays off unless granted.
 
-use serde::{Deserialize, Serialize};
+mod anthropic;
+mod client;
+mod config;
+mod error;
+mod gemini;
+mod openai;
+mod probe;
+mod sse;
+mod types;
 
-/// Which wire protocol a provider speaks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProviderKind {
-    /// Any server implementing the OpenAI Chat Completions API.
-    OpenAiCompatible,
-    OpenAi,
-    Ollama,
-    Anthropic,
-    Gemini,
-}
-
-impl ProviderKind {
-    /// Sensible default base URL, if the provider has one.
-    pub fn default_base_url(self) -> Option<&'static str> {
-        match self {
-            ProviderKind::OpenAiCompatible => None,
-            ProviderKind::OpenAi => Some("https://api.openai.com/v1"),
-            ProviderKind::Ollama => Some("http://localhost:11434/v1"),
-            ProviderKind::Anthropic => Some("https://api.anthropic.com"),
-            ProviderKind::Gemini => Some("https://generativelanguage.googleapis.com"),
-        }
-    }
-}
-
-/// A configured model endpoint. API keys are never stored here; they live in
-/// the OS keychain and are looked up by `id`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProviderConfig {
-    /// Stable identifier, also used as the keychain entry name.
-    pub id: String,
-    /// Display name shown in the UI.
-    pub name: String,
-    pub kind: ProviderKind,
-    pub base_url: String,
-    /// Model name sent to the endpoint, e.g. `llama3.2:3b`.
-    pub model: String,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn provider_config_round_trips_as_json() {
-        let cfg = ProviderConfig {
-            id: "local".into(),
-            name: "Local Ollama".into(),
-            kind: ProviderKind::Ollama,
-            base_url: ProviderKind::Ollama.default_base_url().unwrap().into(),
-            model: "llama3.2:3b".into(),
-        };
-        let json = serde_json::to_string(&cfg).unwrap();
-        assert!(json.contains("\"kind\":\"ollama\""));
-        let back: ProviderConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(cfg, back);
-    }
-}
+pub use client::Client;
+pub use config::{LocalModel, Precision, Preset, ProviderConfig, ProviderKind, presets};
+pub use error::LlmError;
+pub use probe::{ProbeReport, ProbeStep, StepStatus, probe};
+pub use types::{
+    ChatEvent, ChatRequest, ChatResponse, Message, Role, StopReason, ToolCall, ToolSpec, Usage,
+};
