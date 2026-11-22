@@ -164,19 +164,31 @@ fn unpack(bytes: &[u8], dest: &Path) -> Result<(), String> {
 }
 
 /// Writes Chummy's runner and helper module (they ship inside Chummy and are
-/// rewritten at every start, so they always match this version).
+/// refreshed at every start, so they always match this version). Each file
+/// is replaced atomically, and only if it changed, so a tool running at the
+/// same time never sees a half-written file.
 pub fn write_support(paths: &ToolPaths) -> Result<(), ToolError> {
     let pkg = paths.support.join("chummy");
     std::fs::create_dir_all(&pkg).map_err(ToolError::io("writing the tool runner"))?;
-    std::fs::write(
-        paths.support.join("_runner.py"),
-        include_str!("../support/_runner.py"),
-    )
-    .and_then(|_| {
-        std::fs::write(
+    for (path, text) in [
+        (
+            paths.support.join("_runner.py"),
+            include_str!("../support/_runner.py"),
+        ),
+        (
             pkg.join("__init__.py"),
             include_str!("../support/chummy/__init__.py"),
-        )
-    })
-    .map_err(ToolError::io("writing the tool runner"))
+        ),
+    ] {
+        if std::fs::read_to_string(&path).is_ok_and(|t| t == text) {
+            continue;
+        }
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = path.with_extension(format!("tmp-{}-{n}", std::process::id()));
+        std::fs::write(&tmp, text)
+            .and_then(|_| std::fs::rename(&tmp, &path))
+            .map_err(ToolError::io("writing the tool runner"))?;
+    }
+    Ok(())
 }
