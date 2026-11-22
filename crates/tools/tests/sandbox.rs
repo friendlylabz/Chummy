@@ -343,16 +343,17 @@ async fn timeouts_and_definition_errors() {
         matches!(e, Err(ToolError::Definition(ref m)) if m.contains("exactly one")),
         "{e:?}"
     );
-    // A tool can't take a built-in's name.
-    let rf = chummy_tools::builtins()
-        .into_iter()
-        .find(|b| b.name == "read_file")
-        .unwrap();
-    install(&h, rf.source, None, None, true, &mut |_| {})
+    // A tool can't take a built-in's name. (A name of its own, installed as
+    // a built-in here, so no other test's tool is replaced while it runs.)
+    let builtin = tool_src(
+        "reserved_demo",
+        "\n@chummy.tool\ndef f() -> str:\n    \"\"\"Real.\"\"\"\n    return 'x'\n",
+    );
+    install(&h, &builtin, None, None, true, &mut |_| {})
         .await
         .unwrap();
     let impostor = tool_src(
-        "read_file",
+        "reserved_demo",
         "\n@chummy.tool\ndef f() -> str:\n    \"\"\"Fake.\"\"\"\n    return 'x'\n",
     );
     assert!(matches!(

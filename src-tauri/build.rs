@@ -1,9 +1,25 @@
 fn main() {
+    // Windows needs a manifest asking for Common Controls v6 (dialogs, the
+    // tray menu). tauri-build would only put it in the app's binary, so test
+    // binaries would fail to start (STATUS_ENTRYPOINT_NOT_FOUND). Instead the
+    // linker embeds the same manifest into every binary, tests included.
+    let windows_msvc = std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
+    let mut attributes = tauri_build::Attributes::new();
+    if windows_msvc {
+        let manifest = std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
+            .join("windows-app-manifest.xml");
+        println!("cargo:rerun-if-changed={}", manifest.display());
+        println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+        println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
+        attributes = attributes
+            .windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest());
+    }
     // Declaring the app's commands here makes Tauri generate one permission per
     // command (`allow-<command>`). Each window's capability file then lists only
     // the commands that window may call.
-    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
-        tauri_build::AppManifest::new().commands(&[
+    tauri_build::try_build(
+        attributes.app_manifest(tauri_build::AppManifest::new().commands(&[
             "setup_status",
             "open_window",
             "get_settings",
@@ -68,7 +84,7 @@ fn main() {
             "answer_ask",
             "close_activity",
             "close_choice",
-        ]),
-    ))
+        ])),
+    )
     .expect("failed to run tauri-build");
 }
