@@ -157,6 +157,8 @@ until you say so.
 
 ![The Logs window: a run's blocks with their inputs and outputs](docs/screenshot-logs.png)
 
+![What happened, under a reply in chat](docs/screenshot-chat-steps.png)
+
 ![A block function open in the editor: the model block and Run tool in a cycle](docs/screenshot-function.png)
 
 <p>
