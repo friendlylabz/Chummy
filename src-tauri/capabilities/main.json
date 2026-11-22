@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "Main chat window: setup status, opening windows, theme, workspace choice.",
+  "description": "Main chat window: chat with agents, runs, opening windows, theme.",
   "windows": [
     "main"
   ],
@@ -11,6 +11,11 @@
     "allow-open-window",
     "allow-get-settings",
     "allow-set-theme",
-    "allow-choose-workspace"
+    "allow-set-active-agent",
+    "allow-get-chat",
+    "allow-clear-chat",
+    "allow-send-message",
+    "allow-stop-run",
+    "allow-list-runs"
   ]
 }

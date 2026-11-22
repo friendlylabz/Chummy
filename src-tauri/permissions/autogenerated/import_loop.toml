@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-import-loop"
+description = "Enables the import_loop command without any pre-configured scope."
+commands.allow = ["import_loop"]
+
+[[permission]]
+identifier = "deny-import-loop"
+description = "Denies the import_loop command without any pre-configured scope."
+commands.deny = ["import_loop"]

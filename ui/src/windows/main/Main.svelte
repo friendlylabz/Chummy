@@ -1,20 +1,33 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { setup } from "$lib/stores/setup.svelte";
+  import { settings } from "$lib/stores/settings.svelte";
+  import { chat } from "$lib/stores/chat.svelte";
+  import { runs } from "$lib/stores/runs.svelte";
   import Button from "$lib/components/Button.svelte";
-  import Icon from "$lib/components/Icon.svelte";
   import MainMenu from "./MainMenu.svelte";
   import Onboarding from "./Onboarding.svelte";
   import Composer from "./Composer.svelte";
+  import ChatView from "./ChatView.svelte";
+  import AgentPicker from "./AgentPicker.svelte";
   import SessionsPanel from "./SessionsPanel.svelte";
 
   let menuOpen = $state(false);
   let sessionsOpen = $state(true);
 
+  const agent = $derived(settings.current.agents.find((a) => a.id === settings.current.active_agent) ?? null);
+
   onMount(() => {
     setup.init();
+    chat.init();
+    runs.init();
     // Narrow windows start with the sessions panel tucked away.
     if (window.innerWidth < 900) sessionsOpen = false;
+  });
+
+  // Load the conversation whenever the active agent changes.
+  $effect(() => {
+    chat.show(agent?.id ?? null);
   });
 </script>
 
@@ -22,28 +35,21 @@
   <div class="center">
     <header class="topbar">
       <Button variant="ghost" icon="menu" iconOnly aria-label="Open menu" onclick={() => (menuOpen = true)} />
-      <div class="agent" title="Active agent">
-        <Icon name="bot" size={15} />
-        <span>{setup.ready ? "Agent" : "No agent"}</span>
-      </div>
+      <AgentPicker />
       <div class="spacer"></div>
       {#if !sessionsOpen}
-        <Button
-          variant="ghost"
-          icon="panel-right"
-          iconOnly
-          aria-label="Show sessions"
-          onclick={() => (sessionsOpen = true)}
-        />
+        <Button variant="ghost" icon="panel-right" iconOnly aria-label="Show sessions" onclick={() => (sessionsOpen = true)} />
       {/if}
     </header>
 
     <main class="chat">
-      <div class="transcript">
-        {#if setup.loaded && !setup.ready}
-          <Onboarding />
-        {/if}
-      </div>
+      {#if setup.loaded && setup.ready && agent}
+        <ChatView {agent} />
+      {:else}
+        <div class="transcript">
+          {#if setup.loaded}<Onboarding />{/if}
+        </div>
+      {/if}
       <div class="composer-wrap">
         <Composer />
       </div>
@@ -65,7 +71,6 @@
     display: flex;
     flex-direction: column;
   }
-
   .topbar {
     flex: none;
     display: flex;
@@ -74,23 +79,9 @@
     height: var(--topbar-h);
     padding: 0 var(--space-2);
   }
-  .agent {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    height: 28px;
-    padding: 0 var(--space-3);
-    border-radius: var(--radius-full);
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    color: var(--text-muted);
-    font-size: var(--text-sm);
-    font-weight: 550;
-  }
   .spacer {
     flex: 1;
   }
-
   .chat {
     flex: 1;
     min-height: 0;
@@ -106,6 +97,6 @@
   }
   .composer-wrap {
     flex: none;
-    padding: 0 var(--space-5) var(--space-5);
+    padding: var(--space-2) var(--space-5) var(--space-5);
   }
 </style>

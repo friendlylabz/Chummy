@@ -11,3 +11,13 @@ pub const LOCAL_DOWNLOAD: &str = "local:download";
 pub const LOCAL_RUNTIME: &str = "local:runtime";
 /// Payload: `chummy_local::engine::EngineStatus`.
 pub const LOCAL_ENGINE: &str = "local:engine";
+/// Payload: `Vec<LoopSummary>`.
+pub const LOOPS_CHANGED: &str = "loops:changed";
+/// Payload: `RunInfo`.
+pub const RUN_STARTED: &str = "run:started";
+/// Payload: `RunEvent`.
+pub const RUN_EVENT: &str = "run:event";
+/// Payload: `RunFinished`.
+pub const RUN_FINISHED: &str = "run:finished";
+/// Payload: `ChatMessageEvent`.
+pub const CHAT_MESSAGE: &str = "chat:message";

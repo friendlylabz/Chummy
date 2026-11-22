@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { commands, type AppInfo } from "$lib/ipc";
+  import { commands, events, type AppInfo } from "$lib/ipc";
   import { settings } from "$lib/stores/settings.svelte";
   import { local } from "$lib/stores/local.svelte";
+  import { loops } from "$lib/stores/loops.svelte";
   import SideNav from "$lib/components/SideNav.svelte";
   import ThemeSwitch from "$lib/components/ThemeSwitch.svelte";
   import Toggle from "$lib/components/Toggle.svelte";
@@ -10,26 +11,35 @@
   import Icon from "$lib/components/Icon.svelte";
   import ModelsPane from "./ModelsPane.svelte";
   import LocalEnginePane from "./LocalEnginePane.svelte";
-  import WorkspacePane from "./WorkspacePane.svelte";
+  import AgentsPane from "./AgentsPane.svelte";
 
-  type Section = "models" | "engine" | "workspace" | "permissions" | "appearance" | "about";
+  type Section = "agents" | "models" | "engine" | "permissions" | "appearance" | "about";
 
-  const sections: { id: Section; label: string; icon: "bot" | "cpu" | "folder" | "shield" | "palette" | "info" }[] = [
+  const sections: { id: Section; label: string; icon: "bot" | "cpu" | "shield" | "palette" | "info" | "chat" }[] = [
+    { id: "agents", label: "Agents", icon: "chat" },
     { id: "models", label: "Models", icon: "bot" },
     { id: "engine", label: "Local engine", icon: "cpu" },
-    { id: "workspace", label: "Workspace", icon: "folder" },
     { id: "permissions", label: "Permissions", icon: "shield" },
     { id: "appearance", label: "Appearance", icon: "palette" },
     { id: "about", label: "About", icon: "info" },
   ];
 
-  let active = $state<Section>("models");
+  const fromHash = (h: string): Section | null => {
+    const id = h.replace(/^#/, "");
+    return sections.some((x) => x.id === id) ? (id as Section) : null;
+  };
+  let active = $state<Section>(fromHash(location.hash) ?? "models");
   let modelsView = $state<"list" | "pick" | "form" | "local">("list");
   let info = $state<AppInfo | null>(null);
   const perms = $derived(settings.current.permissions);
 
   onMount(async () => {
     local.init();
+    loops.init();
+    events.onGoto((section) => {
+      const s = fromHash(section);
+      if (s) go(s);
+    });
     info = await commands.appInfo();
   });
 
@@ -63,8 +73,8 @@
         <ModelsPane bind:view={modelsView} gotoEngine={() => go("engine")} />
       {:else if active === "engine"}
         <LocalEnginePane addModel={() => go("models", "local")} />
-      {:else if active === "workspace"}
-        <WorkspacePane />
+      {:else if active === "agents"}
+        <AgentsPane gotoModels={() => go("models", "pick")} />
       {:else if active === "permissions"}
         <h1>Permissions</h1>
         <p class="pane-sub">Everything beyond the workspace folder is off until you turn it on. Turning something on asks you to confirm.</p>
@@ -102,7 +112,7 @@
         <div class="card card-pad">
           <div class="row-title">Chummy folder</div>
           <p class="muted small" style="margin: 4px 0 var(--space-3)">
-            Settings, saved loops, downloaded models and the local engine live here. Agents can never see it.
+            Settings, saved loops, chat history, downloaded models and the local engine live here. Agents can never see it.
             API keys aren't here; they're in your system keychain.
           </p>
           <div class="mono small path" data-selectable>{info?.data_dir}</div>

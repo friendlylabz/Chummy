@@ -1,6 +1,7 @@
 <script lang="ts">
   import { commands } from "$lib/ipc";
   import { setup } from "$lib/stores/setup.svelte";
+  import { settings } from "$lib/stores/settings.svelte";
   import Icon, { type IconName } from "$lib/components/Icon.svelte";
   import ThemeSwitch from "$lib/components/ThemeSwitch.svelte";
 
@@ -19,15 +20,20 @@
     {
       title: "Chat",
       items: [
-        { label: "New chat", icon: "plus", disabled: !setup.ready },
-        { label: "History", icon: "history", disabled: true, hint: "Soon" },
+        {
+          label: "New chat",
+          icon: "plus",
+          disabled: !setup.ready || !settings.current.active_agent,
+          run: () => settings.current.active_agent && commands.clearChat(settings.current.active_agent),
+        },
       ],
     },
     {
       title: "Agents",
       items: [
+        { label: "Agents", icon: "bot", run: () => commands.openWindow("settings", "agents") },
         { label: "Loop editor", icon: "flow", run: () => commands.openWindow("editor") },
-        { label: "Import loop…", icon: "import", disabled: true, hint: "Soon" },
+        { label: "Import loop…", icon: "import", run: () => commands.openWindow("editor", "import") },
       ],
     },
     {

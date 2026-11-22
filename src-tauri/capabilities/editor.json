@@ -1,12 +1,26 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "editor",
-  "description": "Loop editor window.",
+  "description": "Loop editor: library, catalog, validation, test runs.",
   "windows": [
     "editor"
   ],
   "permissions": [
     "core:default",
-    "allow-get-settings"
+    "allow-get-settings",
+    "allow-open-window",
+    "allow-setup-status",
+    "allow-block-catalog",
+    "allow-loop-templates",
+    "allow-list-loops",
+    "allow-load-loop",
+    "allow-analyze-loop",
+    "allow-save-loop",
+    "allow-delete-loop",
+    "allow-import-loop",
+    "allow-export-loop",
+    "allow-test-run",
+    "allow-stop-run",
+    "allow-list-runs"
   ]
 }

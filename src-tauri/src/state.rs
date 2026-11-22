@@ -2,7 +2,7 @@
 //! through commands and hear about changes through events.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
@@ -15,6 +15,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use crate::events;
+use crate::library::Library;
 use crate::settings::{self, Settings};
 
 /// Keychain service name for all of Chummy's secrets.
@@ -22,12 +23,26 @@ pub const KEYCHAIN_SERVICE: &str = "com.friendlylabz.chummy";
 /// Keychain entry for the Hugging Face token.
 pub const HF_TOKEN_KEY: &str = "huggingface";
 
+/// A loop run in progress.
+#[derive(Debug, Clone, Serialize)]
+pub struct RunInfo {
+    pub run_id: String,
+    pub agent_id: Option<String>,
+    pub title: String,
+    /// "chat" or "test".
+    pub source: &'static str,
+    pub started_at: u64,
+    #[serde(skip)]
+    pub cancel: Arc<AtomicBool>,
+}
+
 pub struct AppState {
     pub dirs: ChummyDirs,
     pub protected: Protected,
     pub secrets: Box<dyn SecretStore>,
     pub runtime: RuntimePaths,
     pub engine: Engine,
+    pub library: Library,
     settings: Mutex<Settings>,
     doc: JsonDoc<Settings>,
     /// Set if settings had to be recovered at startup.
@@ -36,14 +51,19 @@ pub struct AppState {
     pub downloads: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// Cancel flag for a runtime install in progress.
     pub runtime_install: Mutex<Option<Arc<AtomicBool>>>,
+    /// Folders the user picked and confirmed, waiting to be attached to an
+    /// agent, by one-time token. The UI only ever holds the token.
+    pub picked_workspaces: Mutex<HashMap<String, PathBuf>>,
+    /// Runs in progress, by run id.
+    pub runs: Mutex<HashMap<String, RunInfo>>,
 }
 
 /// What the main window needs to know before it unlocks chat.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct SetupStatus {
-    pub workspace_configured: bool,
     pub model_configured: bool,
     pub loop_configured: bool,
+    pub agent_configured: bool,
 }
 
 impl AppState {
@@ -58,16 +78,21 @@ impl AppState {
         let protected = Protected::for_current_user(&chummy);
 
         let doc = JsonDoc::<Settings>::new(&dirs.settings_file);
+        // Version on disk before migration, so an upgraded file is rewritten.
+        let disk_version = std::fs::read(&dirs.settings_file)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .and_then(|v| v["version"].as_u64());
         let loaded = doc.load(settings::migrate).map_err(|e| e.to_string())?;
         let mut s = loaded.value;
-        // A workspace that is no longer valid (deleted, or the rules got
-        // stricter) is dropped rather than trusted.
-        if let Some(ws) = &s.workspace
-            && chummy_sandbox::validate_workspace(&ws.path, &protected).is_err()
+        if s.active_agent
+            .as_ref()
+            .is_some_and(|a| s.agent(a).is_none())
         {
-            s.workspace = None;
+            s.active_agent = s.agents.first().map(|a| a.id.clone());
         }
-        if loaded.recovery.is_some() || s.version != settings::VERSION {
+        let outdated = disk_version.is_some_and(|v| v < settings::VERSION as u64);
+        if loaded.recovery.is_some() || outdated || s.version != settings::VERSION {
             s.version = settings::VERSION;
             let _ = doc.save(&s);
         }
@@ -76,6 +101,7 @@ impl AppState {
         let engine = Engine::new(&runtime.python, &runtime.engine_dir);
         Ok(Self {
             secrets: Box::new(Keychain::new(KEYCHAIN_SERVICE)),
+            library: Library::new(&dirs.loops),
             engine,
             runtime,
             protected,
@@ -84,6 +110,8 @@ impl AppState {
             recovery: loaded.recovery,
             downloads: Mutex::new(HashMap::new()),
             runtime_install: Mutex::new(None),
+            picked_workspaces: Mutex::new(HashMap::new()),
+            runs: Mutex::new(HashMap::new()),
             dirs,
         })
     }
@@ -110,19 +138,20 @@ impl AppState {
             events::SETTINGS_CHANGED,
             crate::commands::general::settings_view(self, &snapshot),
         );
-        let _ = app.emit(events::SETUP_CHANGED, self.setup_status());
+        self.broadcast_setup(app);
         Ok(r)
+    }
+
+    pub fn broadcast_setup(&self, app: &AppHandle) {
+        let _ = app.emit(events::SETUP_CHANGED, self.setup_status());
     }
 
     pub fn setup_status(&self) -> SetupStatus {
         let s = lock(&self.settings);
         SetupStatus {
-            workspace_configured: s.workspace.is_some(),
             model_configured: !s.providers.is_empty(),
-            loop_configured: std::fs::read_dir(&self.dirs.loops).is_ok_and(|d| {
-                d.flatten()
-                    .any(|e| e.path().extension().is_some_and(|x| x == "json"))
-            }),
+            loop_configured: !self.library.list().is_empty(),
+            agent_configured: !s.agents.is_empty(),
         }
     }
 
@@ -145,22 +174,23 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let state = AppState::open(&tmp.path().join("chummy"), &[]).unwrap();
         let status = state.setup_status();
-        assert!(
-            !status.workspace_configured && !status.model_configured && !status.loop_configured
-        );
+        assert!(!status.agent_configured && !status.model_configured && !status.loop_configured);
         assert!(tmp.path().join("chummy/models").is_dir());
+        assert!(tmp.path().join("chummy/chats").is_dir());
         assert!(state.recovery.is_none());
     }
 
     #[test]
-    fn invalid_saved_workspace_is_dropped() {
+    fn v1_settings_upgrade_on_open() {
         let tmp = tempfile::tempdir().unwrap();
         let data = tmp.path().join("chummy");
         std::fs::create_dir_all(&data).unwrap();
-        // A workspace pointing inside the Chummy folder must never load.
-        let bad = serde_json::json!({ "version": 1, "workspace": { "path": data.join("models"), "confirmed_at": 1 } });
-        std::fs::write(data.join("settings.json"), bad.to_string()).unwrap();
+        let v1 =
+            serde_json::json!({ "version": 1, "workspace": { "path": "/tmp", "confirmed_at": 1 } });
+        std::fs::write(data.join("settings.json"), v1.to_string()).unwrap();
         let state = AppState::open(&data, &[]).unwrap();
-        assert!(state.settings().workspace.is_none());
+        assert_eq!(state.settings().version, settings::VERSION);
+        let saved = std::fs::read_to_string(data.join("settings.json")).unwrap();
+        assert!(!saved.contains("workspace"));
     }
 }

@@ -50,9 +50,19 @@ export interface Workspace {
   confirmed_at: number;
 }
 
+export interface Agent {
+  id: string;
+  name: string;
+  loop_id: string;
+  model: string | null;
+  workspace: Workspace;
+  created_at: number;
+}
+
 export interface Settings {
   theme: Theme;
-  workspace: Workspace | null;
+  agents: Agent[];
+  active_agent: string | null;
   permissions: { network: boolean; tools: boolean };
   providers: ProviderView[];
   default_provider: string | null;
@@ -61,9 +71,9 @@ export interface Settings {
 }
 
 export interface SetupStatus {
-  workspace_configured: boolean;
   model_configured: boolean;
   loop_configured: boolean;
+  agent_configured: boolean;
 }
 
 export interface AppInfo {
@@ -212,6 +222,127 @@ export type RuntimeEvent =
   | { kind: "failed"; error: string }
   | { kind: "cancelled" };
 
+// ---- loops
+
+export type ValueKind = "text" | "list" | "any";
+export interface PortSpec {
+  name: string;
+  label: string;
+  kind: ValueKind;
+}
+export interface Position {
+  x: number;
+  y: number;
+}
+export interface Block {
+  id: string;
+  type: string;
+  label: string;
+  position: Position;
+  params: Record<string, unknown>;
+}
+export interface PortRef {
+  block: string;
+  port: string;
+}
+export interface Link {
+  from: PortRef;
+  to: PortRef;
+}
+export interface RunLimits {
+  max_steps: number;
+  max_llm_calls: number;
+}
+export interface LoopFile {
+  format: "chummy.loop";
+  version: number;
+  name: string;
+  description: string;
+  limits: RunLimits;
+  blocks: Block[];
+  links: Link[];
+}
+export interface Issue {
+  severity: "error" | "warning";
+  block: string | null;
+  message: string;
+}
+export interface Analysis {
+  ports: Record<string, { inputs: PortSpec[]; outputs: PortSpec[] }>;
+  issues: Issue[];
+  ok: boolean;
+}
+export type ParamKind =
+  | { kind: "text" }
+  | { kind: "multiline" }
+  | { kind: "number"; min: number; max: number; step: number }
+  | { kind: "integer"; min: number; max: number }
+  | { kind: "bool" }
+  | { kind: "model" };
+export type ParamSpec = ParamKind & { key: string; label: string; help: string; optional: boolean };
+export type Category = "start" | "think" | "text" | "flow" | "workspace" | "finish";
+export interface BlockInfo {
+  kind: string;
+  label: string;
+  category: Category;
+  description: string;
+  params: ParamSpec[];
+  default_params: Record<string, unknown>;
+}
+export interface Template {
+  id: string;
+  name: string;
+  description: string;
+  file: LoopFile;
+}
+export interface LoopSummary {
+  id: string;
+  name: string;
+  description: string;
+  blocks: number;
+  ok: boolean;
+  modified: number;
+}
+
+// ---- chat and runs
+
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant" | "notice";
+  text: string;
+  at: number;
+  run?: { status: string; steps: number; llm_calls: number };
+}
+export interface RunInfo {
+  run_id: string;
+  agent_id: string | null;
+  title: string;
+  source: "chat" | "test";
+  started_at: number;
+}
+export type BlockState = "waiting" | "running" | "done" | "failed";
+export type FlowEvent =
+  | { type: "block_state"; block: string; label: string; state: BlockState }
+  | { type: "block_output"; block: string; port: string; preview: string }
+  | { type: "llm_text"; block: string; text: string }
+  | { type: "reply"; block: string; text: string };
+export type RunStatus =
+  | { status: "completed" }
+  | { status: "stopped" }
+  | { status: "limit_reached"; message: string }
+  | { status: "failed"; block: string | null; error: string };
+export interface RunOutcome {
+  status: RunStatus;
+  replies: string[];
+  steps: number;
+  llm_calls: number;
+  waiting: string[];
+}
+export interface PickedWorkspace {
+  token: string;
+  path: string;
+}
+
 // ---------------------------------------------------------------- browser fallback
 
 const inTauri = isTauri();
@@ -219,12 +350,13 @@ const inTauri = isTauri();
 const mock = {
   settings: {
     theme: "system",
-    workspace: null,
     permissions: { network: false, tools: false },
     providers: [],
     default_provider: null,
     local: { device: "auto" },
     hf_token_set: false,
+    agents: [],
+    active_agent: null,
   } as Settings,
   listeners: new Set<(s: Settings) => void>(),
 };
@@ -246,11 +378,12 @@ export function errorText(e: unknown): string {
 export const commands = {
   setupStatus: () =>
     call<SetupStatus>("setup_status", undefined, () => ({
-      workspace_configured: false,
       model_configured: false,
       loop_configured: false,
+      agent_configured: false,
     })),
-  openWindow: (window: AppWindow) => call<void>("open_window", { window }, () => undefined),
+  openWindow: (window: AppWindow, section: string | null = null) =>
+    call<void>("open_window", { window, section }, () => undefined),
   getSettings: () => call<Settings>("get_settings", undefined, () => mock.settings),
   setTheme: (theme: Theme) =>
     call<void>("set_theme", { theme }, () => {
@@ -261,8 +394,32 @@ export const commands = {
     call<AppInfo>("app_info", undefined, () => ({ version: "dev", data_dir: "(browser preview)", recovery: null })),
   revealDataDir: () => call<void>("reveal_data_dir"),
 
-  chooseWorkspace: () => call<boolean>("choose_workspace", undefined, () => false),
-  clearWorkspace: () => call<void>("clear_workspace"),
+  pickWorkspace: (agentId: string | null) =>
+    call<PickedWorkspace | null>("pick_workspace", { agentId }, () => null),
+  saveAgent: (
+    agent: { id: string; name: string; loop_id: string; model: string | null },
+    workspaceToken: string | null,
+  ) => call<string>("save_agent", { agent, workspaceToken }),
+  deleteAgent: (id: string) => call<boolean>("delete_agent", { id }),
+  setActiveAgent: (id: string) => call<void>("set_active_agent", { id }),
+
+  blockCatalog: () => call<BlockInfo[]>("block_catalog", undefined, () => []),
+  loopTemplates: () => call<Template[]>("loop_templates", undefined, () => []),
+  listLoops: () => call<LoopSummary[]>("list_loops", undefined, () => []),
+  loadLoop: (id: string) => call<LoopFile>("load_loop", { id }),
+  analyzeLoop: (file: LoopFile) => call<Analysis>("analyze_loop", { file }),
+  saveLoop: (id: string | null, file: LoopFile) => call<string>("save_loop", { id, file }),
+  deleteLoop: (id: string) => call<boolean>("delete_loop", { id }),
+  importLoop: () => call<string | null>("import_loop", undefined, () => null),
+  exportLoop: (id: string) => call<boolean>("export_loop", { id }),
+
+  getChat: (agentId: string) => call<ChatMessage[]>("get_chat", { agentId }, () => []),
+  clearChat: (agentId: string) => call<void>("clear_chat", { agentId }),
+  sendMessage: (agentId: string, text: string) => call<string>("send_message", { agentId, text }),
+  testRun: (file: LoopFile, agentId: string | null, message: string, overrides: Record<string, string>) =>
+    call<string>("test_run", { file, agentId, message, overrides }),
+  stopRun: (runId: string) => call<void>("stop_run", { runId }),
+  listRuns: () => call<RunInfo[]>("list_runs", undefined, () => []),
   setPermission: (kind: "network" | "tools", enabled: boolean) =>
     call<boolean>("set_permission", { kind, enabled }, () => false),
 
@@ -307,4 +464,14 @@ export const events = {
   onDownload: (cb: (e: DownloadEvent) => void) => on("local:download", cb),
   onRuntime: (cb: (e: RuntimeEvent) => void) => on("local:runtime", cb),
   onEngine: (cb: (e: EngineStatus) => void) => on("local:engine", cb),
+  onLoopsChanged: (cb: (l: LoopSummary[]) => void) => on("loops:changed", cb),
+  onRunStarted: (cb: (r: RunInfo) => void) => on("run:started", cb),
+  onRunEvent: (cb: (e: { run_id: string; event: FlowEvent }) => void) => on("run:event", cb),
+  onRunFinished: (cb: (e: { run_id: string; agent_id: string | null; outcome: RunOutcome }) => void) =>
+    on("run:finished", cb),
+  onChatMessage: (
+    cb: (e: { agent_id: string; message?: ChatMessage; cleared?: boolean }) => void,
+  ) => on("chat:message", cb),
+  /** Another window asked this one to show a section. */
+  onGoto: (cb: (section: string) => void) => on("window:goto", cb),
 };

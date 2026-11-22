@@ -150,7 +150,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(r["choices"][0]["finish_reason"], "tool_calls")
 
     def test_streamed_text(self):
-        body = {"messages": [{"role": "user", "content": "hi"}], "stream": True}
+        body = {"messages": [{"role": "user", "content": "Reply with the single word: ready"}], "stream": True}
         raw = self.req("/v1/chat/completions", body).read().decode()
         events = [l[6:] for l in raw.splitlines() if l.startswith("data: ")]
         self.assertEqual(events[-1], "[DONE]")

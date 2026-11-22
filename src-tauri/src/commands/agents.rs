@@ -1,0 +1,292 @@
+//! Agents (each with its own workspace) and permissions.
+//!
+//! The UI never sends a filesystem path: Rust shows the folder picker,
+//! validates the choice, asks for confirmation, and hands the UI a one-time
+//! token that stands for the folder.
+
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, State, WebviewWindow};
+
+use super::{CmdResult, err, now};
+use crate::dialogs;
+use crate::settings::{Agent, Settings, Workspace};
+use crate::state::{AppState, lock};
+
+#[derive(Serialize)]
+pub struct PickedWorkspace {
+    /// Pass this to `save_agent`.
+    pub token: String,
+    /// For display only.
+    pub path: String,
+}
+
+/// Name of another agent whose workspace overlaps `path`, if any.
+fn overlapping_agent<'a>(s: &'a Settings, path: &Path, except: Option<&str>) -> Option<&'a Agent> {
+    s.agents
+        .iter()
+        .filter(|a| Some(a.id.as_str()) != except)
+        .find(|a| chummy_sandbox::paths_overlap(&a.workspace.path, path))
+}
+
+fn random_hex(n: usize) -> String {
+    let mut b = vec![0u8; n];
+    let _ = getrandom::fill(&mut b);
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// Lets the user pick and confirm a workspace folder for an agent. Returns
+/// `None` if they cancelled or the folder can't be used (after explaining why).
+#[tauri::command]
+pub async fn pick_workspace(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    agent_id: Option<String>,
+) -> CmdResult<Option<PickedWorkspace>> {
+    let label = window.label().to_string();
+    let Some(picked) =
+        dialogs::pick_folder(&app, &label, "Choose this agent's workspace folder").await
+    else {
+        return Ok(None);
+    };
+
+    let path = match chummy_sandbox::validate_workspace(&picked, &state.protected) {
+        Ok(p) => p,
+        Err(e) => {
+            let reason = e.to_string();
+            let reason = reason[..1].to_uppercase() + &reason[1..];
+            let msg = format!(
+                "{}\n\n{reason}.\n\nFor safety, agents can never use a whole drive, your home folder, system \
+                 folders, hidden settings folders, or Chummy's own folder. Pick or create a folder just \
+                 for this agent's work, such as Documents/Agents/Researcher.",
+                picked.display()
+            );
+            dialogs::error(&app, &label, "That folder can't be used", &msg).await;
+            return Ok(None);
+        }
+    };
+
+    if let Some(other) = overlapping_agent(&state.settings(), &path, agent_id.as_deref()) {
+        let msg = format!(
+            "{}\n\nThis folder overlaps “{}”'s workspace ({}). Each agent needs its own folder, and \
+             one agent's folder can't be inside another's.",
+            path.display(),
+            other.name,
+            other.workspace.path.display()
+        );
+        dialogs::error(&app, &label, "That folder is already in use", &msg).await;
+        return Ok(None);
+    }
+
+    let msg = format!(
+        "{}\n\nThis agent will be able to read, create, change and delete files in this folder and its \
+         subfolders. It won't be able to see anything outside it.",
+        path.display()
+    );
+    if !dialogs::confirm(
+        &app,
+        &label,
+        "Give this agent this folder?",
+        &msg,
+        "Use this folder",
+        true,
+    )
+    .await
+    {
+        return Ok(None);
+    }
+
+    let token = random_hex(16);
+    let display = path.display().to_string();
+    lock(&state.picked_workspaces).insert(token.clone(), path);
+    Ok(Some(PickedWorkspace {
+        token,
+        path: display,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AgentDraft {
+    /// Empty for a new agent.
+    #[serde(default)]
+    pub id: String,
+    pub name: String,
+    pub loop_id: String,
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+/// Creates or updates an agent. New agents need a `workspace_token` from
+/// `pick_workspace`; existing agents keep their folder unless one is given.
+#[tauri::command]
+pub fn save_agent(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    agent: AgentDraft,
+    workspace_token: Option<String>,
+) -> CmdResult<String> {
+    let name = agent.name.trim().to_string();
+    if name.is_empty() {
+        return Err("Give the agent a name.".into());
+    }
+    if state.library.load(&agent.loop_id).is_err() {
+        return Err("Choose a loop for this agent.".into());
+    }
+    let s = state.settings();
+    let model = agent.model.filter(|m| !m.is_empty());
+    if let Some(m) = &model
+        && s.provider(m).is_none()
+    {
+        return Err("That model connection no longer exists.".into());
+    }
+    let existing = (!agent.id.is_empty())
+        .then(|| s.agent(&agent.id).cloned())
+        .flatten();
+    if !agent.id.is_empty() && existing.is_none() {
+        return Err("That agent no longer exists.".into());
+    }
+
+    let workspace = match workspace_token {
+        Some(t) => {
+            let path = lock(&state.picked_workspaces)
+                .remove(&t)
+                .ok_or("Choose the workspace folder again.")?;
+            // Re-check: the folder could have changed since it was picked.
+            let path = chummy_sandbox::validate_workspace(&path, &state.protected).map_err(err)?;
+            if let Some(other) =
+                overlapping_agent(&s, &path, existing.as_ref().map(|a| a.id.as_str()))
+            {
+                return Err(format!(
+                    "That folder overlaps “{}”'s workspace.",
+                    other.name
+                ));
+            }
+            Workspace {
+                path,
+                confirmed_at: now(),
+            }
+        }
+        None => existing
+            .as_ref()
+            .map(|a| a.workspace.clone())
+            .ok_or("Choose a workspace folder for this agent.")?,
+    };
+
+    let id = existing
+        .as_ref()
+        .map(|a| a.id.clone())
+        .unwrap_or_else(|| format!("agent-{}", random_hex(4)));
+    let created_at = existing.as_ref().map(|a| a.created_at).unwrap_or_else(now);
+    let new = Agent {
+        id: id.clone(),
+        name,
+        loop_id: agent.loop_id,
+        model,
+        workspace,
+        created_at,
+    };
+    state.update(&app, |s| {
+        match s.agents.iter_mut().find(|a| a.id == new.id) {
+            Some(a) => *a = new,
+            None => s.agents.push(new),
+        }
+        if s.active_agent.is_none() {
+            s.active_agent = Some(id.clone());
+        }
+    })?;
+    Ok(id)
+}
+
+/// Deletes an agent and its chat history after a native confirmation. Files in
+/// its workspace are left alone.
+#[tauri::command]
+pub async fn delete_agent(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    id: String,
+) -> CmdResult<bool> {
+    let Some(agent) = state.settings().agent(&id).cloned() else {
+        return Ok(false);
+    };
+    let msg = format!(
+        "“{}” and its chat history will be deleted. The files in its workspace ({}) are not touched.",
+        agent.name,
+        agent.workspace.path.display()
+    );
+    if !dialogs::confirm(
+        &app,
+        window.label(),
+        "Delete this agent?",
+        &msg,
+        "Delete agent",
+        true,
+    )
+    .await
+    {
+        return Ok(false);
+    }
+    crate::commands::chat::stop_agent_runs(&state, &id);
+    let _ = std::fs::remove_file(crate::commands::chat::chat_path(&state, &id)?);
+    state.update(&app, |s| {
+        s.agents.retain(|a| a.id != id);
+        if s.active_agent.as_deref() == Some(id.as_str()) {
+            s.active_agent = s.agents.first().map(|a| a.id.clone());
+        }
+    })?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn set_active_agent(app: AppHandle, state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    if state.settings().agent(&id).is_none() {
+        return Err("That agent no longer exists.".into());
+    }
+    state.update(&app, |s| s.active_agent = Some(id))
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionKind {
+    Network,
+    Tools,
+}
+
+/// Turns a permission on (after a native confirmation) or off (immediately).
+/// Returns the new value.
+#[tauri::command]
+pub async fn set_permission(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    kind: PermissionKind,
+    enabled: bool,
+) -> CmdResult<bool> {
+    if enabled {
+        let (title, msg, ok) = match kind {
+            PermissionKind::Network => (
+                "Allow internet access?",
+                "Agents and their tools will be able to reach the internet. They could send content \
+                 from their workspaces to websites.\n\nThis doesn't affect the model connections you set \
+                 up in Models; those are separate.",
+                "Allow internet access",
+            ),
+            PermissionKind::Tools => (
+                "Allow tools?",
+                "Agents will be able to run the tools you install. Tools stay locked to the agent's \
+                 workspace folder, and still need internet access turned on to go online.",
+                "Allow tools",
+            ),
+        };
+        if !dialogs::confirm(&app, window.label(), title, msg, ok, true).await {
+            return Ok(false);
+        }
+    }
+    state.update(&app, |s| match kind {
+        PermissionKind::Network => s.permissions.network = enabled,
+        PermissionKind::Tools => s.permissions.tools = enabled,
+    })?;
+    Ok(enabled)
+}

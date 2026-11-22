@@ -35,6 +35,13 @@ pub use paths::{RelPath, RelPathError};
 pub use protected::{Protected, ProtectedPath, Scope};
 pub use workspace::{WorkspaceError, validate_workspace};
 
+/// True if one folder is the other or contains it (case-insensitive where the
+/// platform is). Both paths should be canonical. Used to keep every agent's
+/// workspace separate.
+pub fn paths_overlap(a: &std::path::Path, b: &std::path::Path) -> bool {
+    paths::is_within(a, b) || paths::is_within(b, a)
+}
+
 /// A capability beyond plain file access inside the workspace.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -79,6 +86,16 @@ mod tests {
         let grants = Grants::default();
         assert!(grants.is_empty());
         assert!(!grants.allows(&Grant::Network { hosts: vec![] }));
+    }
+
+    #[test]
+    fn overlap_is_either_direction() {
+        use std::path::Path;
+        assert!(paths_overlap(Path::new("/a/b"), Path::new("/a/b")));
+        assert!(paths_overlap(Path::new("/a/b/c"), Path::new("/a/b")));
+        assert!(paths_overlap(Path::new("/a"), Path::new("/a/b")));
+        assert!(!paths_overlap(Path::new("/a/b"), Path::new("/a/bc")));
+        assert!(!paths_overlap(Path::new("/a/x"), Path::new("/a/y")));
     }
 
     #[test]

@@ -14,6 +14,8 @@ pub struct ChummyDirs {
     pub models: PathBuf,
     /// The built-in engine's Python runtime (installed on first use).
     pub runtime: PathBuf,
+    /// Chat history, one file per agent.
+    pub chats: PathBuf,
     /// Log files.
     pub logs: PathBuf,
 }
@@ -27,6 +29,7 @@ impl ChummyDirs {
             loops: root.join("loops"),
             models: root.join("models"),
             runtime: root.join("runtime"),
+            chats: root.join("chats"),
             logs: root.join("logs"),
             root,
         }
@@ -40,6 +43,7 @@ impl ChummyDirs {
             &self.loops,
             &self.models,
             &self.runtime,
+            &self.chats,
             &self.logs,
         ] {
             std::fs::create_dir_all(dir)?;

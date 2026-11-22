@@ -3,7 +3,7 @@
 //! singleton: opening one that already exists focuses it.
 
 use serde::Deserialize;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -49,17 +49,34 @@ impl AppWindow {
     }
 }
 
-/// Opens `window`, or focuses it if it is already open.
-pub fn open(app: &AppHandle, window: AppWindow) -> tauri::Result<()> {
+/// Event sent to an already-open window to show a section (Settings pane,
+/// editor loop). Payload: the section string.
+pub const GOTO: &str = "window:goto";
+
+/// Opens `window`, or focuses it if it is already open. `section` picks what
+/// to show (e.g. `agents` in Settings, a loop id in the editor); new windows
+/// get it as the URL fragment.
+pub fn open(app: &AppHandle, window: AppWindow, section: Option<&str>) -> tauri::Result<()> {
+    let section = section.filter(|s| {
+        s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == ':')
+    });
     if let Some(existing) = app.get_webview_window(window.label()) {
         existing.unminimize()?;
         existing.show()?;
         existing.set_focus()?;
+        if let Some(s) = section {
+            existing.emit_to(window.label(), GOTO, s)?;
+        }
         return Ok(());
     }
 
     let (w, h, min_w, min_h) = window.size();
-    WebviewWindowBuilder::new(app, window.label(), WebviewUrl::App(window.page().into()))
+    let url = match section {
+        Some(s) => format!("{}#{s}", window.page()),
+        None => window.page().to_string(),
+    };
+    WebviewWindowBuilder::new(app, window.label(), WebviewUrl::App(url.into()))
         .title(window.title())
         .inner_size(w, h)
         .min_inner_size(min_w, min_h)

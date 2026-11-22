@@ -9,7 +9,8 @@ const prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
 class SettingsStore {
   current = $state<Settings>({
     theme: "system",
-    workspace: null,
+    agents: [],
+    active_agent: null,
     permissions: { network: false, tools: false },
     providers: [],
     default_provider: null,

@@ -9,7 +9,7 @@ use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 
 use super::{CmdResult, err};
-use crate::settings::{LocalSettings, Permissions, Settings, Theme, Workspace};
+use crate::settings::{Agent, LocalSettings, Permissions, Settings, Theme};
 use crate::state::{AppState, HF_TOKEN_KEY, SetupStatus};
 use crate::windows::{self, AppWindow};
 
@@ -25,7 +25,8 @@ pub struct ProviderView {
 #[derive(Debug, Clone, Serialize)]
 pub struct SettingsView {
     pub theme: Theme,
-    pub workspace: Option<Workspace>,
+    pub agents: Vec<Agent>,
+    pub active_agent: Option<String>,
     pub permissions: Permissions,
     pub providers: Vec<ProviderView>,
     pub default_provider: Option<String>,
@@ -36,7 +37,8 @@ pub struct SettingsView {
 pub fn settings_view(state: &AppState, s: &Settings) -> SettingsView {
     SettingsView {
         theme: s.theme,
-        workspace: s.workspace.clone(),
+        agents: s.agents.clone(),
+        active_agent: s.active_agent.clone(),
         permissions: s.permissions.clone(),
         providers: s
             .providers
@@ -52,8 +54,7 @@ pub fn settings_view(state: &AppState, s: &Settings) -> SettingsView {
     }
 }
 
-/// Whether a workspace, a model and a loop are configured. Chat stays disabled
-/// until all three are.
+/// Whether a model, a loop and an agent are configured. Chat needs an agent.
 #[tauri::command]
 pub fn setup_status(state: State<'_, AppState>) -> SetupStatus {
     state.setup_status()
@@ -62,8 +63,12 @@ pub fn setup_status(state: State<'_, AppState>) -> SetupStatus {
 /// Opens (or focuses) a secondary window. Async on purpose: creating windows
 /// from a synchronous command can deadlock on Windows.
 #[tauri::command]
-pub async fn open_window(app: AppHandle, window: AppWindow) -> CmdResult<()> {
-    windows::open(&app, window).map_err(err)
+pub async fn open_window(
+    app: AppHandle,
+    window: AppWindow,
+    section: Option<String>,
+) -> CmdResult<()> {
+    windows::open(&app, window, section.as_deref()).map_err(err)
 }
 
 #[tauri::command]

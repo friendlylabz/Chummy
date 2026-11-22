@@ -3,10 +3,12 @@
 //!
 //! Errors cross to the UI as plain, user-readable strings.
 
+pub mod agents;
+pub mod chat;
 pub mod general;
 pub mod local;
+pub mod loops;
 pub mod providers;
-pub mod workspace;
 
 pub type CmdResult<T> = Result<T, String>;
 

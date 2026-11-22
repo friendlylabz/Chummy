@@ -7,13 +7,14 @@
 mod commands;
 mod dialogs;
 mod events;
+mod library;
 mod settings;
 mod state;
 mod windows;
 
 use tauri::{Manager, RunEvent};
 
-use commands::{general, local, providers, workspace};
+use commands::{agents, chat, general, local, loops, providers};
 use state::AppState;
 
 pub fn run() {
@@ -45,9 +46,26 @@ pub fn run() {
             general::set_theme,
             general::app_info,
             general::reveal_data_dir,
-            workspace::choose_workspace,
-            workspace::clear_workspace,
-            workspace::set_permission,
+            agents::pick_workspace,
+            agents::save_agent,
+            agents::delete_agent,
+            agents::set_active_agent,
+            agents::set_permission,
+            loops::block_catalog,
+            loops::loop_templates,
+            loops::list_loops,
+            loops::load_loop,
+            loops::analyze_loop,
+            loops::save_loop,
+            loops::delete_loop,
+            loops::import_loop,
+            loops::export_loop,
+            chat::get_chat,
+            chat::clear_chat,
+            chat::send_message,
+            chat::test_run,
+            chat::stop_run,
+            chat::list_runs,
             providers::list_presets,
             providers::save_provider,
             providers::delete_provider,

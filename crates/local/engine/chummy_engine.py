@@ -312,13 +312,20 @@ class FakeBackend:
 
     def generate(self, messages, tools, max_tokens, temperature) -> Iterator[str]:
         last = next((m.get("content") or "" for m in reversed(messages) if m["role"] == "user"), "")
-        if tools and "weather" in last.lower():
+        low = last.lower()
+        if tools and "weather" in low:
             name = tools[0]["function"]["name"]
             text = 'Let me check.\n<tool_call>\n{"name": "%s", "arguments": {"city": "Paris"}}\n</tool_call>' % name
-        elif "think" in last.lower():
+        elif "think" in low:
             text = "<think>Pondering.</think>Done thinking."
-        else:
+        elif "yes or no" in low:
+            text = "YES"
+        elif "single word: ready" in low:
             text = "ready"
+        else:
+            # Echo the most specific part of the prompt so loops can be traced.
+            said = low.split("the user now says:")[-1].split("write the assistant")[0].strip() or last.strip()
+            text = "(fake model) You said: " + said[:200]
         for i in range(0, len(text), 3):
             yield text[i:i + 3]
 

@@ -1,12 +1,12 @@
 <script lang="ts">
   import { commands } from "$lib/ipc";
   import { setup } from "$lib/stores/setup.svelte";
-  import { settings } from "$lib/stores/settings.svelte";
   import Button from "$lib/components/Button.svelte";
   import Icon from "$lib/components/Icon.svelte";
 
   const s = $derived(setup.status);
-  const folderName = $derived(settings.current.workspace?.path.split(/[\\/]/).filter(Boolean).pop() ?? "");
+  // The first step that isn't done is the one to highlight.
+  const next = $derived(!s.model_configured ? 1 : !s.loop_configured ? 2 : !s.agent_configured ? 3 : 0);
 </script>
 
 <section class="card" aria-labelledby="welcome-title">
@@ -15,44 +15,43 @@
   <p class="lede">Three things to set up before your first chat.</p>
 
   <ol class="steps">
-    <li class:done={s.workspace_configured}>
-      <span class="num">{#if s.workspace_configured}<Icon name="check" size={14} />{:else}1{/if}</span>
-      <div class="text">
-        <h2>Choose a workspace folder</h2>
-        <p>{s.workspace_configured ? `Using “${folderName}”.` : "The one folder agents may read and change."}</p>
-      </div>
-      <Button variant={s.workspace_configured ? "secondary" : "primary"} icon="folder" onclick={() => commands.chooseWorkspace()}>
-        {s.workspace_configured ? "Change" : "Choose…"}
-      </Button>
-    </li>
-
     <li class:done={s.model_configured}>
-      <span class="num">{#if s.model_configured}<Icon name="check" size={14} />{:else}2{/if}</span>
+      <span class="num">{#if s.model_configured}<Icon name="check" size={14} />{:else}1{/if}</span>
       <div class="text">
         <h2>Connect a model</h2>
         <p>Ollama, LM Studio, llama.cpp, vLLM, a cloud provider, or the built-in engine.</p>
       </div>
-      <Button
-        variant={!s.model_configured && s.workspace_configured ? "primary" : "secondary"}
-        onclick={() => commands.openWindow("settings")}
-      >
-        {s.model_configured ? "Manage" : "Open settings"}
+      <Button variant={next === 1 ? "primary" : "secondary"} onclick={() => commands.openWindow("settings", "models")}>
+        {s.model_configured ? "Manage" : "Add a model"}
       </Button>
     </li>
 
     <li class:done={s.loop_configured}>
-      <span class="num">{#if s.loop_configured}<Icon name="check" size={14} />{:else}3{/if}</span>
+      <span class="num">{#if s.loop_configured}<Icon name="check" size={14} />{:else}2{/if}</span>
       <div class="text">
-        <h2>Add an agent loop</h2>
-        <p>Import a loop file or build your own, block by block.</p>
+        <h2>Add a loop</h2>
+        <p>How an agent thinks. Start from a template, import one, or build your own.</p>
       </div>
-      <Button icon="flow" onclick={() => commands.openWindow("editor")}>Loop editor</Button>
+      <Button variant={next === 2 ? "primary" : "secondary"} icon="flow" onclick={() => commands.openWindow("editor")}>
+        Loop editor
+      </Button>
+    </li>
+
+    <li class:done={s.agent_configured}>
+      <span class="num">{#if s.agent_configured}<Icon name="check" size={14} />{:else}3{/if}</span>
+      <div class="text">
+        <h2>Set up an agent</h2>
+        <p>Give a loop a model and its own workspace folder.</p>
+      </div>
+      <Button variant={next === 3 ? "primary" : "secondary"} onclick={() => commands.openWindow("settings", "agents")}>
+        {s.agent_configured ? "Manage" : "New agent"}
+      </Button>
     </li>
   </ol>
 
   <p class="note">
     <Icon name="shield" size={14} />
-    Agents only ever see the folder you choose, and stay offline unless you allow it.
+    Each agent only ever sees its own folder, and stays offline unless you allow it.
   </p>
 </section>
 
@@ -125,8 +124,6 @@
   .text p {
     color: var(--text-muted);
     font-size: var(--text-sm);
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
   .note {
     display: flex;

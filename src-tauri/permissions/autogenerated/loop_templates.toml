@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-loop-templates"
+description = "Enables the loop_templates command without any pre-configured scope."
+commands.allow = ["loop_templates"]
+
+[[permission]]
+identifier = "deny-loop-templates"
+description = "Denies the loop_templates command without any pre-configured scope."
+commands.deny = ["loop_templates"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-analyze-loop"
+description = "Enables the analyze_loop command without any pre-configured scope."
+commands.allow = ["analyze_loop"]
+
+[[permission]]
+identifier = "deny-analyze-loop"
+description = "Denies the analyze_loop command without any pre-configured scope."
+commands.deny = ["analyze_loop"]

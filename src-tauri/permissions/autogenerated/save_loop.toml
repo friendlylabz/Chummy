@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-loop"
+description = "Enables the save_loop command without any pre-configured scope."
+commands.allow = ["save_loop"]
+
+[[permission]]
+identifier = "deny-save-loop"
+description = "Denies the save_loop command without any pre-configured scope."
+commands.deny = ["save_loop"]

@@ -7,14 +7,20 @@
   ],
   "permissions": [
     "core:default",
+    "allow-setup-status",
     "allow-open-window",
     "allow-get-settings",
     "allow-set-theme",
     "allow-app-info",
     "allow-reveal-data-dir",
-    "allow-choose-workspace",
-    "allow-clear-workspace",
+    "allow-pick-workspace",
+    "allow-save-agent",
+    "allow-delete-agent",
+    "allow-set-active-agent",
     "allow-set-permission",
+    "allow-list-loops",
+    "allow-stop-run",
+    "allow-list-runs",
     "allow-list-presets",
     "allow-save-provider",
     "allow-delete-provider",
@@ -32,7 +38,6 @@
     "allow-set-hf-token",
     "allow-set-local-device",
     "allow-stop-engine",
-    "allow-engine-log",
-    "allow-setup-status"
+    "allow-engine-log"
   ]
 }

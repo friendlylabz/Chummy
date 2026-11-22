@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-export-loop"
+description = "Enables the export_loop command without any pre-configured scope."
+commands.allow = ["export_loop"]
+
+[[permission]]
+identifier = "deny-export-loop"
+description = "Denies the export_loop command without any pre-configured scope."
+commands.deny = ["export_loop"]

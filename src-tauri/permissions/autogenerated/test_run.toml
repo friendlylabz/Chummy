@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-test-run"
+description = "Enables the test_run command without any pre-configured scope."
+commands.allow = ["test_run"]
+
+[[permission]]
+identifier = "deny-test-run"
+description = "Denies the test_run command without any pre-configured scope."
+commands.deny = ["test_run"]

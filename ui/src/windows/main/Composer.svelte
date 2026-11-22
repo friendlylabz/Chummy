@@ -1,31 +1,38 @@
 <script lang="ts">
+  import { commands } from "$lib/ipc";
   import { setup } from "$lib/stores/setup.svelte";
+  import { settings } from "$lib/stores/settings.svelte";
+  import { chat } from "$lib/stores/chat.svelte";
+  import { runs } from "$lib/stores/runs.svelte";
   import Icon from "$lib/components/Icon.svelte";
-
-  let { onsend }: { onsend?: (text: string) => void } = $props();
 
   let text = $state("");
   let input: HTMLTextAreaElement;
 
-  const disabled = $derived(!setup.ready);
+  const agent = $derived(settings.current.agents.find((a) => a.id === settings.current.active_agent) ?? null);
+  const run = $derived(agent ? runs.forAgent(agent.id) : undefined);
+  const disabled = $derived(!setup.ready || !agent);
   const placeholder = $derived.by(() => {
     const s = setup.status;
     const missing = [
-      !s.workspace_configured && "choose a workspace folder",
       !s.model_configured && "connect a model",
-      !s.loop_configured && "add an agent loop",
+      !s.loop_configured && "add a loop",
+      !s.agent_configured && "set up an agent",
     ].filter(Boolean) as string[];
-    if (!missing.length) return "Message your agent…";
-    const list = missing.length > 1 ? `${missing.slice(0, -1).join(", ")} and ${missing.at(-1)}` : missing[0];
-    return `To start chatting, ${list}`;
+    if (missing.length) {
+      const list = missing.length > 1 ? `${missing.slice(0, -1).join(", ")} and ${missing.at(-1)}` : missing[0];
+      return `To start chatting, ${list}`;
+    }
+    return agent ? `Message ${agent.name}…` : "Choose an agent to chat with";
   });
 
-  function send() {
+  async function send() {
     const msg = text.trim();
-    if (disabled || !msg) return;
-    onsend?.(msg);
-    text = "";
-    resize();
+    if (disabled || !msg || run) return;
+    if (await chat.send(msg)) {
+      text = "";
+      resize();
+    }
   }
 
   function onKeydown(e: KeyboardEvent) {
@@ -42,6 +49,7 @@
   }
 </script>
 
+{#if chat.error}<div class="error" role="alert">{chat.error}</div>{/if}
 <form
   class="composer"
   class:disabled
@@ -60,12 +68,26 @@
     rows="1"
     aria-label="Message"
   ></textarea>
-  <button type="submit" class="send" disabled={disabled || !text.trim()} aria-label="Send">
-    <Icon name="send" size={17} />
-  </button>
+  {#if run}
+    <button type="button" class="send stop" aria-label="Stop" onclick={() => commands.stopRun(run.info.run_id)}>
+      <Icon name="stop" size={15} />
+    </button>
+  {:else}
+    <button type="submit" class="send" disabled={disabled || !text.trim()} aria-label="Send">
+      <Icon name="send" size={17} />
+    </button>
+  {/if}
 </form>
 
 <style>
+  .error {
+    width: min(760px, 100%);
+    margin: 0 auto var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+    font-size: var(--text-sm);
+  }
   .composer {
     display: flex;
     align-items: flex-end;
@@ -89,7 +111,6 @@
     border-color: var(--border);
     box-shadow: none;
   }
-
   textarea {
     flex: 1;
     min-height: 36px;
@@ -107,7 +128,6 @@
   textarea:disabled {
     cursor: not-allowed;
   }
-
   .send {
     flex: none;
     display: grid;
@@ -119,11 +139,14 @@
     background: var(--accent);
     color: var(--on-accent);
     cursor: pointer;
-    transition: opacity var(--dur-fast) var(--ease);
   }
   .send:disabled {
     background: var(--surface-hover);
     color: var(--text-faint);
     cursor: default;
+  }
+  .send.stop {
+    background: var(--text);
+    color: var(--bg);
   }
 </style>

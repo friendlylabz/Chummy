@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-block-catalog"
+description = "Enables the block_catalog command without any pre-configured scope."
+commands.allow = ["block_catalog"]
+
+[[permission]]
+identifier = "deny-block-catalog"
+description = "Denies the block_catalog command without any pre-configured scope."
+commands.deny = ["block_catalog"]

@@ -7,16 +7,34 @@ loops are built from small, editable blocks in a visual editor; every agent is
 locked to one folder you choose; and nothing reaches the network or runs a tool
 until you say so.
 
-![Chummy on first launch](docs/screenshot-main.png)
+![Chatting with an agent](docs/screenshot-main.png)
 
-> **Status:** passes 1–2 of the roadmap are done: the app shell, the folder
-> jail, settings, and model connections (including a basic built-in engine).
-> Chat unlocks in pass 3, with the loop engine.
+> **Status:** passes 1–3 of the roadmap are done: the app shell, the folder
+> jail, settings, model connections (including a basic built-in engine), the
+> loop engine, the loop editor, agents and chat. Next: script-based tools and
+> the scheduler.
+
+![The loop editor running the Draft and self-check loop](docs/screenshot-editor.png)
 
 ## What works today
 
-- **Workspace jail.** Agents are locked to one folder that you pick and confirm
-  in a native dialog. Whole drives, your home folder, system folders, hidden
+- **Loops.** A loop is a directed graph of blocks that pass text along links,
+  from your message to the agent's reply. A block waits until every input has
+  a value, runs, and sends its result to everything linked to its outputs.
+  Cycles are allowed (with step and model-call limits), so a loop can draft,
+  check its own answer, and retry. The central block is **Ask the model**: a
+  prompt of your own with `_INPUT_` where the block's input goes. Loops are
+  plain JSON in a strict, versioned format: see
+  [docs/loop-format.md](docs/loop-format.md).
+- **Loop editor.** A node editor with a block palette, an inspector for every
+  parameter, live checks, templates, import and export, and test runs that
+  light up each block as it works.
+- **Agents.** An agent is a loop, a model, and **its own workspace folder**.
+  Each folder belongs to exactly one agent, and no agent's folder can be inside
+  another's. Chat with an agent from the main window; its loop runs inside its
+  folder, and progress shows live.
+- **Workspace jail.** Each agent is locked to its folder, which you pick and
+  confirm in a native dialog. Whole drives, your home folder, system folders, hidden
   settings folders (`.ssh`, `.config`, …) and Chummy's own folder are always
   refused, along with any folder that contains one of them. File access goes
   through a `cap-std` capability handle, so symlinks and junctions can't
@@ -52,7 +70,8 @@ until you say so.
 | Windows | `%LOCALAPPDATA%\com.friendlylabz.chummy`                |
 
 It holds `settings.json` (versioned, written atomically, with a `.bak`
-backup), `loops/`, `models/`, `runtime/` (the built-in engine) and `logs/`.
+backup), `loops/` (your loops, one JSON file each), `chats/` (chat history,
+one file per agent), `models/`, `runtime/` (the built-in engine) and `logs/`.
 Secrets are never stored here; they go to the system keychain (Keychain,
 Credential Manager, or Secret Service on Linux). Set `HF_ENDPOINT` to use a
 Hugging Face mirror.
@@ -103,7 +122,7 @@ crates/          Pure Rust libraries, no Tauri dependency, tested on their own
   local/         Built-in engine: HF inspection, estimates, downloads, runtime, process
     engine/      chummy_engine.py: the OpenAI-compatible transformers server
   store/         Chummy folder layout, atomic versioned JSON, keychain secrets
-  flow/          Loop graph schema (JSON) + interpreter
+  flow/          Loop format, block catalog, validation, the loop engine, templates
   tools/         Wasm (WASI) tool host
   scheduler/     Jobs, triggers, input sources
 src-tauri/       Thin app shell: state, IPC commands, native dialogs, windows
@@ -116,6 +135,13 @@ ui/              Svelte 5 frontend, one Vite page per window
   src/lib/ipc.ts The only file that talks to Rust
 ```
 
+**Loop pipeline:** chat message → `send_message` → the agent's loop file is
+checked → its workspace is opened as a `Jail` → `chummy_flow::run` executes the
+blocks, calling models through the model pipeline and touching files only
+through the jail → `run:*` events stream to every window → the replies are
+saved to the agent's chat history. Block ports come from the Rust catalog; the
+editor asks Rust for them (`analyze_loop`), so there's a single source of truth.
+
 **Model pipeline:** `ProviderConfig` → `Client` → adapter → server-sent events →
 `ChatEvent` (`Text`, `Reasoning`, `ToolCall`, `MalformedToolCall`, `Done`). Tool
 calls are fully assembled and parsed before they're emitted. Invalid arguments
@@ -127,8 +153,9 @@ OpenAI-compatible endpoint (127.0.0.1, random bearer token, offline).
 
 - Rust is the source of truth and the only place sandbox decisions are made.
   Windows read state through commands and hear about changes through events.
-- The UI never sends a filesystem path to Rust for the workspace: Rust shows
-  the picker, validates the choice and asks for confirmation.
+- The UI never sends a filesystem path to Rust for a workspace: Rust shows
+  the picker, validates the choice, asks for confirmation, and hands back a
+  one-time token that stands for the folder.
 - Each window only gets the commands it needs (`src-tauri/capabilities/`).
 - Adding a command: implement it in `src-tauri/src/commands/`, register it in
   `lib.rs`, list it in `build.rs`, allow it in the relevant capability files,
@@ -144,8 +171,7 @@ OpenAI-compatible endpoint (127.0.0.1, random bearer token, offline).
 
 1. **Skeleton & build system.** Done.
 2. **Sandbox, settings, models.** Done.
-3. **Loop engine & editor.** A versioned loop schema, a block registry, a Rust
-   interpreter, and the full editor with JSON import/export. Chat unlocks here.
+3. **Loop engine & editor.** Done.
 4. **Tools & scheduler.** A Wasmtime tool runtime, plus scheduled jobs with
    file, web, folder-watch and timer inputs.
 

@@ -80,3 +80,44 @@ pub async fn pick_folder(app: &AppHandle, window: &str, title: &str) -> Option<P
     .ok()
     .flatten()
 }
+
+/// Lets the user pick a loop file to import.
+pub async fn pick_loop_file(app: &AppHandle, window: &str) -> Option<PathBuf> {
+    let app = app.clone();
+    let window = window.to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut d = app
+            .dialog()
+            .file()
+            .set_title("Import a loop")
+            .add_filter("Chummy loop", &["json"]);
+        if let Some(w) = parent(&app, &window) {
+            d = d.set_parent(&w);
+        }
+        d.blocking_pick_file().and_then(|p| p.into_path().ok())
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Asks where to save an exported loop.
+pub async fn save_loop_file(app: &AppHandle, window: &str, suggested: &str) -> Option<PathBuf> {
+    let app = app.clone();
+    let (window, suggested) = (window.to_string(), suggested.to_string());
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut d = app
+            .dialog()
+            .file()
+            .set_title("Export loop")
+            .set_file_name(suggested)
+            .add_filter("Chummy loop", &["json"]);
+        if let Some(w) = parent(&app, &window) {
+            d = d.set_parent(&w);
+        }
+        d.blocking_save_file().and_then(|p| p.into_path().ok())
+    })
+    .await
+    .ok()
+    .flatten()
+}
