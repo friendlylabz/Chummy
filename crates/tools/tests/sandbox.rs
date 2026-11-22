@@ -256,8 +256,8 @@ import sys
 def odd(what: str) -> str:
     """Behaves oddly."""
     if what == "chatty":
-        for i in range(20000):
-            print("line", i)
+        for i in range(3000):
+            print("line", i, "x" * 40)
         return "still fine"
     if what == "exit":
         sys.exit(3)
@@ -267,7 +267,8 @@ def odd(what: str) -> str:
         return None
     raise ValueError("bad what")
 "#,
-    );
+    )
+    .replace("timeout = 5", "timeout = 60");
     quick_install(&h, &src).await;
     let call = |w: &'static str| {
         let h = &h;

@@ -213,7 +213,9 @@ pub async fn install(
             let old = tmp.with_extension("old");
             let _ = std::fs::remove_dir_all(&old);
             if final_dir.exists() {
-                std::fs::rename(&final_dir, &old).map_err(ToolError::io("replacing the tool"))?;
+                rename_retrying(&final_dir, &old)
+                    .await
+                    .map_err(ToolError::io("replacing the tool"))?;
             }
             if let Err(e) = std::fs::rename(&tmp, &final_dir) {
                 let _ = std::fs::rename(&old, &final_dir);
@@ -332,4 +334,19 @@ pub async fn install_builtins(
         out.push(install(host, b.source, b.lock, None, true, on).await?);
     }
     Ok(out)
+}
+
+/// Windows refuses to rename a folder while a running tool has files in it
+/// open, so a reinstall during a call waits briefly for the call to finish.
+async fn rename_retrying(from: &Path, to: &Path) -> std::io::Result<()> {
+    let mut tries = 0;
+    loop {
+        match std::fs::rename(from, to) {
+            Err(e) if cfg!(windows) && tries < 50 && e.kind() != std::io::ErrorKind::NotFound => {
+                tries += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+            r => return r,
+        }
+    }
 }
