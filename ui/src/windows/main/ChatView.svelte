@@ -4,19 +4,28 @@
   import { commands, type Agent } from "$lib/ipc";
   import { chat } from "$lib/stores/chat.svelte";
   import { runs } from "$lib/stores/runs.svelte";
+  import { asks } from "$lib/stores/asks.svelte";
   import Icon from "$lib/components/Icon.svelte";
   import Button from "$lib/components/Button.svelte";
+  import AskCard from "$lib/components/AskCard.svelte";
 
   let { agent }: { agent: Agent } = $props();
 
   let scroller: HTMLDivElement;
   const run = $derived(runs.forAgent(agent.id));
+  const jobRun = $derived(runs.jobForAgent(agent.id));
+  const waiting = $derived(asks.forAgent(agent.id));
+  /** The chat's own question, answered from the message box. */
+  const composerAsk = $derived(
+    run ? waiting.find((p) => p.origin.run_id === run.info.run_id && p.ask.kind === "question") : undefined,
+  );
 
   // Keep the newest message in view.
   $effect(() => {
     void chat.messages.length;
     void run?.streaming;
     void run?.replies.length;
+    void waiting.length;
     tick().then(() => scroller?.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" }));
   });
 </script>
@@ -42,6 +51,16 @@
             {#if m.run}<div class="meta">{m.run.llm_calls} model call{m.run.llm_calls === 1 ? "" : "s"}{m.run.tool_calls ? ` · ${m.run.tool_calls} tool call${m.run.tool_calls === 1 ? "" : "s"}` : ""} · {m.run.steps} steps</div>{/if}
           </div>
         </div>
+      {:else if m.role === "question"}
+        <div class="msg assistant asked">
+          <div class="avatar"><Icon name="ask" size={15} /></div>
+          <div class="body">
+            {#if m.from}<div class="from">{m.from} asked</div>{/if}
+            <div class="text" data-selectable>{m.text}</div>
+          </div>
+        </div>
+      {:else if m.role === "answer"}
+        <div class="msg user"><div class="bubble answer" data-selectable>{m.text}</div></div>
       {:else}
         <div class="msg notice">
           <Icon name={m.run?.status === "stopped" ? "stop" : "alert"} size={14} />
@@ -60,10 +79,22 @@
             <span class="step">{run.currentLabel ? `${run.currentLabel}…` : "Working…"}</span>
             <Button variant="ghost" icon="stop" onclick={() => commands.stopRun(run.info.run_id)}>Stop</Button>
           </div>
-          {#if run.streaming}<div class="stream">{run.streaming.slice(-600)}</div>{/if}
+          {#if run.streaming && !run.waitingForYou}<div class="stream">{run.streaming.slice(-600)}</div>{/if}
         </div>
       </div>
     {/if}
+
+    {#if jobRun}
+      <div class="msg notice job">
+        <Icon name="clock" size={14} />
+        <span>The job “{jobRun.info.title}” is running as {agent.name}{jobRun.currentLabel ? ` · ${jobRun.currentLabel}` : ""}</span>
+        <Button variant="ghost" icon="stop" onclick={() => commands.stopRun(jobRun.info.run_id)}>Stop</Button>
+      </div>
+    {/if}
+
+    {#each waiting as p (p.id)}
+      <AskCard pending={p} showOrigin={p.origin.kind === "job"} answerHere={p.id !== composerAsk?.id} />
+    {/each}
   </div>
 </div>
 
@@ -164,6 +195,23 @@
   .notice :global(svg) {
     flex: none;
     color: var(--warn);
+  }
+  .notice.job span {
+    flex: 1;
+  }
+  .notice.job :global(svg) {
+    color: var(--accent);
+  }
+  .asked .avatar {
+    color: var(--accent);
+  }
+  .from {
+    color: var(--text-faint);
+    font-size: var(--text-xs);
+    margin-bottom: 2px;
+  }
+  .bubble.answer {
+    border: 1px dashed color-mix(in srgb, var(--accent) 50%, transparent);
   }
   .activity {
     display: flex;

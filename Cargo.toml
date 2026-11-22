@@ -25,6 +25,7 @@ chummy-tools = { path = "crates/tools" }
 chummy-scheduler = { path = "crates/scheduler" }
 chummy-store = { path = "crates/store" }
 chummy-local = { path = "crates/local" }
+chummy-runner = { path = "crates/runner" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

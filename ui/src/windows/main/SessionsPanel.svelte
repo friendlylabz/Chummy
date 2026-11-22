@@ -2,6 +2,7 @@
   import { commands } from "$lib/ipc";
   import { runs } from "$lib/stores/runs.svelte";
   import { settings } from "$lib/stores/settings.svelte";
+  import { asks } from "$lib/stores/asks.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
   import Icon from "$lib/components/Icon.svelte";
 
@@ -20,14 +21,37 @@
       </button>
     </div>
 
+    {#if asks.pending.length}
+      <div class="group">
+        <div class="group-title">Waiting for you</div>
+        {#each asks.pending as p (p.id)}
+          <button
+            class="agent waiting"
+            type="button"
+            title={p.ask.text}
+            onclick={() =>
+              p.origin.kind === "test"
+                ? commands.openWindow("editor")
+                : p.origin.agent_id && commands.setActiveAgent(p.origin.agent_id)}
+          >
+            <Icon name={p.ask.kind === "tool_approval" ? "shield" : "ask"} size={15} />
+            <span class="w-text">
+              <span class="w-title">{p.origin.title}</span>
+              <span class="w-sub">{p.ask.kind === "tool_approval" ? `Allow ${p.ask.tool}?` : p.ask.text}</span>
+            </span>
+          </button>
+        {/each}
+      </div>
+    {/if}
+
     <div class="group">
       <div class="group-title">Running</div>
       {#each active as r (r.info.run_id)}
         <div class="run">
           <span class="pulse"></span>
           <div class="run-text">
-            <div class="run-title">{r.info.title}</div>
-            <div class="run-step">{r.currentLabel || "Starting…"}</div>
+            <div class="run-title">{r.info.source === "job" ? "Job: " : ""}{r.info.title}</div>
+            <div class="run-step">{r.waitingForYou ? "Waiting for you" : r.currentLabel || "Starting…"}</div>
           </div>
           <button class="icon-btn" type="button" aria-label="Stop" title="Stop" onclick={() => commands.stopRun(r.info.run_id)}>
             <Icon name="stop" size={14} />
@@ -198,5 +222,27 @@
     font-weight: 600;
     letter-spacing: 0.04em;
     text-transform: uppercase;
+  }
+  .waiting {
+    align-items: flex-start;
+  }
+  .waiting :global(svg) {
+    margin-top: 2px;
+    color: var(--accent);
+  }
+  .w-text {
+    display: grid;
+    min-width: 0;
+    text-align: left;
+  }
+  .w-title {
+    font-weight: 550;
+  }
+  .w-sub {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-muted);
+    font-size: var(--text-xs);
   }
 </style>

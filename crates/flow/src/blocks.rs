@@ -195,6 +195,25 @@ pub struct RunToolParams {
     pub max_result_chars: u32,
     #[serde(default)]
     pub on_error: OnToolError,
+    /// Ask the user before each call. (Chummy may also ask for some tools
+    /// whatever this says; see [`crate::Host::must_confirm`].)
+    #[serde(default)]
+    pub confirm: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AskUserParams {
+    /// The question. `_INPUT_` is replaced by the block's input; if it's
+    /// missing, the input is added after it.
+    #[serde(default = "d_input")]
+    pub prompt: String,
+    /// Give up after this many minutes; 0 waits as long as it takes.
+    #[serde(default)]
+    pub timeout_minutes: u32,
+    /// Used when the wait times out. Empty: a timeout stops the run.
+    #[serde(default)]
+    pub default_answer: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -311,6 +330,7 @@ pub enum BlockKind {
     WriteFile(WriteFileParams),
     ListFiles(Empty),
     RunTool(RunToolParams),
+    AskUser(AskUserParams),
     Exchange(StartExchangeParams),
     Augment(AugmentParams),
     ReadExchange(ReadExchangeParams),
@@ -341,7 +361,7 @@ impl BlockKind {
         match self {
             Input(_) | History(_) | Fixed(_) | Function(_) => vec![],
             Output(_) | Split(_) | Regex(_) | Capture(_) => vec![port("in", "In", Text)],
-            Llm(_) => vec![port("in", "In", Any)],
+            Llm(_) | AskUser(_) => vec![port("in", "In", Any)],
             RunTool(_) => vec![port("in", "Tool call", ValueKind::Exchange)],
             BlockKind::Exchange(_) => vec![port("in", "In", Any)],
             Augment(_) => vec![
@@ -374,6 +394,7 @@ impl BlockKind {
                 v
             }
             RunTool(_) => vec![port("out", "Results", ValueKind::Exchange)],
+            AskUser(_) => vec![port("out", "Answer", Text)],
             BlockKind::Exchange(_) | Augment(_) => {
                 vec![port("out", "Exchange", ValueKind::Exchange)]
             }
@@ -424,6 +445,7 @@ impl BlockKind {
             WriteFile(_) => "write_file",
             ListFiles(_) => "list_files",
             RunTool(_) => "run_tool",
+            AskUser(_) => "ask_user",
             Exchange(_) => "exchange",
             Augment(_) => "augment",
             ReadExchange(_) => "read_exchange",
@@ -439,6 +461,8 @@ impl BlockKind {
 pub enum Category {
     Start,
     Think,
+    /// Blocks that wait for the person using Chummy.
+    You,
     Exchange,
     Text,
     Flow,
@@ -676,8 +700,44 @@ pub fn catalog() -> Vec<BlockInfo> {
                     choice(&[("tell_model", "Tell the model"), ("fail", "Stop the run")]),
                     "",
                 ),
+                p(
+                    "confirm",
+                    "Ask me before each call",
+                    K::Bool,
+                    "Each call waits until you allow it in chat. Chummy always asks for tools that use the internet unless you turned that off in Settings → Tools.",
+                ),
             ],
-            json!({ "max_result_chars": 4000, "on_error": "tell_model" }),
+            json!({ "max_result_chars": 4000, "on_error": "tell_model", "confirm": false }),
+        ),
+        info(
+            "ask_user",
+            "Ask me",
+            You,
+            "Asks you a question in chat and waits for your answer, which goes out of Answer. Scheduled jobs wait too, and Chummy lets you know.",
+            vec![
+                p(
+                    "prompt",
+                    "Question",
+                    K::Multiline,
+                    "Use _INPUT_ for the block's input.",
+                ),
+                p(
+                    "timeout_minutes",
+                    "Give up after (minutes, 0 = never)",
+                    K::Integer { min: 0, max: 10080 },
+                    "",
+                ),
+                ParamSpec {
+                    optional: true,
+                    ..p(
+                        "default_answer",
+                        "Answer if nobody replies in time",
+                        K::Text,
+                        "Leave empty to stop the run instead.",
+                    )
+                },
+            ],
+            json!({ "prompt": "_INPUT_", "timeout_minutes": 0, "default_answer": "" }),
         ),
         info(
             "exchange",

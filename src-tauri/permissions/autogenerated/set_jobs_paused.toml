@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-jobs-paused"
+description = "Enables the set_jobs_paused command without any pre-configured scope."
+commands.allow = ["set_jobs_paused"]
+
+[[permission]]
+identifier = "deny-set-jobs-paused"
+description = "Denies the set_jobs_paused command without any pre-configured scope."
+commands.deny = ["set_jobs_paused"]

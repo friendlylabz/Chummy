@@ -6,7 +6,8 @@
     "editor"
   ],
   "permissions": [
-    "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
     "allow-get-settings",
     "allow-open-window",
     "allow-setup-status",
@@ -22,6 +23,8 @@
     "allow-test-run",
     "allow-stop-run",
     "allow-list-runs",
-    "allow-tools-status"
+    "allow-tools-status",
+    "allow-list-asks",
+    "allow-answer-ask"
   ]
 }

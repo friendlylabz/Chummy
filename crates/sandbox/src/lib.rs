@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 pub use jail::{DirEntry, Jail, JailError};
 pub use paths::{RelPath, RelPathError};
 pub use protected::{Protected, ProtectedPath, Scope};
-pub use workspace::{WorkspaceError, validate_workspace};
+pub use workspace::{WorkspaceError, validate_workspace, workspace_advice};
 
 /// True if one folder is the other or contains it (case-insensitive where the
 /// platform is). Both paths should be canonical. Used to keep every agent's

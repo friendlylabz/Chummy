@@ -17,7 +17,7 @@ crate-type = ["rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -26,6 +26,9 @@ reqwest.workspace = true
 iana-time-zone = "0.1"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-single-instance = "2"
+jiff = "0.2"
 getrandom = "0.3"
 
 chummy-local.workspace = true
@@ -34,6 +37,7 @@ chummy-llm.workspace = true
 chummy-flow.workspace = true
 chummy-tools.workspace = true
 chummy-scheduler.workspace = true
+chummy-runner.workspace = true
 chummy-store.workspace = true
 
 [lints]

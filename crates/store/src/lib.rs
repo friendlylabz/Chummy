@@ -23,5 +23,5 @@ pub mod secrets;
 mod doc;
 mod layout;
 
-pub use doc::{JsonDoc, Loaded, Recovery, StoreError};
+pub use doc::{JsonDoc, Loaded, Recovery, StoreError, write_atomic};
 pub use layout::ChummyDirs;

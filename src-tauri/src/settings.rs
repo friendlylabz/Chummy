@@ -46,13 +46,59 @@ pub struct Agent {
 }
 
 /// Everything beyond the workspace is off until the user turns it on.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Permissions {
     /// Agents and tools may use the internet.
     pub network: bool,
     /// Agents may run installed tools.
     pub tools: bool,
+    /// Every call to a tool that can go online waits for the user's OK. On
+    /// unless the user turns it off (which asks for confirmation).
+    pub confirm_online_tools: bool,
+}
+
+impl Default for Permissions {
+    fn default() -> Self {
+        Self {
+            network: false,
+            tools: false,
+            confirm_online_tools: true,
+        }
+    }
+}
+
+/// What closing the main window does.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloseAction {
+    /// Ask: quit, or keep running in the tray.
+    #[default]
+    Ask,
+    /// Quit (still asking first if anything is running).
+    Quit,
+    /// Keep running in the tray.
+    Tray,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct General {
+    pub close: CloseAction,
+    /// Desktop notifications for questions and finished jobs.
+    pub notifications: bool,
+    /// Most scheduled runs going at once (1–4).
+    pub max_job_runs: u32,
+}
+
+impl Default for General {
+    fn default() -> Self {
+        Self {
+            close: CloseAction::Ask,
+            notifications: true,
+            max_job_runs: 1,
+        }
+    }
 }
 
 /// A tool's switches. Both are off until the user turns them on, and both
@@ -64,6 +110,8 @@ pub struct ToolPref {
     pub enabled: bool,
     /// This tool may use the internet (only for tools that ask for it).
     pub network: bool,
+    /// Ask before every call to this tool.
+    pub ask: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -96,6 +144,7 @@ pub struct Settings {
     pub local: LocalSettings,
     /// Per-tool switches, by tool name.
     pub tools: BTreeMap<String, ToolPref>,
+    pub general: General,
 }
 
 impl Default for Settings {
@@ -110,6 +159,7 @@ impl Default for Settings {
             active_agent: None,
             local: LocalSettings::default(),
             tools: BTreeMap::new(),
+            general: General::default(),
         }
     }
 }
@@ -173,6 +223,17 @@ mod tests {
         let s: Settings = serde_json::from_value(migrate(serde_json::json!({}))).unwrap();
         assert_eq!(s.version, VERSION);
         assert!(!s.permissions.network && !s.permissions.tools);
+        assert!(
+            s.permissions.confirm_online_tools,
+            "online tools ask by default"
+        );
+        assert_eq!(s.general.close, CloseAction::Ask);
+        // Older files without the new switch get the safe default.
+        let s: Settings = serde_json::from_value(migrate(
+            serde_json::json!({ "version": 2, "permissions": { "network": true } }),
+        ))
+        .unwrap();
+        assert!(s.permissions.network && s.permissions.confirm_online_tools);
         assert_eq!(s.local.device, "auto");
 
         let s: Settings = serde_json::from_value(migrate(

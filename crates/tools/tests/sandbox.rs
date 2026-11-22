@@ -20,7 +20,25 @@ fn python_zip() -> Option<PathBuf> {
 fn shared_root() -> &'static Path {
     static ROOT: OnceLock<PathBuf> = OnceLock::new();
     ROOT.get_or_init(|| {
-        let dir = std::env::temp_dir().join(format!("chummy-tools-test-{}", std::process::id()));
+        // Each test process sets up its own folder (about 50 MB). Tests have
+        // no hook for cleaning up at the end, so clear out old ones here.
+        let tmp = std::env::temp_dir();
+        for e in std::fs::read_dir(&tmp).into_iter().flatten().flatten() {
+            let old = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .is_some_and(|age| age > std::time::Duration::from_secs(3600));
+            if old
+                && e.file_name()
+                    .to_string_lossy()
+                    .starts_with("chummy-tools-test-")
+            {
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+        let dir = tmp.join(format!("chummy-tools-test-{}", std::process::id()));
         let paths = ToolPaths::new(&dir);
         let zip = std::fs::read(python_zip().unwrap()).unwrap();
         install_python_from(&paths, &zip).unwrap();

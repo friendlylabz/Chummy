@@ -63,12 +63,30 @@ export interface Settings {
   theme: Theme;
   agents: Agent[];
   active_agent: string | null;
-  permissions: { network: boolean; tools: boolean };
+  permissions: { network: boolean; tools: boolean; confirm_online_tools: boolean };
   providers: ProviderView[];
   default_provider: string | null;
   local: { device: string };
   hf_token_set: boolean;
-  tools: Record<string, { enabled: boolean; network: boolean }>;
+  tools: Record<string, { enabled: boolean; network: boolean; ask: boolean }>;
+  general: General;
+}
+
+export type CloseAction = "ask" | "quit" | "tray";
+export interface General {
+  close: CloseAction;
+  notifications: boolean;
+  max_job_runs: number;
+}
+
+/** What's going on, when the user closes or quits. */
+export interface Activity {
+  runs: number;
+  waiting: number;
+  scheduled: number;
+  paused: boolean;
+  tray: boolean;
+  reason: "close" | "quit";
 }
 
 export interface SetupStatus {
@@ -312,7 +330,7 @@ export type ParamKind =
   | { kind: "roles" }
   | { kind: "tools" };
 export type ParamSpec = ParamKind & { key: string; label: string; help: string; optional: boolean };
-export type Category = "start" | "think" | "exchange" | "text" | "flow" | "workspace" | "finish";
+export type Category = "start" | "think" | "you" | "exchange" | "text" | "flow" | "workspace" | "finish";
 export interface BlockInfo {
   kind: string;
   label: string;
@@ -341,16 +359,19 @@ export interface LoopSummary {
 
 export interface ChatMessage {
   id: string;
-  role: "user" | "assistant" | "notice";
+  role: "user" | "assistant" | "notice" | "question" | "answer";
   text: string;
   at: number;
+  /** A job's name, for questions that came from a job. */
+  from?: string;
   run?: { status: string; steps: number; llm_calls: number; tool_calls?: number };
 }
 export interface RunInfo {
   run_id: string;
   agent_id: string | null;
   title: string;
-  source: "chat" | "test";
+  source: "chat" | "test" | "job";
+  job_id?: string;
   started_at: number;
 }
 export type BlockState = "waiting" | "running" | "done" | "failed";
@@ -361,7 +382,9 @@ export type FlowEvent =
   | { type: "tool_call"; block: string; tool: string; arguments: string }
   | { type: "tool_result"; block: string; tool: string; preview: string; is_error: boolean }
   | { type: "notice"; block: string; text: string }
-  | { type: "reply"; block: string; text: string };
+  | { type: "reply"; block: string; text: string }
+  | { type: "asked"; block: string; text: string }
+  | { type: "answered"; block: string };
 export type RunStatus =
   | { status: "completed" }
   | { status: "stopped" }
@@ -391,6 +414,7 @@ export interface ToolView {
   builtin: boolean;
   enabled: boolean;
   network_allowed: boolean;
+  ask: boolean;
 }
 export interface ToolsStatus {
   runtime: { version: string; sha256: string } | null;
@@ -405,6 +429,80 @@ export type ToolsProgress =
   | { type: "step"; message: string }
   | { type: "finished" }
   | { type: "failed"; error: string };
+// ---- questions for the user
+
+export type AskKind = { kind: "question" } | { kind: "tool_approval"; tool: string; arguments: Record<string, unknown> };
+export type Ask = AskKind & { block: string; label: string; text: string };
+export interface Pending {
+  id: string;
+  origin: {
+    run_id: string;
+    kind: "chat" | "test" | "job";
+    agent_id?: string;
+    job_id?: string;
+    title: string;
+  };
+  ask: Ask;
+  asked_at: number;
+}
+export type Answer = { kind: "text"; text: string } | { kind: "allow" } | { kind: "deny"; text: string };
+
+// ---- jobs
+
+export type Day = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
+export type Trigger =
+  | { kind: "once"; at: string }
+  | { kind: "every"; minutes: number }
+  | { kind: "daily"; time: string; days: Day[] }
+  | { kind: "folder"; path: string };
+export interface Job {
+  format: "chummy.job";
+  version: number;
+  id: string;
+  name: string;
+  description?: string;
+  enabled: boolean;
+  agent: string;
+  loop?: string | null;
+  message: string;
+  file?: string | null;
+  triggers: Trigger[];
+  missed: "skip" | "run_once";
+  time_limit_minutes: number;
+  save_reply_to?: string | null;
+  notify: "always" | "problems" | "never";
+}
+export type Cause =
+  | { kind: "schedule"; due: number }
+  | { kind: "catch_up"; due: number }
+  | { kind: "manual" }
+  | { kind: "file"; path: string };
+export interface RunRecord {
+  run_id: string;
+  cause: Cause;
+  status: "completed" | "failed" | "stopped" | "limit" | "missed" | "skipped";
+  started_at: number;
+  finished_at?: number;
+  reply?: string;
+  note?: string;
+  llm_calls: number;
+  tool_calls: number;
+}
+export interface JobView {
+  job: Job;
+  state: "running" | "queued" | "idle";
+  run_id?: string;
+  next_run?: number;
+  last?: RunRecord;
+  schedule: string[];
+  watch_error?: string;
+}
+export interface JobsOverview {
+  jobs: JobView[];
+  paused: boolean;
+  bad_files: { file: string; error: string }[];
+}
+
 export interface PickedWorkspace {
   token: string;
   path: string;
@@ -417,7 +515,7 @@ const inTauri = isTauri();
 const mock = {
   settings: {
     theme: "system",
-    permissions: { network: false, tools: false },
+    permissions: { network: false, tools: false, confirm_online_tools: true },
     providers: [],
     default_provider: null,
     local: { device: "auto" },
@@ -425,6 +523,7 @@ const mock = {
     agents: [],
     active_agent: null,
     tools: {},
+    general: { close: "ask", notifications: true, max_job_runs: 1 },
   } as Settings,
   listeners: new Set<(s: Settings) => void>(),
 };
@@ -488,7 +587,7 @@ export const commands = {
     call<string>("test_run", { file, agentId, message, overrides }),
   stopRun: (runId: string) => call<void>("stop_run", { runId }),
   listRuns: () => call<RunInfo[]>("list_runs", undefined, () => []),
-  setPermission: (kind: "network" | "tools", enabled: boolean) =>
+  setPermission: (kind: "network" | "tools" | "confirm_online_tools", enabled: boolean) =>
     call<boolean>("set_permission", { kind, enabled }, () => false),
 
   listPresets: () => call<Preset[]>("list_presets", undefined, () => []),
@@ -526,6 +625,24 @@ export const commands = {
   setupTools: () => call<boolean>("setup_tools", undefined, () => false),
   setToolEnabled: (name: string, enabled: boolean) => call<void>("set_tool_enabled", { name, enabled }),
   setToolNetwork: (name: string, enabled: boolean) => call<boolean>("set_tool_network", { name, enabled }),
+  setToolAsk: (name: string, ask: boolean) => call<void>("set_tool_ask", { name, ask }),
+  setGeneral: (general: General) => call<void>("set_general", { general }),
+
+  listAsks: () => call<Pending[]>("list_asks", undefined, () => []),
+  answerAsk: (id: string, answer: Answer) => call<void>("answer_ask", { id, answer }),
+  closeActivity: () => call<Activity>("close_activity"),
+  closeChoice: (choice: CloseAction, remember: boolean) => call<void>("close_choice", { choice, remember }),
+
+  listJobs: () => call<JobsOverview>("list_jobs", undefined, () => ({ jobs: [], paused: false, bad_files: [] })),
+  saveJob: (job: Job) => call<string>("save_job", { job }),
+  deleteJob: (id: string) => call<void>("delete_job", { id }),
+  setJobEnabled: (id: string, enabled: boolean) => call<void>("set_job_enabled", { id, enabled }),
+  runJobNow: (id: string) => call<void>("run_job_now", { id }),
+  stopJob: (id: string) => call<void>("stop_job", { id }),
+  jobHistory: (id: string) => call<RunRecord[]>("job_history", { id }, () => []),
+  setJobsPaused: (paused: boolean) => call<void>("set_jobs_paused", { paused }),
+  importJob: () => call<string | null>("import_job", undefined, () => null),
+  exportJob: (id: string) => call<boolean>("export_job", { id }),
 };
 
 // ---------------------------------------------------------------- events
@@ -555,6 +672,10 @@ export const events = {
   ) => on("chat:message", cb),
   onToolsChanged: (cb: (s: ToolsStatus) => void) => on("tools:changed", cb),
   onToolsProgress: (cb: (p: ToolsProgress) => void) => on("tools:progress", cb),
+  onAsksChanged: (cb: (p: Pending[]) => void) => on("asks:changed", cb),
+  onJobsChanged: (cb: (o: JobsOverview) => void) => on("jobs:changed", cb),
+  /** The main window only: the user closed it or chose Quit. */
+  onCloseRequested: (cb: (a: Activity) => void) => on("app:close-requested", cb),
   /** Another window asked this one to show a section. */
   onGoto: (cb: (section: string) => void) => on("window:goto", cb),
 };

@@ -328,6 +328,9 @@ mod tests {
         fn list_files(&self, _: &str) -> Result<Vec<String>, String> {
             Err("no".into())
         }
+        async fn ask(&self, _: crate::Ask) -> Result<crate::Answer, String> {
+            Err("no".into())
+        }
     }
 
     async fn plan_run(id: &str, host: &Planner, message: &str) -> crate::engine::RunOutcome {

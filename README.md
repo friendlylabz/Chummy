@@ -9,11 +9,12 @@ until you say so.
 
 ![Chatting with an agent](docs/screenshot-main.png)
 
-> **Status:** passes 1–4 of the roadmap are done: the app shell, the folder
+> **Status:** passes 1–5 of the roadmap are done: the app shell, the folder
 > jail, settings, model connections (including a basic built-in engine), the
 > loop engine and editor, agents and chat, sandboxed Python tools, exchanges,
-> block functions, and the *5 step recursive plan* template. Next: the
-> scheduler.
+> block functions, the *5 step recursive plan* templates, and the scheduler
+> with tray mode and questions for you. Next: chummyd, an optional
+> background service ([plan](docs/chummyd-plan.md)).
 
 ![The 5 step recursive plan answering in chat, using tools](docs/screenshot-plan-chat.png)
 
@@ -59,6 +60,20 @@ until you say so.
   version also has the model write a yes/no check question for each result
   and plan and answer it, breaking down results that fail and re-planning
   plans that fail.
+- **Scheduled jobs.** A job runs one of your agents with a message: at set
+  times, every so often, once, or when files land in a folder of the
+  agent's. It runs with exactly that agent's folder, model and permissions.
+  Jobs can include a file, save their reply to a file, have a time limit,
+  catch up on times missed while Chummy was closed, and keep a history of
+  their runs. See [docs/job-format.md](docs/job-format.md).
+- **Questions for you.** An **Ask me** block asks you something in chat and
+  waits for your answer; a **Run tool** block can wait for your OK before
+  each call. Scheduled jobs ask in the agent's chat and the Scheduler, and
+  Chummy sends a notification. Tools that can go online always ask first,
+  unless you turn that off.
+- **Tray mode.** Chummy's icon stays in the tray while it runs. Closing the
+  window asks whether to quit (stopping everything) or keep running in the
+  tray so jobs carry on; you can make either the default.
 - **Agents.** An agent is a loop, a model, and **its own workspace folder**.
   Each folder belongs to exactly one agent, and no agent's folder can be inside
   another's. Chat with an agent from the main window; its loop runs inside its
@@ -71,7 +86,9 @@ until you say so.
   escape the folder.
 - **Permissions.** Internet access and tools are off by default, and so is
   every tool, and every tool's internet access. Turning any of them on needs
-  a native confirmation, shown by Rust, not by the web UI.
+  a native confirmation, shown by Rust, not by the web UI. See
+  [docs/security.md](docs/security.md) for the threat model and the latest
+  audit.
 - **Model connections.** Ollama, LM Studio, llama.cpp, vLLM, any
   OpenAI-compatible server, OpenAI, Anthropic, Gemini, OpenRouter, Groq,
   Mistral, DeepSeek, xAI and Together. API keys live in the OS keychain. **Test
@@ -90,6 +107,11 @@ until you say so.
 ![A block function open in the editor: the model block and Run tool in a cycle](docs/screenshot-function.png)
 
 <p>
+  <img src="docs/screenshot-ask.png" width="49%" alt="A scheduled job asking to run a tool, in the agent's chat">
+  <img src="docs/screenshot-scheduler.png" width="49%" alt="The Scheduler: a job with a one-off time and weekday mornings">
+</p>
+
+<p>
   <img src="docs/screenshot-tools.png" width="49%" alt="Settings: built-in tools, each off until switched on">
   <img src="docs/screenshot-settings-models.png" width="49%" alt="Model connections">
 </p>
@@ -104,8 +126,9 @@ until you say so.
 
 It holds `settings.json` (versioned, written atomically, with a `.bak`
 backup), `loops/` (your loops, one JSON file each), `chats/` (chat history,
-one file per agent), `models/`, `runtime/` (the built-in engine), `tools/`
-(the WebAssembly Python and installed tools) and `logs/`.
+one file per agent), `jobs/` (scheduled jobs, their state and run history),
+`models/`, `runtime/` (the built-in engine), `tools/` (the WebAssembly Python
+and installed tools) and `logs/`.
 Secrets are never stored here; they go to the system keychain (Keychain,
 Credential Manager, or Secret Service on Linux). Set `HF_ENDPOINT` to use a
 Hugging Face mirror.
@@ -170,14 +193,15 @@ crates/          Pure Rust libraries, no Tauri dependency, tested on their own
   tools/         Python tools as WebAssembly: format, locks, installer, sandbox host
     builtin/     The built-in tools and their pylock files
     support/     The in-sandbox runner and the `chummy` helper module
-  scheduler/     Jobs, triggers, input sources
+  scheduler/     Jobs, triggers, the run planner, folder watching, history, questions
+  runner/        Runs an agent: models, tools, jail, questions; shared with chummyd
 src-tauri/       Thin app shell: state, IPC commands, native dialogs, windows
   capabilities/  One permission file per window
 ui/              Svelte 5 frontend, one Vite page per window
   index.html     Main window: chat, menu, sessions panel
   editor.html    Loop editor (xyflow)
   settings.html  Settings
-  scheduler.html Scheduler and dispatch
+  scheduler.html Scheduler: jobs, schedules, runs
   src/lib/ipc.ts The only file that talks to Rust
 ```
 
@@ -187,6 +211,14 @@ blocks, calling models through the model pipeline and touching files only
 through the jail → `run:*` events stream to every window → the replies are
 saved to the agent's chat history. Block ports come from the Rust catalog; the
 editor asks Rust for them (`analyze_loop`), so there's a single source of truth.
+
+**Job pipeline:** `chummy_scheduler::Manager` checks schedules and watched
+folders every few seconds, queues what's due (one run per job and per agent,
+missed times skipped or caught up once), and starts runs through a
+`JobRunner`. The app's runner opens the agent's jail and runs the loop with
+`chummy_runner::run_job`, exactly as a chat would. Questions from any run go
+through one `AskBroker` and are answered from the app's windows. None of this
+depends on Tauri, so chummyd can reuse it.
 
 **Model pipeline:** `ProviderConfig` → `Client` → adapter → server-sent events →
 `ChatEvent` (`Text`, `Reasoning`, `ToolCall`, `MalformedToolCall`, `Done`). Tool
@@ -219,8 +251,10 @@ OpenAI-compatible endpoint (127.0.0.1, random bearer token, offline).
 2. **Sandbox, settings, models.** Done.
 3. **Loop engine & editor.** Done.
 4. **Tools, exchanges, functions.** Done.
-5. **Scheduler.** Scheduled jobs with file, web, folder-watch and timer
-   inputs, running agents' loops.
+5. **Scheduler, tray mode, questions for you, security audit.** Done.
+6. **chummyd.** An optional, separately installed background service for jobs,
+   with an authenticated API, configured from the app. See
+   [docs/chummyd-plan.md](docs/chummyd-plan.md).
 
 ## License
 

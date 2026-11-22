@@ -146,7 +146,8 @@ Ports are written `name: kind`.
 | `history` | Conversation | none | `out: text` | `max_messages` (10): recent messages, formatted `User: …` / `Assistant: …`. |
 | `fixed` | Fixed text | none | `out: text` | `text` (""). |
 | `llm` | Ask the model | `in: any` | `out: text` (Answer), `tool: exchange` (Tool call, only with tools), `reasoning: text` | `prompt` ("_INPUT_"), `system` (""), `model` (unset = the agent's model; otherwise a model connection id), `temperature` (unset = model default; 0–2), `max_tokens` (1024), `tools` ([]), `tool_choice` ("auto" or "required"), `on_bad_call` ("retry", "fail" or "answer"), `retries` (2; 0–5). Text input: `_INPUT_` in the prompt is replaced by it (or it's added after the prompt). Exchange input: the exchange is continued; a non-empty `system` replaces its system message for this call. `<think>…</think>` sections are moved from the answer to Reasoning. |
-| `run_tool` | Run tool | `in: exchange` | `out: exchange` | `max_result_chars` (4000), `on_error` ("tell_model" or "fail"). Runs the pending tool calls at the end of the exchange and adds their results. Longer results are cut. |
+| `run_tool` | Run tool | `in: exchange` | `out: exchange` | `max_result_chars` (4000), `on_error` ("tell_model" or "fail"), `confirm` (false). Runs the pending tool calls at the end of the exchange and adds their results. Longer results are cut. With `confirm`, each call waits for the user to allow it (see *Asking the user*). |
+| `ask_user` | Ask me | `in: any` | `out: text` | `prompt` ("_INPUT_"; `_INPUT_` is replaced by the input, or the input is added after it), `timeout_minutes` (0 = wait as long as it takes; at most 10080), `default_answer` (""). Asks the user and sends the answer on. If the wait times out, `default_answer` is used, or the run stops if it's empty. |
 | `exchange` | Start exchange | `in: any` | `out: exchange` | `system` (""), `roles` (["user"]). Text becomes one message with the first role; a list becomes one message per item, with the roles in turn. |
 | `augment` | Add to exchange | `exchange: exchange`, `in: any` | `out: exchange` | `role` ("user"), `format` ("_INPUT_"). Adds the text as a message (`_INPUT_` replaced by it); a list adds one message per item. |
 | `read_exchange` | Read exchange | `in: exchange` | `last: text`, `all: text` | `role` ("assistant"; or "user", "tool", "system", "any"). `last` is the last message from that role, `all` the transcript. |
@@ -171,6 +172,31 @@ a pattern with `(?i)` to ignore case.
 
 File paths in workspace blocks are always relative to the agent's workspace.
 Absolute paths, `..`, and links that point outside the workspace are refused.
+
+## Asking the user
+
+Two things wait for the person using Chummy: an **Ask me** block, and a
+**Run tool** call that needs their OK. Both use the same mechanism: the
+question appears in the agent's chat (or in the editor's run panel for a test
+run, and in the Scheduler for a job), and the run waits until it's answered,
+stopped, or an *Ask me* block's time runs out. Scheduled jobs wait too, and
+Chummy shows a notification.
+
+A tool call needs the user's OK when:
+
+- its Run tool block has `confirm` on, or
+- the tool can use the internet right now and **Ask before tools go online**
+  is on in Settings → Permissions (the default), or
+- the user set the tool to **Ask me before each use** in Settings → Tools.
+
+A loop can ask for more confirmation, never less: the last two rules come
+from the app's settings, not the loop. A refused call goes back to the model
+as an error result (`Error: the user didn't allow this tool call: <reason>`),
+or stops the run if the block's `on_error` is `fail`.
+
+Every block is text handling, model calls, or work in the agent's folder.
+There is no script block: the only code a loop can run is a tool, and tools
+only ever run in the WebAssembly sandbox.
 
 ## Functions
 

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-asks"
+description = "Enables the list_asks command without any pre-configured scope."
+commands.allow = ["list_asks"]
+
+[[permission]]
+identifier = "deny-list-asks"
+description = "Denies the list_asks command without any pre-configured scope."
+commands.deny = ["list_asks"]

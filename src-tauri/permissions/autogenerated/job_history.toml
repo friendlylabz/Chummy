@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-job-history"
+description = "Enables the job_history command without any pre-configured scope."
+commands.allow = ["job_history"]
+
+[[permission]]
+identifier = "deny-job-history"
+description = "Denies the job_history command without any pre-configured scope."
+commands.deny = ["job_history"]

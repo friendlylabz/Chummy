@@ -197,6 +197,41 @@ pub struct ToolOutput {
     pub is_error: bool,
 }
 
+/// What a run wants from the person using Chummy.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AskKind {
+    /// A question from an *Ask me* block; answered with text.
+    Question,
+    /// A tool call waiting to be allowed or refused.
+    ToolApproval { tool: String, arguments: Json },
+}
+
+/// A request for the user, from a block.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Ask {
+    /// Path of the asking block.
+    pub block: String,
+    /// Its label.
+    pub label: String,
+    #[serde(flatten)]
+    pub kind: AskKind,
+    /// The question, or what the tool call is about to do.
+    pub text: String,
+}
+
+/// The user's reply to an [`Ask`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "text", rename_all = "snake_case")]
+pub enum Answer {
+    /// The answer to a question.
+    Text(String),
+    /// Run the tool call.
+    Allow,
+    /// Don't run it, optionally saying why (the model is told).
+    Deny(String),
+}
+
 /// What the engine needs from the outside world.
 pub trait Host: Send + Sync {
     /// Asks a model. `on_text` receives the answer as it streams.
@@ -217,6 +252,15 @@ pub trait Host: Send + Sync {
     fn write_file(&self, path: &str, content: &str, append: bool) -> Result<(), String>;
     /// Names in a folder; folders end with `/`.
     fn list_files(&self, path: &str) -> Result<Vec<String>, String>;
+    /// Puts `ask` in front of the user and waits for the answer. `Err`
+    /// means nobody can be asked (the run then stops with that message).
+    /// The engine handles stopping and timeouts; this just waits.
+    fn ask(&self, ask: Ask) -> impl Future<Output = Result<Answer, String>> + Send;
+    /// Whether calls to `tool` must be allowed by the user first, whatever
+    /// the Run tool block says (e.g. tools that use the internet).
+    fn must_confirm(&self, _tool: &str) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -262,6 +306,66 @@ pub enum Event {
     Notice { block: String, text: String },
     /// A Reply block produced part of the answer.
     Reply { block: String, text: String },
+    /// A block is waiting for the user (a question, or a tool to allow).
+    Asked { block: String, text: String },
+    /// The wait ended (answered, timed out or stopped).
+    Answered { block: String },
+}
+
+/// Longest argument value shown in full when asking to run a tool.
+const APPROVAL_VALUE_CHARS: usize = 2000;
+
+/// Makes text safe to show for an approval: control and direction-changing
+/// characters (which can make text look like something else) are shown as
+/// visible codes instead.
+fn visible(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '\n' | '\t' => c.to_string(),
+            c if c.is_control()
+                || matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}') =>
+            {
+                format!("<U+{:04X}>", c as u32)
+            }
+            c => c.to_string(),
+        })
+        .collect()
+}
+
+/// What a tool call will do, for the user to allow. Every argument is shown;
+/// a value too long to show says how much was left out, so nothing can hide
+/// past the end.
+fn describe_call(tool: &str, arguments: &Json) -> String {
+    let args = match arguments.as_object() {
+        Some(o) if !o.is_empty() => o
+            .iter()
+            .map(|(k, v)| {
+                let v = match v {
+                    Json::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+                let n = v.chars().count();
+                let shown = if n > APPROVAL_VALUE_CHARS {
+                    format!(
+                        "{} … ({} more characters not shown)",
+                        v.chars().take(APPROVAL_VALUE_CHARS).collect::<String>(),
+                        n - APPROVAL_VALUE_CHARS
+                    )
+                } else {
+                    v
+                };
+                format!("{}: {}", visible(k), visible(&shown))
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    };
+    let tool = visible(tool);
+    if args.is_empty() {
+        format!("Run the tool “{tool}”?")
+    } else {
+        format!("Run the tool “{tool}” with:\n{args}")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -502,6 +606,8 @@ enum Stop {
 enum BlockErr {
     Stop(Stop),
     Failed(String),
+    /// An *Ask me* wait ran out of time.
+    TimedOut,
 }
 
 impl From<Stop> for BlockErr {
@@ -550,7 +656,11 @@ impl<'a, H: Host> Runner<'a, H> {
                 let outputs = match self.execute(frame, &id, args, on_event).await {
                     Ok(o) => o,
                     Err(BlockErr::Stop(s)) => return Err(s),
-                    Err(BlockErr::Failed(e)) => {
+                    Err(e @ (BlockErr::Failed(_) | BlockErr::TimedOut)) => {
+                        let e = match e {
+                            BlockErr::Failed(e) => e,
+                            _ => "it ran out of time".to_string(),
+                        };
                         on_event(Event::BlockState {
                             block: path.clone(),
                             label: label.clone(),
@@ -678,10 +788,40 @@ impl<'a, H: Host> Runner<'a, H> {
                         tool: call.name.clone(),
                         arguments: call.arguments.to_string(),
                     });
-                    let fut = self.host.run_tool(&call.name, call.arguments.clone());
-                    let result = tokio::select! {
-                        r = fut => r,
-                        _ = cancelled(self.cancel) => return Err(Stop::Cancelled.into()),
+                    let refused = if p.confirm || self.host.must_confirm(&call.name) {
+                        let ask = Ask {
+                            block: path.clone(),
+                            label: frame.label(id),
+                            kind: AskKind::ToolApproval {
+                                tool: call.name.clone(),
+                                arguments: call.arguments.clone(),
+                            },
+                            text: describe_call(&call.name, &call.arguments),
+                        };
+                        match self.wait_for(ask, None, on_event).await? {
+                            Answer::Allow => None,
+                            Answer::Deny(why) => Some(why),
+                            Answer::Text(t) => Some(t),
+                        }
+                    } else {
+                        None
+                    };
+                    let result = if let Some(why) = refused {
+                        let why = why.trim();
+                        Ok(ToolOutput {
+                            text: if why.is_empty() {
+                                "Error: the user didn't allow this tool call.".into()
+                            } else {
+                                format!("Error: the user didn't allow this tool call: {why}")
+                            },
+                            is_error: true,
+                        })
+                    } else {
+                        let fut = self.host.run_tool(&call.name, call.arguments.clone());
+                        tokio::select! {
+                            r = fut => r,
+                            _ = cancelled(self.cancel) => return Err(Stop::Cancelled.into()),
+                        }
                     };
                     let out = match result {
                         Ok(o) => o,
@@ -707,6 +847,37 @@ impl<'a, H: Host> Runner<'a, H> {
                     });
                 }
                 one(Value::Exchange(ex))
+            }
+            BlockKind::AskUser(p) => {
+                let text = fill_prompt(&p.prompt, &arg(0).as_text());
+                let ask = Ask {
+                    block: path.clone(),
+                    label: frame.label(id),
+                    kind: AskKind::Question,
+                    text,
+                };
+                let limit = (p.timeout_minutes > 0)
+                    .then(|| Duration::from_secs(u64::from(p.timeout_minutes) * 60));
+                match self.wait_for(ask, limit, on_event).await {
+                    Ok(Answer::Text(t)) => one(Value::Text(t)),
+                    Ok(Answer::Allow) => one(Value::Text("yes".into())),
+                    Ok(Answer::Deny(t)) => {
+                        one(Value::Text(if t.is_empty() { "no".into() } else { t }))
+                    }
+                    Err(BlockErr::TimedOut) if !p.default_answer.is_empty() => {
+                        on_event(Event::Notice {
+                            block: path,
+                            text: "No answer in time; using the default answer.".into(),
+                        });
+                        one(Value::Text(p.default_answer))
+                    }
+                    Err(BlockErr::TimedOut) => Err(BlockErr::Failed(format!(
+                        "nobody answered within {} minute{}",
+                        p.timeout_minutes,
+                        if p.timeout_minutes == 1 { "" } else { "s" }
+                    ))),
+                    Err(e) => Err(e),
+                }
             }
             BlockKind::Exchange(p) => {
                 let mut ex = Exchange::default();
@@ -879,6 +1050,42 @@ impl<'a, H: Host> Runner<'a, H> {
                     .map_err(BlockErr::Failed)?,
             )),
         }
+    }
+
+    /// Asks the user and waits, until answered, stopped or `limit` passes.
+    async fn wait_for(
+        &mut self,
+        ask: Ask,
+        limit: Option<Duration>,
+        on_event: &mut Emit<'_>,
+    ) -> Result<Answer, BlockErr> {
+        on_event(Event::Asked {
+            block: ask.block.clone(),
+            text: ask.text.clone(),
+        });
+        let block = ask.block.clone();
+        let fut = self.host.ask(ask);
+        let timeout = async {
+            match limit {
+                Some(d) => tokio::time::sleep(d).await,
+                None => std::future::pending().await,
+            }
+        };
+        let r = tokio::select! {
+            // Stopping a run also withdraws its question, which can arrive
+            // first; it's still a stop, not a failure.
+            r = fut => r.map_err(|e| {
+                if self.cancel.load(Ordering::Relaxed) {
+                    BlockErr::Stop(Stop::Cancelled)
+                } else {
+                    BlockErr::Failed(e)
+                }
+            }),
+            _ = cancelled(self.cancel) => Err(Stop::Cancelled.into()),
+            _ = timeout => Err(BlockErr::TimedOut),
+        };
+        on_event(Event::Answered { block });
+        r
     }
 
     async fn function_block(
@@ -1204,6 +1411,13 @@ mod tests {
         calls: Mutex<Vec<LlmCall>>,
         files: Mutex<HashMap<String, String>>,
         tool_runs: Mutex<Vec<(String, Json)>>,
+        asks: Mutex<Vec<Ask>>,
+        answers_for_user: Mutex<VecDeque<Answer>>,
+        never_answer: bool,
+        confirm_tools: Vec<String>,
+        /// Set when asked, like a user stopping the run (which withdraws
+        /// the question).
+        stop_on_ask: Option<std::sync::Arc<AtomicBool>>,
     }
 
     fn text(s: &str) -> LlmAnswer {
@@ -1298,6 +1512,24 @@ mod tests {
         }
         fn list_files(&self, _path: &str) -> Result<Vec<String>, String> {
             Ok(self.files.lock().unwrap().keys().cloned().collect())
+        }
+        async fn ask(&self, ask: Ask) -> Result<Answer, String> {
+            self.asks.lock().unwrap().push(ask);
+            if let Some(stop) = &self.stop_on_ask {
+                stop.store(true, Ordering::Relaxed);
+                return Err("The question was withdrawn.".into());
+            }
+            if self.never_answer {
+                std::future::pending::<()>().await;
+            }
+            self.answers_for_user
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or_else(|| "nobody to ask".to_string())
+        }
+        fn must_confirm(&self, tool: &str) -> bool {
+            self.confirm_tools.iter().any(|t| t == tool)
         }
     }
 
@@ -2032,5 +2264,177 @@ mod tests {
             .collect();
         let a = analyze(&lp(blocks, vec![]));
         assert!(a.issues.iter().any(|i| i.message.contains("too large")));
+    }
+
+    #[tokio::test]
+    async fn ask_me_waits_for_the_answer() {
+        let l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b(
+                    "ask",
+                    "ask_user",
+                    json!({ "prompt": "Which file for _INPUT_?" }),
+                ),
+                b("out", "output", json!({})),
+            ],
+            vec![ln("in", "out", "ask", "in"), ln("ask", "out", "out", "in")],
+        );
+        let host = Fake::default();
+        host.answers_for_user
+            .lock()
+            .unwrap()
+            .push_back(Answer::Text("notes.md".into()));
+        let (o, events) = go(&l, &host, "the summary").await;
+        assert_eq!(o.replies, ["notes.md"]);
+        let asks = host.asks.lock().unwrap().clone();
+        assert_eq!(asks[0].text, "Which file for the summary?");
+        assert_eq!(asks[0].kind, AskKind::Question);
+        assert!(events.iter().any(|e| matches!(e, Event::Asked { .. })));
+        assert!(events.iter().any(|e| matches!(e, Event::Answered { .. })));
+
+        // Nobody to ask: the run stops with the host's reason.
+        let host = Fake::default();
+        let (o, _) = go(&l, &host, "x").await;
+        assert!(
+            matches!(o.status, RunStatus::Failed { ref error, .. } if error.contains("nobody to ask")),
+            "{o:?}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ask_me_times_out_to_the_default_or_stops() {
+        let mk = |default: &str| {
+            lp(
+                vec![
+                    b("in", "input", json!({})),
+                    b(
+                        "ask",
+                        "ask_user",
+                        json!({ "prompt": "_INPUT_", "timeout_minutes": 5, "default_answer": default }),
+                    ),
+                    b("out", "output", json!({})),
+                ],
+                vec![ln("in", "out", "ask", "in"), ln("ask", "out", "out", "in")],
+            )
+        };
+        let host = Fake {
+            never_answer: true,
+            ..Default::default()
+        };
+        let (o, _) = go(&mk("skip it"), &host, "Anything?").await;
+        assert_eq!(o.replies, ["skip it"]);
+        let (o, _) = go(&mk(""), &host, "Anything?").await;
+        assert!(
+            matches!(o.status, RunStatus::Failed { ref error, .. } if error.contains("within 5 minutes")),
+            "{o:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn waiting_runs_can_be_stopped() {
+        let l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b("ask", "ask_user", json!({})),
+                b("out", "output", json!({})),
+            ],
+            vec![ln("in", "out", "ask", "in"), ln("ask", "out", "out", "in")],
+        );
+        let host = Fake {
+            never_answer: true,
+            ..Default::default()
+        };
+        let cancel = AtomicBool::new(false);
+        let stopper = async {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            cancel.store(true, Ordering::Relaxed);
+        };
+        let inputs = RunInputs::default();
+        let (o, _) = tokio::join!(run(&l, &host, &inputs, &cancel, |_| {}), stopper);
+        assert_eq!(o.status, RunStatus::Stopped);
+    }
+
+    #[tokio::test]
+    async fn tool_calls_can_need_the_users_ok() {
+        // The block asks: allowed, then refused with a reason.
+        let mut l = tool_loop();
+        l.blocks[2].params = json!({ "confirm": true });
+        let host = Fake::script(vec![
+            calls("echo", json!({ "text": "one" })),
+            calls("echo", json!({ "text": "two" })),
+            text("done"),
+        ]);
+        host.answers_for_user
+            .lock()
+            .unwrap()
+            .extend([Answer::Allow, Answer::Deny("not that one".into())]);
+        let (o, _) = go(&l, &host, "x").await;
+        assert_eq!(o.replies, ["done"]);
+        assert_eq!(
+            host.tool_runs.lock().unwrap().len(),
+            1,
+            "only the allowed call ran"
+        );
+        let asks = host.asks.lock().unwrap().clone();
+        assert!(matches!(
+            &asks[0].kind,
+            AskKind::ToolApproval { tool, arguments } if tool == "echo" && arguments["text"] == "one"
+        ));
+        assert!(asks[0].text.contains("text: one"));
+        let last = host.calls.lock().unwrap().last().unwrap().messages.clone();
+        let refusal = last.iter().rev().find(|m| m.role == Role::Tool).unwrap();
+        assert!(refusal.text.contains("didn't allow") && refusal.text.contains("not that one"));
+
+        // The host can require it even when the block doesn't ask.
+        let l = tool_loop();
+        let host = Fake {
+            confirm_tools: vec!["echo".into()],
+            ..Fake::script(vec![calls("echo", json!({ "text": "a" })), text("ok")])
+        };
+        host.answers_for_user
+            .lock()
+            .unwrap()
+            .push_back(Answer::Allow);
+        let (o, _) = go(&l, &host, "x").await;
+        assert_eq!(
+            (o.replies.as_slice(), host.asks.lock().unwrap().len()),
+            (&["ok".to_string()][..], 1)
+        );
+
+        // Without confirmation nothing is asked.
+        let host = Fake::script(vec![calls("echo", json!({ "text": "a" })), text("ok")]);
+        go(&tool_loop(), &host, "x").await;
+        assert!(host.asks.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn approvals_show_everything_plainly() {
+        let long = format!("https://good.example/{}&secret=1", "a".repeat(2100));
+        let d = describe_call("fetch_page", &json!({ "url": long }));
+        assert!(d.contains("more characters not shown"), "{d}");
+        let tricky = describe_call("t", &json!({ "path": "evil\u{202e}txt.exe" }));
+        assert!(tricky.contains("<U+202E>") && !tricky.contains('\u{202e}'));
+        assert_eq!(describe_call("t", &json!({})), "Run the tool “t”?");
+    }
+
+    #[tokio::test]
+    async fn a_withdrawn_question_during_a_stop_is_a_stop() {
+        let l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b("ask", "ask_user", json!({})),
+                b("out", "output", json!({})),
+            ],
+            vec![ln("in", "out", "ask", "in"), ln("ask", "out", "out", "in")],
+        );
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let host = Fake {
+            stop_on_ask: Some(cancel.clone()),
+            ..Default::default()
+        };
+        let o = run(&l, &host, &RunInputs::default(), &cancel, |_| {}).await;
+        assert_eq!(o.status, RunStatus::Stopped);
+        assert_eq!(host.asks.lock().unwrap().len(), 1);
     }
 }

@@ -2,6 +2,8 @@
   import { commands, errorText, type Block } from "$lib/ipc";
   import { settings } from "$lib/stores/settings.svelte";
   import { runs } from "$lib/stores/runs.svelte";
+  import { asks } from "$lib/stores/asks.svelte";
+  import AskCard from "$lib/components/AskCard.svelte";
   import Button from "$lib/components/Button.svelte";
   import Icon from "$lib/components/Icon.svelte";
   import type { LoopFile } from "$lib/ipc";
@@ -86,6 +88,10 @@
   </div>
   {#if error}<p class="err">{error}</p>{/if}
 
+  {#each asks.forRun(runId) as p (p.id)}
+    <div class="ask"><AskCard pending={p} showOrigin={false} /></div>
+  {/each}
+
   {#if run}
     {#if run.streaming && running}
       <div class="section">Model output</div>
@@ -118,6 +124,9 @@
 </aside>
 
 <style>
+  .ask {
+    margin-top: var(--space-3);
+  }
   .activity {
     list-style: none;
     margin: 0;

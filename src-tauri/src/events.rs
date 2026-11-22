@@ -25,3 +25,9 @@ pub const CHAT_MESSAGE: &str = "chat:message";
 pub const TOOLS_CHANGED: &str = "tools:changed";
 /// Payload: `ToolsProgress`.
 pub const TOOLS_PROGRESS: &str = "tools:progress";
+/// Payload: `chummy_scheduler::Overview`.
+pub const JOBS_CHANGED: &str = "jobs:changed";
+/// Payload: `Vec<chummy_scheduler::Pending>`.
+pub const ASKS_CHANGED: &str = "asks:changed";
+/// Sent to the main window only. Payload: `tray::Activity`.
+pub const CLOSE_REQUESTED: &str = "app:close-requested";

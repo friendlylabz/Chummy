@@ -135,26 +135,37 @@ impl<T: Serialize + DeserializeOwned + Default> JsonDoc<T> {
 
     /// Saves the document atomically, keeping the previous version as a backup.
     pub fn save(&self, value: &T) -> Result<(), StoreError> {
-        let json = serde_json::to_vec_pretty(value)?;
-        let tmp = self.sibling(".tmp");
-
-        {
-            let mut f = File::create(&tmp).map_err(io_err(&tmp))?;
-            f.write_all(&json).map_err(io_err(&tmp))?;
-            f.write_all(b"\n").map_err(io_err(&tmp))?;
-            f.sync_all().map_err(io_err(&tmp))?;
-        }
-        restrict_to_owner(&tmp).map_err(io_err(&tmp))?;
-
-        if self.path.exists() {
-            let backup = self.sibling(".bak");
-            fs::copy(&self.path, &backup).map_err(io_err(&backup))?;
-        }
-        // On Windows, std's rename replaces an existing file.
-        fs::rename(&tmp, &self.path).map_err(io_err(&self.path))?;
-        sync_parent(&self.path);
-        Ok(())
+        let mut json = serde_json::to_vec_pretty(value)?;
+        json.push(b'\n');
+        write_atomic(&self.path, &json, true)
     }
+}
+
+/// Writes `bytes` to `path` so that a crash leaves either the old or the new
+/// file: a flushed temp file renamed over the original. With `backup`, the
+/// previous version is copied to `<file>.bak` first. The file is private to
+/// the user on Unix.
+pub fn write_atomic(path: &Path, bytes: &[u8], backup: bool) -> Result<(), StoreError> {
+    let sibling = |suffix: &str| {
+        let mut name = path.file_name().unwrap_or_default().to_os_string();
+        name.push(suffix);
+        path.with_file_name(name)
+    };
+    let tmp = sibling(".tmp");
+    {
+        let mut f = File::create(&tmp).map_err(io_err(&tmp))?;
+        f.write_all(bytes).map_err(io_err(&tmp))?;
+        f.sync_all().map_err(io_err(&tmp))?;
+    }
+    restrict_to_owner(&tmp).map_err(io_err(&tmp))?;
+    if backup && path.exists() {
+        let b = sibling(".bak");
+        fs::copy(path, &b).map_err(io_err(&b))?;
+    }
+    // On Windows, std's rename replaces an existing file.
+    fs::rename(&tmp, path).map_err(io_err(path))?;
+    sync_parent(path);
+    Ok(())
 }
 
 /// `Ok(None)` if the file doesn't exist.

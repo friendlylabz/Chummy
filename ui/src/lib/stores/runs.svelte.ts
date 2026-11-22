@@ -20,6 +20,8 @@ export interface RunView {
   /** Tool calls, their results and notices, in order. */
   activity: { kind: "call" | "result" | "error" | "notice"; block: string; text: string }[];
   outcome: RunOutcome | null;
+  /** A block is waiting for the user. */
+  waitingForYou: boolean;
 }
 
 class RunsStore {
@@ -63,6 +65,13 @@ class RunsStore {
         case "notice":
           r.activity.push({ kind: "notice", block: event.block, text: event.text });
           break;
+        case "asked":
+          r.waitingForYou = true;
+          r.activity.push({ kind: "notice", block: event.block, text: "Waiting for your answer…" });
+          break;
+        case "answered":
+          r.waitingForYou = false;
+          break;
       }
     });
     await events.onRunFinished(({ run_id, outcome }) => {
@@ -86,11 +95,17 @@ class RunsStore {
       replies: [],
       activity: [],
       outcome: null,
+      waitingForYou: false,
     };
   }
 
   get active(): RunView[] {
     return Object.values(this.runs).filter((r) => !r.outcome);
+  }
+
+  /** A scheduled job running as this agent, if any. */
+  jobForAgent(agentId: string | null): RunView | undefined {
+    return Object.values(this.runs).find((r) => r.info.agent_id === agentId && r.info.source === "job" && !r.outcome);
   }
 
   forAgent(agentId: string | null): RunView | undefined {

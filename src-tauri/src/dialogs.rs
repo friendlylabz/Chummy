@@ -81,16 +81,21 @@ pub async fn pick_folder(app: &AppHandle, window: &str, title: &str) -> Option<P
     .flatten()
 }
 
-/// Lets the user pick a loop file to import.
-pub async fn pick_loop_file(app: &AppHandle, window: &str) -> Option<PathBuf> {
+/// Lets the user pick a JSON file to import.
+pub async fn pick_json_file(
+    app: &AppHandle,
+    window: &str,
+    title: &str,
+    kind: &str,
+) -> Option<PathBuf> {
     let app = app.clone();
-    let window = window.to_string();
+    let (window, title, kind) = (window.to_string(), title.to_string(), kind.to_string());
     tauri::async_runtime::spawn_blocking(move || {
         let mut d = app
             .dialog()
             .file()
-            .set_title("Import a loop")
-            .add_filter("Chummy loop", &["json"]);
+            .set_title(title)
+            .add_filter(kind, &["json"]);
         if let Some(w) = parent(&app, &window) {
             d = d.set_parent(&w);
         }
@@ -101,17 +106,28 @@ pub async fn pick_loop_file(app: &AppHandle, window: &str) -> Option<PathBuf> {
     .flatten()
 }
 
-/// Asks where to save an exported loop.
-pub async fn save_loop_file(app: &AppHandle, window: &str, suggested: &str) -> Option<PathBuf> {
+/// Asks where to save an exported JSON file.
+pub async fn save_json_file(
+    app: &AppHandle,
+    window: &str,
+    title: &str,
+    kind: &str,
+    suggested: &str,
+) -> Option<PathBuf> {
     let app = app.clone();
-    let (window, suggested) = (window.to_string(), suggested.to_string());
+    let (window, title, kind, suggested) = (
+        window.to_string(),
+        title.to_string(),
+        kind.to_string(),
+        suggested.to_string(),
+    );
     tauri::async_runtime::spawn_blocking(move || {
         let mut d = app
             .dialog()
             .file()
-            .set_title("Export loop")
+            .set_title(title)
             .set_file_name(suggested)
-            .add_filter("Chummy loop", &["json"]);
+            .add_filter(kind, &["json"]);
         if let Some(w) = parent(&app, &window) {
             d = d.set_parent(&w);
         }
@@ -120,4 +136,14 @@ pub async fn save_loop_file(app: &AppHandle, window: &str, suggested: &str) -> O
     .await
     .ok()
     .flatten()
+}
+
+/// Lets the user pick a loop file to import.
+pub async fn pick_loop_file(app: &AppHandle, window: &str) -> Option<PathBuf> {
+    pick_json_file(app, window, "Import a loop", "Chummy loop").await
+}
+
+/// Asks where to save an exported loop.
+pub async fn save_loop_file(app: &AppHandle, window: &str, suggested: &str) -> Option<PathBuf> {
+    save_json_file(app, window, "Export loop", "Chummy loop", suggested).await
 }

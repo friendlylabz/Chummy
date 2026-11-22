@@ -11,12 +11,13 @@ class SettingsStore {
     theme: "system",
     agents: [],
     active_agent: null,
-    permissions: { network: false, tools: false },
+    permissions: { network: false, tools: false, confirm_online_tools: true },
     providers: [],
     default_provider: null,
     local: { device: "auto" },
     hf_token_set: false,
     tools: {},
+    general: { close: "ask", notifications: true, max_job_runs: 1 },
   });
   /** The theme actually shown, with "system" resolved. */
   resolvedTheme = $state<"dark" | "light">(prefersDark.matches ? "dark" : "light");

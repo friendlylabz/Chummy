@@ -279,3 +279,80 @@ mod tests {
         assert_eq!(ids.len(), ps.len());
     }
 }
+
+/// What's wrong with a model server's address, if anything, in words for
+/// the user. Plain `http://` is only allowed for this computer and the local
+/// network: anywhere else it would send API keys and conversations
+/// unencrypted. Addresses with a user name or password in them are refused,
+/// so keys only ever live in the keychain.
+pub fn endpoint_problem(url: &str) -> Option<String> {
+    let url = url.trim();
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Some("The server address must start with http:// or https://.".into());
+    }
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return Some("That server address isn't valid.".into());
+    };
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Some("Don't put a user name or key in the address; use the API key field.".into());
+    }
+    let Some(host) = parsed.host() else {
+        return Some("The server address needs a host name.".into());
+    };
+    if parsed.scheme() == "https" {
+        return None;
+    }
+    let local = match host {
+        url::Host::Ipv4(ip) => ip.is_loopback() || ip.is_private() || ip.is_link_local(),
+        url::Host::Ipv6(ip) => {
+            ip.is_loopback() || ip.is_unique_local() || ip.is_unicast_link_local()
+        }
+        url::Host::Domain(d) => {
+            let d = d.trim_end_matches('.').to_ascii_lowercase();
+            d == "localhost"
+                || d.ends_with(".localhost")
+                || d.ends_with(".local")
+                || d.ends_with(".lan")
+                || d.ends_with(".home.arpa")
+                || d.ends_with(".internal")
+                || !d.contains('.')
+        }
+    };
+    (!local).then(|| {
+        "Use https:// for servers on the internet. Plain http:// would send your API key and \
+         conversations unencrypted; it's only allowed for this computer and your local network."
+            .into()
+    })
+}
+
+#[cfg(test)]
+mod endpoint_tests {
+    use super::endpoint_problem;
+
+    #[test]
+    fn plain_http_only_for_local_servers() {
+        for ok in [
+            "https://api.openai.com/v1",
+            "http://localhost:11434",
+            "http://127.0.0.1:8080/v1",
+            "http://192.168.1.20:8000/v1",
+            "http://10.0.0.5/v1",
+            "http://[::1]:8080",
+            "http://gpu-box:8000/v1",
+            "http://studio.local:1234/v1",
+            "https://203.0.113.9/v1",
+        ] {
+            assert_eq!(endpoint_problem(ok), None, "{ok}");
+        }
+        for bad in [
+            "http://api.example.com/v1",
+            "http://203.0.113.9/v1",
+            "https://user:key@api.example.com",
+            "ftp://x",
+            "localhost:8080",
+            "http://",
+        ] {
+            assert!(endpoint_problem(bad).is_some(), "{bad}");
+        }
+    }
+}

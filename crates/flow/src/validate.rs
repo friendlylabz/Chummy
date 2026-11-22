@@ -596,6 +596,14 @@ fn param_problems(k: &BlockKind) -> Vec<String> {
         BlockKind::RunTool(p) if p.max_result_chars < 100 => {
             v.push("longest result must be at least 100 characters".into())
         }
+        BlockKind::AskUser(p) => {
+            if p.timeout_minutes > 10_080 {
+                v.push("give up after must be at most 10,080 minutes (a week)".into());
+            }
+            if p.prompt.trim().is_empty() {
+                v.push("write the question".into());
+            }
+        }
         BlockKind::Exchange(p) if p.roles.is_empty() => v.push("choose at least one role".into()),
         BlockKind::Function(p) if p.function.is_empty() => v.push("no function chosen".into()),
         BlockKind::Regex(p) | BlockKind::Branch(p) => regex_check(&p.pattern, &mut v),

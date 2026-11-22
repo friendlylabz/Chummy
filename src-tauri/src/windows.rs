@@ -84,3 +84,13 @@ pub fn open(app: &AppHandle, window: AppWindow, section: Option<&str>) -> tauri:
         .build()?;
     Ok(())
 }
+
+/// Shows and focuses the main window (from the tray, a second launch, or a
+/// notification).
+pub fn show_main(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}

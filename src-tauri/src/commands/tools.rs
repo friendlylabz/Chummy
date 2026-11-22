@@ -20,6 +20,8 @@ pub struct ToolView {
     pub enabled: bool,
     /// The user let this tool use the internet.
     pub network_allowed: bool,
+    /// Every call waits for the user's OK.
+    pub ask: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -48,6 +50,7 @@ pub fn status(state: &AppState) -> ToolsStatus {
                 ToolView {
                     enabled: pref.enabled,
                     network_allowed: pref.network && m.network,
+                    ask: pref.ask,
                     manifest: m,
                 }
             })
@@ -196,4 +199,21 @@ pub async fn set_tool_network(
     state.update(&app, |s| s.tools.entry(name).or_default().network = enabled)?;
     changed(&app, &state);
     Ok(enabled)
+}
+
+/// Makes every call to a tool wait for the user's OK (or stop waiting).
+/// Asking is the safe side, so neither direction needs a confirmation.
+#[tauri::command]
+pub fn set_tool_ask(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    ask: bool,
+) -> CmdResult<()> {
+    if chummy_tools::manifest(&state.tool_paths, &name).is_none() {
+        return Err(format!("The tool “{name}” isn't installed."));
+    }
+    state.update(&app, |s| s.tools.entry(name).or_default().ask = ask)?;
+    changed(&app, &state);
+    Ok(())
 }

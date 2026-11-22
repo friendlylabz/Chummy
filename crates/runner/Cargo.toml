@@ -1,0 +1,26 @@
+[package]
+name = "chummy-runner"
+description = "Runs an agent's loop: models, sandboxed tools, the agent's folder and questions for the user. Shared by the Chummy app and the future chummyd."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+jiff = "0.2"
+chummy-flow.workspace = true
+chummy-llm.workspace = true
+chummy-tools.workspace = true
+chummy-sandbox.workspace = true
+chummy-scheduler.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

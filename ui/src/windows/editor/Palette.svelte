@@ -16,7 +16,7 @@
     onaddfunction: (f: FunctionDef) => void;
   } = $props();
 
-  const order: Category[] = ["start", "think", "exchange", "text", "flow", "workspace", "finish"];
+  const order: Category[] = ["start", "think", "you", "exchange", "text", "flow", "workspace", "finish"];
   const groups = $derived(
     order
       .map((c) => ({ c, items: loops.catalog.filter((b) => b.category === c && b.palette) }))

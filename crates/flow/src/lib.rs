@@ -25,8 +25,8 @@ pub use blocks::{
     PortSpec, RoleFilter, ToolChoice, ValueKind, catalog,
 };
 pub use engine::{
-    BlockState, ChatTurn, Event, Host, LlmAnswer, LlmCall, MalformedCall, RunInputs, RunLimits,
-    RunOutcome, RunStatus, ToolOutput, Value, run,
+    Answer, Ask, AskKind, BlockState, ChatTurn, Event, Host, LlmAnswer, LlmCall, MalformedCall,
+    RunInputs, RunLimits, RunOutcome, RunStatus, ToolOutput, Value, run,
 };
 pub use exchange::{ExMessage, Exchange, Role, ToolCall, ToolInfo, check_arguments};
 pub use format::{

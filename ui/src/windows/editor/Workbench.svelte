@@ -16,6 +16,7 @@
   import { settings } from "$lib/stores/settings.svelte";
   import { loops } from "$lib/stores/loops.svelte";
   import { runs } from "$lib/stores/runs.svelte";
+  import { asks } from "$lib/stores/asks.svelte";
   import Button from "$lib/components/Button.svelte";
   import Icon from "$lib/components/Icon.svelte";
   import Modal from "$lib/components/Modal.svelte";
@@ -95,6 +96,7 @@
   onMount(() => {
     loops.init();
     runs.init();
+    asks.init();
     const go = (section: string) => {
       if (section === "import") guard(importLoop);
       else if (section) guard(() => openLoop(section));

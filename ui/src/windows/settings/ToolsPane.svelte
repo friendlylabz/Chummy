@@ -38,6 +38,15 @@
     }
   }
 
+  async function ask(t: ToolView, on: boolean) {
+    error = "";
+    try {
+      await commands.setToolAsk(t.name, on);
+    } catch (e) {
+      error = errorText(e);
+    }
+  }
+
   async function net(t: ToolView, on: boolean) {
     error = "";
     try {
@@ -122,6 +131,17 @@
               </div>
             </div>
             <Toggle checked={t.network_allowed} label="Internet for {t.title}" onchange={(v) => net(t, v)} />
+          </div>
+        {/if}
+        {#if t.enabled}
+          <div class="row sub-row">
+            <div>
+              <div class="small">Ask me before each use</div>
+              <div class="faint xs">
+                {#if t.network && t.network_allowed && perms.confirm_online_tools}Already asks, because it can go online.{:else}Each call waits until you allow it in chat.{/if}
+              </div>
+            </div>
+            <Toggle checked={t.ask} label="Ask before using {t.title}" onchange={(v) => ask(t, v)} />
           </div>
         {/if}
         {#if open === t.name}

@@ -6,7 +6,8 @@
     "main"
   ],
   "permissions": [
-    "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
     "allow-setup-status",
     "allow-open-window",
     "allow-get-settings",
@@ -16,6 +17,10 @@
     "allow-clear-chat",
     "allow-send-message",
     "allow-stop-run",
-    "allow-list-runs"
+    "allow-list-runs",
+    "allow-list-asks",
+    "allow-answer-ask",
+    "allow-close-activity",
+    "allow-close-choice"
   ]
 }

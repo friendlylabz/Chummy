@@ -32,7 +32,11 @@ pub enum JailError {
 pub struct DirEntry {
     pub name: String,
     pub is_dir: bool,
+    /// A regular file (not a folder, link or device).
+    pub is_file: bool,
     pub size: u64,
+    /// Last modified, in milliseconds since 1970 (0 if unknown).
+    pub modified_ms: i64,
 }
 
 /// A handle on a validated workspace. Every operation takes a path relative
@@ -140,10 +144,18 @@ impl Jail {
         for entry in self.dir.read_dir(rel.for_cap()).map_err(Self::io(&rel))? {
             let entry = entry.map_err(Self::io(&rel))?;
             let meta = entry.metadata().map_err(Self::io(&rel))?;
+            let modified_ms = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.into_std().duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
             out.push(DirEntry {
                 name: entry.file_name().to_string_lossy().into_owned(),
                 is_dir: meta.is_dir(),
+                is_file: meta.is_file(),
                 size: if meta.is_dir() { 0 } else { meta.len() },
+                modified_ms,
             });
         }
         out.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));

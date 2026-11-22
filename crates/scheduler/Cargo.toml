@@ -1,6 +1,6 @@
 [package]
 name = "chummy-scheduler"
-description = "Scheduled job definitions, triggers and input sources for Chummy."
+description = "Jobs, schedules, the run queue and questions for the user. Shared by the Chummy app and the future chummyd."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,7 +12,15 @@ publish = false
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+jiff = "0.2"
+getrandom = "0.3"
+chummy-flow.workspace = true
+chummy-store.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

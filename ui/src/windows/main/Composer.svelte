@@ -4,6 +4,7 @@
   import { settings } from "$lib/stores/settings.svelte";
   import { chat } from "$lib/stores/chat.svelte";
   import { runs } from "$lib/stores/runs.svelte";
+  import { asks } from "$lib/stores/asks.svelte";
   import Icon from "$lib/components/Icon.svelte";
 
   let text = $state("");
@@ -11,7 +12,12 @@
 
   const agent = $derived(settings.current.agents.find((a) => a.id === settings.current.active_agent) ?? null);
   const run = $derived(agent ? runs.forAgent(agent.id) : undefined);
-  const disabled = $derived(!setup.ready || !agent);
+  const jobRun = $derived(agent ? runs.jobForAgent(agent.id) : undefined);
+  /** The chat run is waiting for an answer, which this box sends. */
+  const question = $derived(
+    run ? asks.forRun(run.info.run_id).find((p) => p.ask.kind === "question") : undefined,
+  );
+  const disabled = $derived(!setup.ready || !agent || (!!jobRun && !question));
   const placeholder = $derived.by(() => {
     const s = setup.status;
     const missing = [
@@ -23,11 +29,20 @@
       const list = missing.length > 1 ? `${missing.slice(0, -1).join(", ")} and ${missing.at(-1)}` : missing[0];
       return `To start chatting, ${list}`;
     }
+    if (question) return `Answer ${agent?.name ?? "the agent"}…`;
+    if (jobRun && agent) return `${agent.name} is busy with the job “${jobRun.info.title}”…`;
     return agent ? `Message ${agent.name}…` : "Choose an agent to chat with";
   });
 
   async function send() {
     const msg = text.trim();
+    if (question && msg) {
+      if (await asks.answer(question.id, { kind: "text", text: msg })) {
+        text = "";
+        resize();
+      }
+      return;
+    }
     if (disabled || !msg || run) return;
     if (await chat.send(msg)) {
       text = "";
@@ -50,6 +65,7 @@
 </script>
 
 {#if chat.error}<div class="error" role="alert">{chat.error}</div>{/if}
+{#if question && asks.errors[question.id]}<div class="error" role="alert">{asks.errors[question.id]}</div>{/if}
 <form
   class="composer"
   class:disabled
@@ -68,7 +84,7 @@
     rows="1"
     aria-label="Message"
   ></textarea>
-  {#if run}
+  {#if run && !question}
     <button type="button" class="send stop" aria-label="Stop" onclick={() => commands.stopRun(run.info.run_id)}>
       <Icon name="stop" size={15} />
     </button>

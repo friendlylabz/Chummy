@@ -14,14 +14,19 @@
   import AgentsPane from "./AgentsPane.svelte";
   import ToolsPane from "./ToolsPane.svelte";
 
-  type Section = "agents" | "models" | "engine" | "tools" | "permissions" | "appearance" | "about";
+  type Section = "agents" | "models" | "engine" | "tools" | "permissions" | "general" | "appearance" | "about";
 
-  const sections: { id: Section; label: string; icon: "bot" | "cpu" | "shield" | "palette" | "info" | "chat" | "wrench" }[] = [
+  const sections: {
+    id: Section;
+    label: string;
+    icon: "bot" | "cpu" | "shield" | "palette" | "info" | "chat" | "wrench" | "sliders";
+  }[] = [
     { id: "agents", label: "Agents", icon: "chat" },
     { id: "models", label: "Models", icon: "bot" },
     { id: "engine", label: "Local engine", icon: "cpu" },
     { id: "tools", label: "Tools", icon: "wrench" },
     { id: "permissions", label: "Permissions", icon: "shield" },
+    { id: "general", label: "General", icon: "sliders" },
     { id: "appearance", label: "Appearance", icon: "palette" },
     { id: "about", label: "About", icon: "info" },
   ];
@@ -34,6 +39,16 @@
   let modelsView = $state<"list" | "pick" | "form" | "local">("list");
   let info = $state<AppInfo | null>(null);
   const perms = $derived(settings.current.permissions);
+  const general = $derived(settings.current.general);
+  const closeOptions = [
+    { value: "ask", label: "Ask each time" },
+    { value: "tray", label: "Keep running in the tray" },
+    { value: "quit", label: "Quit" },
+  ] as const;
+
+  function setGeneral(patch: Partial<typeof general>) {
+    commands.setGeneral({ ...general, ...patch });
+  }
 
   onMount(async () => {
     local.init();
@@ -97,10 +112,65 @@
             </div>
             <Toggle checked={perms.tools} label="Tools" onchange={(v) => commands.setPermission("tools", v)} />
           </div>
+          <div class="row">
+            <div>
+              <div class="row-title">Ask before tools go online</div>
+              <div class="row-sub">
+                Every call to a tool that can use the internet waits for your OK in chat, so a web page can't quietly
+                talk an agent into sending your files somewhere. Scheduled jobs wait too.
+              </div>
+            </div>
+            <Toggle
+              checked={perms.confirm_online_tools}
+              label="Ask before tools go online"
+              onchange={(v) => commands.setPermission("confirm_online_tools", v)}
+            />
+          </div>
         </div>
         <p class="faint xs" style="margin-top: var(--space-3)">
           Model connections in Models are made by Chummy itself and work regardless of these switches.
         </p>
+      {:else if active === "general"}
+        <h1>General</h1>
+        <p class="pane-sub">Closing Chummy, notifications and scheduled jobs.</p>
+        <div class="card rows">
+          <div class="row">
+            <div>
+              <div class="row-title">When I close the main window</div>
+              <div class="row-sub">
+                In the tray, Chummy keeps running scheduled jobs; its icon shows it's there. Quitting always asks first while
+                something is running.
+              </div>
+            </div>
+            <select
+              value={general.close}
+              aria-label="When I close the main window"
+              onchange={(e) => setGeneral({ close: e.currentTarget.value as typeof general.close })}
+            >
+              {#each closeOptions as o (o.value)}<option value={o.value}>{o.label}</option>{/each}
+            </select>
+          </div>
+          <div class="row">
+            <div>
+              <div class="row-title">Notifications</div>
+              <div class="row-sub">When an agent asks you something while Chummy isn't in front, and when jobs finish.</div>
+            </div>
+            <Toggle checked={general.notifications} label="Notifications" onchange={(v) => setGeneral({ notifications: v })} />
+          </div>
+          <div class="row">
+            <div>
+              <div class="row-title">Scheduled runs at once</div>
+              <div class="row-sub">An agent still does one thing at a time. Keep this at 1 with a local model.</div>
+            </div>
+            <select
+              value={String(general.max_job_runs)}
+              aria-label="Scheduled runs at once"
+              onchange={(e) => setGeneral({ max_job_runs: Number(e.currentTarget.value) })}
+            >
+              {#each [1, 2, 3, 4] as n (n)}<option value={String(n)}>{n}</option>{/each}
+            </select>
+          </div>
+        </div>
       {:else if active === "appearance"}
         <h1>Appearance</h1>
         <p class="pane-sub">How Chummy looks. Changes apply to every window.</p>

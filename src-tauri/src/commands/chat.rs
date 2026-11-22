@@ -9,25 +9,19 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use chummy_flow::{
-    ChatTurn, Event, ExMessage, Host, LlmAnswer, LlmCall, LoopFile, MalformedCall, Role, RunInputs,
-    RunOutcome, RunStatus, ToolInfo, ToolOutput, analyze, run,
-};
-use chummy_llm::{ChatEvent, ChatRequest, Client, Message, ProviderConfig, ProviderKind, ToolSpec};
+use chummy_flow::{ChatTurn, Event, LoopFile, RunInputs, RunOutcome, RunStatus, analyze, run};
 use chummy_sandbox::Jail;
+use chummy_scheduler::{Origin, RunKind};
 use chummy_store::JsonDoc;
-use chummy_tools::{NetPolicy, ToolManifest};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use super::{CmdResult, err, now};
-use crate::commands::local::start_engine_for;
 use crate::events;
+use crate::host::{AppHost, agent_host};
 use crate::settings::{Agent, Settings};
 use crate::state::{AppState, RunInfo, lock};
 
-/// Largest file a Read file block will read.
-const READ_LIMIT: u64 = 1024 * 1024;
 /// Chat history kept per agent; older messages are dropped.
 const MAX_CHAT_MESSAGES: usize = 2000;
 
@@ -43,10 +37,15 @@ pub struct RunSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChatMessage {
     pub id: String,
-    /// "user", "assistant" or "notice" (errors, stops, limits).
+    /// "user", "assistant", "notice" (errors, stops, limits), or
+    /// "question" / "answer" (something a run asked, and the reply). Only
+    /// "user" and "assistant" messages are the conversation the loop sees.
     pub role: String,
     pub text: String,
     pub at: u64,
+    /// Who asked a question when it wasn't this chat (a job's name).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<RunSummary>,
 }
@@ -92,7 +91,7 @@ fn load_chat(state: &AppState, agent_id: &str) -> CmdResult<ChatLog> {
     Ok(chat_doc(state, agent_id)?.load(|v| v).map_err(err)?.value)
 }
 
-fn append(
+pub fn append(
     app: &AppHandle,
     state: &AppState,
     agent_id: &str,
@@ -117,7 +116,7 @@ fn append(
     Ok(())
 }
 
-fn msg_id() -> String {
+pub fn msg_id() -> String {
     let mut b = [0u8; 6];
     let _ = getrandom::fill(&mut b);
     b.iter().map(|x| format!("{x:02x}")).collect()
@@ -150,23 +149,57 @@ pub fn stop_run(state: State<'_, AppState>, run_id: String) {
     if let Some(r) = lock(&state.runs).get(&run_id) {
         r.cancel.store(true, Ordering::Relaxed);
     }
+    state.asks.withdraw_run(&run_id);
 }
 
 pub fn stop_agent_runs(state: &AppState, agent_id: &str) {
     for r in lock(&state.runs).values() {
         if r.agent_id.as_deref() == Some(agent_id) {
             r.cancel.store(true, Ordering::Relaxed);
+            state.asks.withdraw_run(&r.run_id);
         }
     }
 }
 
-/// Everything an agent needs to run: its loop and its opened workspace.
-fn prepare(state: &AppState, s: &Settings, agent: &Agent) -> CmdResult<(LoopFile, Jail)> {
-    let file = state.library.load(&agent.loop_id).map_err(|_| {
-        format!(
+/// Stops every run (when quitting).
+pub fn stop_all_runs(state: &AppState) {
+    for r in lock(&state.runs).values() {
+        r.cancel.store(true, Ordering::Relaxed);
+        state.asks.withdraw_run(&r.run_id);
+    }
+}
+
+/// What, if anything, is using an agent right now, in words.
+pub fn agent_busy_with(state: &AppState, agent_id: &str) -> Option<String> {
+    lock(&state.runs)
+        .values()
+        .find(|r| r.agent_id.as_deref() == Some(agent_id))
+        .map(|r| match r.source {
+            "job" => format!("the job “{}”", r.title),
+            "test" => "a test run in the loop editor".to_string(),
+            _ => "the last message".to_string(),
+        })
+}
+
+fn new_run_id() -> String {
+    format!("run-{}", msg_id())
+}
+
+/// Everything an agent needs to run: its loop (or `loop_id` instead) and
+/// its opened workspace.
+pub fn prepare(
+    state: &AppState,
+    s: &Settings,
+    agent: &Agent,
+    loop_id: Option<&str>,
+) -> CmdResult<(LoopFile, Jail)> {
+    let id = loop_id.unwrap_or(&agent.loop_id);
+    let file = state.library.load(id).map_err(|_| match loop_id {
+        Some(_) => format!("The loop “{id}” is missing. Choose another for the job."),
+        None => format!(
             "“{}”'s loop is missing. Choose one in Settings → Agents.",
             agent.name
-        )
+        ),
     })?;
     let analysis = analyze(&file);
     if let Some(e) = analysis
@@ -208,16 +241,10 @@ pub fn send_message(
         .agent(&agent_id)
         .cloned()
         .ok_or("That agent no longer exists.")?;
-    if lock(&state.runs)
-        .values()
-        .any(|r| r.agent_id.as_deref() == Some(agent_id.as_str()) && r.source == "chat")
-    {
-        return Err(format!(
-            "{} is still working on the last message.",
-            agent.name
-        ));
+    if let Some(what) = agent_busy_with(&state, &agent_id) {
+        return Err(format!("{} is busy with {what}.", agent.name));
     }
-    let (file, jail) = prepare(&state, &s, &agent)?;
+    let (file, jail) = prepare(&state, &s, &agent, None)?;
 
     let history: Vec<ChatTurn> = load_chat(&state, &agent_id)?
         .messages
@@ -237,6 +264,7 @@ pub fn send_message(
             role: "user".into(),
             text: text.clone(),
             at: now(),
+            from: None,
             run: None,
         },
     )?;
@@ -246,8 +274,32 @@ pub fn send_message(
         history,
         overrides: HashMap::new(),
     };
-    let host = AppHost::new(&app, s.clone(), s.agent_model(&agent).cloned(), Some(jail));
-    Ok(start(&app, &state, file, host, inputs, Some(agent), "chat"))
+    let run_id = new_run_id();
+    let origin = Origin {
+        run_id: run_id.clone(),
+        kind: RunKind::Chat,
+        agent_id: Some(agent.id.clone()),
+        job_id: None,
+        title: agent.name.clone(),
+    };
+    let host = agent_host(
+        &app,
+        &s,
+        s.agent_model(&agent).cloned(),
+        Some(jail),
+        Some(origin),
+    );
+    start(
+        &app,
+        &state,
+        run_id.clone(),
+        file,
+        host,
+        inputs,
+        Some(agent),
+        "chat",
+    );
+    Ok(run_id)
 }
 
 /// Runs a loop from the editor without saving anything to chat. With an
@@ -269,6 +321,12 @@ pub fn test_run(
                 .agent(&id)
                 .cloned()
                 .ok_or("That agent no longer exists.")?;
+            if let Some(what) = agent_busy_with(&state, &id) {
+                return Err(format!(
+                    "{} is busy with {what}; test without an agent, or wait.",
+                    agent.name
+                ));
+            }
             let jail = Jail::open(&agent.workspace.path, &state.protected).map_err(err)?;
             let model = s.agent_model(&agent).cloned();
             (Some(agent), Some(jail), model)
@@ -283,20 +341,66 @@ pub fn test_run(
         history: vec![],
         overrides,
     };
-    let host = AppHost::new(&app, s, model, jail);
-    Ok(start(&app, &state, file, host, inputs, agent, "test"))
+    let run_id = new_run_id();
+    let origin = Origin {
+        run_id: run_id.clone(),
+        kind: RunKind::Test,
+        agent_id: agent.as_ref().map(|a| a.id.clone()),
+        job_id: None,
+        title: format!("Test: {}", file.name),
+    };
+    let host = agent_host(&app, &s, model, jail, Some(origin));
+    start(
+        &app,
+        &state,
+        run_id.clone(),
+        file,
+        host,
+        inputs,
+        agent,
+        "test",
+    );
+    Ok(run_id)
 }
 
+/// Adds a run to the run list and tells every window. The guard takes it
+/// off again however the run ends.
+pub fn track(app: &AppHandle, state: &AppState, info: RunInfo) -> RunGuard {
+    lock(&state.runs).insert(info.run_id.clone(), info.clone());
+    let guard = RunGuard {
+        app: app.clone(),
+        run_id: info.run_id.clone(),
+    };
+    let _ = app.emit(events::RUN_STARTED, info);
+    guard
+}
+
+/// Sends a run's progress to every window.
+pub fn emitter(app: &AppHandle, run_id: &str) -> impl FnMut(Event) + Send + use<> {
+    let app = app.clone();
+    let run_id = run_id.to_string();
+    move |event| {
+        let _ = app.emit(
+            events::RUN_EVENT,
+            RunEvent {
+                run_id: run_id.clone(),
+                event,
+            },
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn start(
     app: &AppHandle,
     state: &AppState,
+    run_id: String,
     file: LoopFile,
     host: AppHost,
     inputs: RunInputs,
     agent: Option<Agent>,
     source: &'static str,
-) -> String {
-    let run_id = format!("run-{}", msg_id());
+) {
     let cancel = Arc::new(AtomicBool::new(false));
     let info = RunInfo {
         run_id: run_id.clone(),
@@ -306,33 +410,18 @@ fn start(
             .map(|a| a.name.clone())
             .unwrap_or_else(|| format!("Test: {}", file.name)),
         source,
+        job_id: None,
         started_at: now(),
         cancel: cancel.clone(),
     };
-    lock(&state.runs).insert(run_id.clone(), info.clone());
-    let _ = app.emit(events::RUN_STARTED, info);
-
+    // However the run ends (even by a panic), it leaves the run list, so
+    // the agent never stays "still working".
+    let guard = track(app, state, info);
     let app = app.clone();
-    let id = run_id.clone();
+    let id = run_id;
     tauri::async_runtime::spawn(async move {
-        // However the run ends (even by a panic), it leaves the run list, so
-        // the agent never stays "still working".
-        let _guard = RunGuard {
-            app: app.clone(),
-            run_id: id.clone(),
-        };
-        let emitter = app.clone();
-        let rid = id.clone();
-        let outcome = run(&file, &host, &inputs, &cancel, move |event| {
-            let _ = emitter.emit(
-                events::RUN_EVENT,
-                RunEvent {
-                    run_id: rid.clone(),
-                    event,
-                },
-            );
-        })
-        .await;
+        let _guard = guard;
+        let outcome = run(&file, &host, &inputs, &cancel, emitter(&app, &id)).await;
 
         let state = app.state::<AppState>();
         lock(&state.runs).remove(&id);
@@ -351,11 +440,14 @@ fn start(
                 outcome,
             },
         );
+        // A job may have been waiting for this agent.
+        if let Some(jobs) = state.jobs.get() {
+            jobs.wake();
+        }
     });
-    run_id
 }
 
-struct RunGuard {
+pub struct RunGuard {
     app: AppHandle,
     run_id: String,
 }
@@ -364,33 +456,8 @@ impl Drop for RunGuard {
     fn drop(&mut self) {
         let state = self.app.state::<AppState>();
         lock(&state.runs).remove(&self.run_id);
+        state.asks.withdraw_run(&self.run_id);
     }
-}
-
-fn to_llm_message(m: &ExMessage) -> Message {
-    let mut out = match m.role {
-        Role::System => Message::system(&m.text),
-        Role::User => Message::user(&m.text),
-        Role::Assistant => Message::assistant(&m.text),
-        Role::Tool => {
-            let call = chummy_llm::ToolCall {
-                id: m.call_id.clone().unwrap_or_default(),
-                name: m.name.clone().unwrap_or_default(),
-                arguments: serde_json::json!({}),
-            };
-            Message::tool_result(&call, &m.text)
-        }
-    };
-    out.tool_calls = m
-        .calls
-        .iter()
-        .map(|c| chummy_llm::ToolCall {
-            id: c.id.clone(),
-            name: c.name.clone(),
-            arguments: c.arguments.clone(),
-        })
-        .collect();
-    out
 }
 
 /// Chat messages that report a finished run.
@@ -421,6 +488,7 @@ fn messages_for(o: &RunOutcome) -> Vec<ChatMessage> {
             role: "assistant".into(),
             text: o.replies.join("\n\n"),
             at: now(),
+            from: None,
             run: Some(summary.clone()),
         });
     }
@@ -430,239 +498,9 @@ fn messages_for(o: &RunOutcome) -> Vec<ChatMessage> {
             role: "notice".into(),
             text,
             at: now(),
+            from: None,
             run: Some(summary),
         });
     }
     out
-}
-
-/// Connects the engine to models, tools and the agent's workspace.
-pub struct AppHost {
-    app: AppHandle,
-    settings: Settings,
-    default_model: Option<ProviderConfig>,
-    jail: Option<Jail>,
-    clients: tokio::sync::Mutex<HashMap<String, Client>>,
-    /// Tools agents may use now: installed, switched on, and tools allowed.
-    tools: HashMap<String, ToolManifest>,
-}
-
-impl AppHost {
-    fn new(
-        app: &AppHandle,
-        settings: Settings,
-        default_model: Option<ProviderConfig>,
-        jail: Option<Jail>,
-    ) -> Self {
-        let state = app.state::<AppState>();
-        let tools = if settings.permissions.tools {
-            chummy_tools::installed(&state.tool_paths)
-                .into_iter()
-                .filter(|m| settings.tool(&m.name).enabled)
-                .map(|m| (m.name.clone(), m))
-                .collect()
-        } else {
-            HashMap::new()
-        };
-        Self {
-            app: app.clone(),
-            settings,
-            default_model,
-            jail,
-            clients: Default::default(),
-            tools,
-        }
-    }
-
-    /// Whether `m` may use the internet now, and if not, why (for the model).
-    fn net_policy(&self, m: &ToolManifest) -> NetPolicy {
-        if !m.network {
-            NetPolicy::off(format!("{} doesn't use the internet.", m.title))
-        } else if !self.settings.permissions.network {
-            NetPolicy::off("Internet access is off in Chummy, so this tool can't go online.")
-        } else if !self.settings.tool(&m.name).network {
-            NetPolicy::off(format!(
-                "Internet access is off for “{}”, so it can't go online.",
-                m.title
-            ))
-        } else {
-            NetPolicy::on()
-        }
-    }
-
-    async fn client(&self, p: &ProviderConfig) -> Result<Client, String> {
-        if let Some(c) = self.clients.lock().await.get(&p.id) {
-            return Ok(c.clone());
-        }
-        let state = self.app.state::<AppState>();
-        let client = if p.kind == ProviderKind::Local {
-            if chummy_local::runtime::status(&state.runtime).is_none() {
-                return Err(
-                    "The local engine isn't set up yet. Set it up in Settings → Local engine."
-                        .into(),
-                );
-            }
-            let ep = start_engine_for(&self.app, &state, p).await?;
-            let mut cfg = p.clone();
-            cfg.base_url = ep.base_url;
-            Client::new(&cfg, Some(ep.token)).map_err(err)?
-        } else {
-            let key = state.secrets.get(&p.secret_key()).ok().flatten();
-            Client::new(p, key).map_err(err)?
-        };
-        self.clients
-            .lock()
-            .await
-            .insert(p.id.clone(), client.clone());
-        Ok(client)
-    }
-
-    fn jail(&self) -> Result<&Jail, String> {
-        self.jail
-            .as_ref()
-            .ok_or_else(|| "This test run has no workspace. Pick an agent to run as.".to_string())
-    }
-}
-
-impl Host for AppHost {
-    async fn llm(
-        &self,
-        call: LlmCall,
-        on_text: &mut (dyn FnMut(&str) + Send),
-    ) -> Result<LlmAnswer, String> {
-        let provider = match &call.model {
-            Some(id) => self.settings.provider(id).cloned().ok_or(
-                "This block's model connection no longer exists. Pick another in the loop editor.",
-            )?,
-            None => self
-                .default_model
-                .clone()
-                .ok_or("No model is connected. Add one in Settings → Models.")?,
-        };
-        let client = self.client(&provider).await?;
-        let messages = call.messages.iter().map(to_llm_message).collect();
-        let req = ChatRequest {
-            messages,
-            tools: call
-                .tools
-                .iter()
-                .map(|t| ToolSpec {
-                    name: t.name.clone(),
-                    description: t.description.clone(),
-                    parameters: t.parameters.clone(),
-                })
-                .collect(),
-            tool_choice: match call.tool_choice {
-                chummy_flow::ToolChoice::Auto => chummy_llm::ToolChoice::Auto,
-                chummy_flow::ToolChoice::Required => chummy_llm::ToolChoice::Required,
-            },
-            temperature: call.temperature,
-            max_tokens: Some(call.max_tokens),
-        };
-        let mut malformed = Vec::new();
-        let resp = client
-            .chat(&req, |ev| match ev {
-                ChatEvent::Text { text } => on_text(text),
-                ChatEvent::MalformedToolCall {
-                    name, raw, error, ..
-                } => malformed.push(MalformedCall {
-                    name: name.clone(),
-                    raw: raw.clone(),
-                    error: error.clone(),
-                }),
-                _ => {}
-            })
-            .await
-            .map_err(|e| format!("{}: {e}", provider.name))?;
-        Ok(LlmAnswer {
-            text: resp.text,
-            reasoning: resp.reasoning,
-            calls: resp
-                .tool_calls
-                .into_iter()
-                .map(|c| chummy_flow::ToolCall {
-                    id: c.id,
-                    name: c.name,
-                    arguments: c.arguments,
-                })
-                .collect(),
-            malformed,
-        })
-    }
-
-    fn tool_info(&self, name: &str) -> Option<ToolInfo> {
-        self.tools.get(name).map(|m| ToolInfo {
-            name: m.name.clone(),
-            description: m.description.clone(),
-            parameters: m.parameters.clone(),
-        })
-    }
-
-    async fn run_tool(
-        &self,
-        name: &str,
-        arguments: serde_json::Value,
-    ) -> Result<ToolOutput, String> {
-        let Some(m) = self.tools.get(name) else {
-            return Ok(ToolOutput {
-                text: format!("Error: there's no tool called “{name}” switched on."),
-                is_error: true,
-            });
-        };
-        let state = self.app.state::<AppState>();
-        let host = state.tool_host().await?;
-        let env = iana_time_zone::get_timezone()
-            .map(|tz| vec![("TZ".to_string(), tz)])
-            .unwrap_or_default();
-        let workspace = self.jail.as_ref().map(|j| j.root().to_path_buf());
-        let r = host
-            .run(
-                name,
-                arguments,
-                workspace.as_deref(),
-                self.net_policy(m),
-                env,
-            )
-            .await
-            .map_err(|e| {
-                let e = e.to_string();
-                e[..1].to_uppercase() + &e[1..]
-            })?;
-        Ok(ToolOutput {
-            text: r.text,
-            is_error: r.is_error,
-        })
-    }
-
-    fn read_file(&self, path: &str) -> Result<String, String> {
-        self.jail()?.read_text(path, READ_LIMIT).map_err(err)
-    }
-
-    fn write_file(&self, path: &str, content: &str, append: bool) -> Result<(), String> {
-        let jail = self.jail()?;
-        let data = if append && jail.exists(path).map_err(err)? {
-            let mut existing = jail.read_bytes(path, 64 * READ_LIMIT).map_err(err)?;
-            existing.extend_from_slice(content.as_bytes());
-            existing
-        } else {
-            content.as_bytes().to_vec()
-        };
-        jail.write(path, &data).map_err(err)
-    }
-
-    fn list_files(&self, path: &str) -> Result<Vec<String>, String> {
-        Ok(self
-            .jail()?
-            .list(path)
-            .map_err(err)?
-            .into_iter()
-            .map(|e| {
-                if e.is_dir {
-                    format!("{}/", e.name)
-                } else {
-                    e.name
-                }
-            })
-            .collect())
-    }
 }

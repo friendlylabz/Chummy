@@ -113,12 +113,7 @@ impl Engine {
         }
 
         let script = self.write_script()?;
-        let port = free_port()?;
         let token = random_token()?;
-        let endpoint = Endpoint {
-            base_url: format!("http://127.0.0.1:{port}/v1"),
-            token: token.clone(),
-        };
         let model = model_name(cfg);
 
         lock(&self.log).clear();
@@ -129,8 +124,9 @@ impl Engine {
             .arg(&cfg.model_dir)
             .arg("--parser")
             .arg(&cfg.parser)
+            // The engine picks a free port and reports it (see below).
             .arg("--port")
-            .arg(port.to_string())
+            .arg("0")
             .arg("--precision")
             .arg(match cfg.precision {
                 Precision::Half => "half",
@@ -164,8 +160,18 @@ impl Engine {
                 log.push_back(l);
             }
         };
+        // The port comes from the engine's own "listening on" line, so
+        // nothing else can be listening there in its place.
+        let reported: Arc<Mutex<Option<u16>>> = Arc::default();
         if let Some(out) = child.stdout.take() {
-            read_lines(out, log_line(self.log.clone()));
+            let log = log_line(self.log.clone());
+            let reported = reported.clone();
+            read_lines(out, move |l: String| {
+                if let Some(p) = listening_port(&l) {
+                    lock(&reported).get_or_insert(p);
+                }
+                log(l);
+            });
         }
         if let Some(err) = child.stderr.take() {
             read_lines(err, log_line(self.log.clone()));
@@ -198,6 +204,14 @@ impl Engine {
                 let _ = child.kill().await;
                 return Err(self.fail("the model took too long to load".into(), &mut on_status));
             }
+            let Some(port) = *lock(&reported) else {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            };
+            let endpoint = Endpoint {
+                base_url: format!("http://127.0.0.1:{port}/v1"),
+                token: token.clone(),
+            };
             let health = http
                 .get(format!("http://127.0.0.1:{port}/health"))
                 .bearer_auth(&token)
@@ -265,12 +279,13 @@ impl Engine {
     }
 }
 
-fn free_port() -> Result<u16, LocalError> {
-    let l = std::net::TcpListener::bind("127.0.0.1:0")
-        .map_err(LocalError::io("finding a free port"))?;
-    Ok(l.local_addr()
-        .map_err(LocalError::io("finding a free port"))?
-        .port())
+/// The port in the engine's "listening on 127.0.0.1:<port>" line.
+fn listening_port(line: &str) -> Option<u16> {
+    line.strip_prefix("listening on 127.0.0.1:")?
+        .trim()
+        .parse()
+        .ok()
+        .filter(|p| *p != 0)
 }
 
 fn random_token() -> Result<String, LocalError> {
@@ -288,6 +303,19 @@ pub fn model_dir(models_dir: &Path, dir_name: &str) -> PathBuf {
 mod tests {
     use super::*;
     use chummy_llm::{Client, ProviderConfig, ProviderKind, StepStatus, probe};
+
+    #[test]
+    fn the_port_comes_from_the_engines_own_line() {
+        assert_eq!(listening_port("listening on 127.0.0.1:43123"), Some(43123));
+        for bad in [
+            "listening on 127.0.0.1:0",
+            "listening on 0.0.0.0:80",
+            "hello",
+            "listening on 127.0.0.1:x",
+        ] {
+            assert_eq!(listening_port(bad), None, "{bad}");
+        }
+    }
 
     fn system_python() -> Option<&'static str> {
         ["python3", "python"].into_iter().find(|p| {

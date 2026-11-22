@@ -257,6 +257,7 @@ export function newBlock(info: BlockInfo, id: string, x: number, y: number): Blo
 export const categoryLabel: Record<Category, string> = {
   start: "Start",
   think: "Think",
+  you: "You",
   exchange: "Exchange",
   text: "Text",
   flow: "Flow",
@@ -268,6 +269,7 @@ export const categoryLabel: Record<Category, string> = {
 export const categoryColor: Record<Category, string> = {
   start: "#6fb3f2",
   think: "var(--accent)",
+  you: "#5ec8c8",
   exchange: "#f4a261",
   text: "#a78bfa",
   flow: "#e8c16d",
@@ -313,6 +315,13 @@ export function summary(b: Block): string {
       return `Separator ${JSON.stringify(s(p.separator) || "\n")}`;
     case "write_file":
       return p.append ? "Append" : "Replace";
+    case "ask_user": {
+      const q = s(p.prompt).replace(/\s+/g, " ").trim();
+      const t = Number(p.timeout_minutes) || 0;
+      return [q && q !== "_INPUT_" ? q : "Asks you the input", t ? `gives up after ${t} min` : ""].filter(Boolean).join(" · ");
+    }
+    case "run_tool":
+      return p.confirm ? "Asks you first" : "";
     default:
       return "";
   }

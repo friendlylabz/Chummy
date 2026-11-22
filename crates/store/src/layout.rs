@@ -20,6 +20,8 @@ pub struct ChummyDirs {
     pub tools: PathBuf,
     /// Log files.
     pub logs: PathBuf,
+    /// Scheduled jobs, their state and run history.
+    pub jobs: PathBuf,
 }
 
 impl ChummyDirs {
@@ -34,6 +36,7 @@ impl ChummyDirs {
             chats: root.join("chats"),
             tools: root.join("tools"),
             logs: root.join("logs"),
+            jobs: root.join("jobs"),
             root,
         }
     }
@@ -49,6 +52,7 @@ impl ChummyDirs {
             &self.chats,
             &self.tools,
             &self.logs,
+            &self.jobs,
         ] {
             std::fs::create_dir_all(dir)?;
         }

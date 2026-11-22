@@ -46,9 +46,8 @@ fn validate(cfg: &ProviderConfig) -> Result<(), String> {
         return Err("Choose a model.".into());
     }
     if cfg.kind != ProviderKind::Local {
-        let url = cfg.base_url.trim();
-        if !(url.starts_with("http://") || url.starts_with("https://")) {
-            return Err("The server address must start with http:// or https://.".into());
+        if let Some(why) = chummy_llm::endpoint_problem(&cfg.base_url) {
+            return Err(why);
         }
     } else if cfg.local.is_none() {
         return Err("Local models are added by downloading them.".into());
@@ -158,6 +157,11 @@ pub async fn list_models(
     if cfg.model.trim().is_empty() {
         cfg.model = "-".into(); // listing doesn't need a model
     }
+    if cfg.kind != ProviderKind::Local
+        && let Some(why) = chummy_llm::endpoint_problem(&cfg.base_url)
+    {
+        return Err(why);
+    }
     let key = key_for(&state, &cfg, api_key);
     let client = Client::new(&cfg, key).map_err(err)?;
     client.list_models().await.map_err(err)
@@ -195,6 +199,9 @@ pub async fn test_provider(
         cfg.base_url = endpoint.base_url;
         (cfg, Some(endpoint.token))
     } else {
+        if let Some(why) = chummy_llm::endpoint_problem(&config.base_url) {
+            return Err(why);
+        }
         let key = key_for(&state, &config, api_key);
         (config, key)
     };
@@ -229,6 +236,9 @@ mod tests {
         assert!(validate(&c).is_err());
         c.base_url = "http://localhost:8080/v1".into();
         assert!(validate(&c).is_ok());
+        c.base_url = "http://api.example.com/v1".into();
+        assert!(validate(&c).is_err(), "no plain http to the internet");
+        c.base_url = "http://localhost:8080/v1".into();
         c.temperature = Some(5.0);
         assert!(validate(&c).is_err());
     }

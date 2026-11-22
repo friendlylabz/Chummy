@@ -56,7 +56,11 @@ pub async fn pick_workspace(
         Ok(p) => p,
         Err(e) => {
             let reason = e.to_string();
-            let reason = reason[..1].to_uppercase() + &reason[1..];
+            let mut c = reason.chars();
+            let reason: String = c
+                .next()
+                .map(|f| f.to_uppercase().chain(c).collect())
+                .unwrap_or_default();
             let msg = format!(
                 "{}\n\n{reason}.\n\nFor safety, agents can never use a whole drive, your home folder, system \
                  folders, hidden settings folders, or Chummy's own folder. Pick or create a folder just \
@@ -80,21 +84,24 @@ pub async fn pick_workspace(
         return Ok(None);
     }
 
-    let msg = format!(
+    let advice = chummy_sandbox::workspace_advice(&path);
+    let mut msg = format!(
         "{}\n\nThis agent will be able to read, create, change and delete files in this folder and its \
          subfolders. It won't be able to see anything outside it.",
         path.display()
     );
-    if !dialogs::confirm(
-        &app,
-        &label,
-        "Give this agent this folder?",
-        &msg,
-        "Use this folder",
-        true,
-    )
-    .await
-    {
+    if !advice.is_empty() {
+        msg.push_str(&format!(
+            "\n\nCareful: {}\n\nA new, empty folder just for this agent is safer. Copy in only the files it needs.",
+            advice.join(" ")
+        ));
+    }
+    let (title, ok) = if advice.is_empty() {
+        ("Give this agent this folder?", "Use this folder")
+    } else {
+        ("Give this agent this whole folder?", "Use it anyway")
+    };
+    if !dialogs::confirm(&app, &label, title, &msg, ok, true).await {
         return Ok(None);
     }
 
@@ -254,9 +261,12 @@ pub fn set_active_agent(app: AppHandle, state: State<'_, AppState>, id: String) 
 pub enum PermissionKind {
     Network,
     Tools,
+    /// Asking before tools go online (on by default).
+    ConfirmOnlineTools,
 }
 
-/// Turns a permission on (after a native confirmation) or off (immediately).
+/// Changes a permission. Widening access (turning access on, or a
+/// safeguard off) needs a native confirmation; narrowing it is immediate.
 /// Returns the new value.
 #[tauri::command]
 pub async fn set_permission(
@@ -266,8 +276,21 @@ pub async fn set_permission(
     kind: PermissionKind,
     enabled: bool,
 ) -> CmdResult<bool> {
-    if enabled {
+    // Turning a safeguard off widens access just like turning access on.
+    let widens = match kind {
+        PermissionKind::ConfirmOnlineTools => !enabled,
+        _ => enabled,
+    };
+    if widens {
         let (title, msg, ok) = match kind {
+            PermissionKind::ConfirmOnlineTools => (
+                "Stop asking before tools go online?",
+                "Tools that can use the internet will run without waiting for your OK, including in \
+                 scheduled jobs while you're away. A web page can contain instructions that trick a \
+                 model into sending your files somewhere; asking first is how you'd catch that.\n\n\
+                 Only turn this off if you trust every page your agents might read.",
+                "Stop asking",
+            ),
             PermissionKind::Network => (
                 "Allow internet access?",
                 "Tools you allow in Tools will be able to reach the internet (never this computer or \
@@ -290,6 +313,7 @@ pub async fn set_permission(
     state.update(&app, |s| match kind {
         PermissionKind::Network => s.permissions.network = enabled,
         PermissionKind::Tools => s.permissions.tools = enabled,
+        PermissionKind::ConfirmOnlineTools => s.permissions.confirm_online_tools = enabled,
     })?;
     Ok(enabled)
 }

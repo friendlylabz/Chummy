@@ -11,7 +11,7 @@ use tauri_plugin_opener::OpenerExt;
 use super::{CmdResult, err};
 use std::collections::BTreeMap;
 
-use crate::settings::{Agent, LocalSettings, Permissions, Settings, Theme, ToolPref};
+use crate::settings::{Agent, General, LocalSettings, Permissions, Settings, Theme, ToolPref};
 use crate::state::{AppState, HF_TOKEN_KEY, SetupStatus};
 use crate::windows::{self, AppWindow};
 
@@ -35,6 +35,7 @@ pub struct SettingsView {
     pub local: LocalSettings,
     pub hf_token_set: bool,
     pub tools: BTreeMap<String, ToolPref>,
+    pub general: General,
 }
 
 pub fn settings_view(state: &AppState, s: &Settings) -> SettingsView {
@@ -55,6 +56,7 @@ pub fn settings_view(state: &AppState, s: &Settings) -> SettingsView {
         local: s.local.clone(),
         hf_token_set: state.has_secret(HF_TOKEN_KEY),
         tools: s.tools.clone(),
+        general: s.general.clone(),
     }
 }
 
@@ -108,4 +110,18 @@ pub fn reveal_data_dir(app: AppHandle, state: State<'_, AppState>) -> CmdResult<
     app.opener()
         .open_path(state.dirs.root.to_string_lossy(), None::<&str>)
         .map_err(err)
+}
+
+/// Saves the General settings (closing, notifications, scheduled runs).
+#[tauri::command]
+pub fn set_general(app: AppHandle, state: State<'_, AppState>, general: General) -> CmdResult<()> {
+    let mut g = general;
+    g.max_job_runs = g.max_job_runs.clamp(1, 4);
+    let max = g.max_job_runs as usize;
+    state.update(&app, |s| s.general = g)?;
+    if let Some(m) = state.jobs.get() {
+        m.set_max_running(max);
+    }
+    crate::tray::refresh(&app);
+    Ok(())
 }

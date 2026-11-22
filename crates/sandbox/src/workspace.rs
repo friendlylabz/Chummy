@@ -239,3 +239,96 @@ mod tests {
         }
     }
 }
+
+/// Warnings about a folder that may be used but probably shouldn't be: a
+/// whole personal folder (Documents, Desktop, a synced cloud folder) or one
+/// that already holds many files. Shown when the user confirms the folder,
+/// so nobody hands an agent their whole Documents folder by accident.
+pub fn workspace_advice(path: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let canon = |p: PathBuf| std::fs::canonicalize(&p).unwrap_or(p);
+    let named = [
+        (dirs::document_dir(), "your whole Documents folder"),
+        (dirs::desktop_dir(), "your whole Desktop"),
+        (dirs::download_dir(), "your whole Downloads folder"),
+        (dirs::picture_dir(), "your whole Pictures folder"),
+        (dirs::audio_dir(), "your whole Music folder"),
+        (dirs::video_dir(), "your whole Videos folder"),
+    ];
+    for (dir, what) in named {
+        if dir.map(canon).is_some_and(|d| d == path) {
+            out.push(format!("This is {what}."));
+        }
+    }
+    if let Some(home) = dirs::home_dir().map(canon)
+        && path.parent() == Some(home.as_path())
+        && let Some(name) = path.file_name().and_then(|n| n.to_str())
+    {
+        let lower = name.to_lowercase();
+        if ["onedrive", "dropbox", "icloud", "google drive", "box"]
+            .iter()
+            .any(|c| lower.starts_with(c))
+        {
+            out.push(format!(
+                "This is your whole {name} folder, which syncs to other devices."
+            ));
+        }
+    }
+    if path.join(".git").exists() {
+        out.push(
+            "It's a git repository; the agent could change files that are under version control."
+                .into(),
+        );
+    }
+    let files = count_files(path, 2, ADVICE_FILE_LIMIT);
+    if files >= ADVICE_FILE_LIMIT {
+        out.push(format!("It already holds over {ADVICE_FILE_LIMIT} files."));
+    }
+    out
+}
+
+const ADVICE_FILE_LIMIT: usize = 500;
+
+/// Counts files up to `depth` levels down, stopping at `limit`.
+fn count_files(dir: &Path, depth: usize, limit: usize) -> usize {
+    let mut n = 0;
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    for e in entries.flatten() {
+        if n >= limit {
+            break;
+        }
+        match e.file_type() {
+            Ok(t) if t.is_dir() && depth > 0 => n += count_files(&e.path(), depth - 1, limit - n),
+            Ok(t) if t.is_file() => n += 1,
+            _ => {}
+        }
+    }
+    n.min(limit)
+}
+
+#[cfg(test)]
+mod advice_tests {
+    use super::*;
+
+    #[test]
+    fn busy_folders_and_repositories_get_advice() {
+        let tmp = tempfile::tempdir().unwrap();
+        let empty = tmp.path().join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        assert!(workspace_advice(&empty).is_empty());
+
+        let busy = tmp.path().join("busy");
+        std::fs::create_dir_all(busy.join("a/b")).unwrap();
+        for i in 0..ADVICE_FILE_LIMIT {
+            std::fs::write(busy.join("a/b").join(format!("{i}.txt")), "").unwrap();
+        }
+        std::fs::create_dir(busy.join(".git")).unwrap();
+        let advice = workspace_advice(&busy).join(" ");
+        assert!(
+            advice.contains("over 500 files") && advice.contains("git repository"),
+            "{advice}"
+        );
+    }
+}

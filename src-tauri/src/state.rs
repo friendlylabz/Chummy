@@ -4,17 +4,19 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use chummy_local::engine::Engine;
 use chummy_local::runtime::RuntimePaths;
 use chummy_sandbox::Protected;
+use chummy_scheduler::{AskBroker, Manager};
 use chummy_store::secrets::{Keychain, SecretStore};
 use chummy_store::{ChummyDirs, JsonDoc, Recovery};
 use chummy_tools::{ToolHost, ToolPaths};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
+use crate::commands::jobs::AppJobs;
 use crate::events;
 use crate::library::Library;
 use crate::settings::{self, Settings};
@@ -30,8 +32,10 @@ pub struct RunInfo {
     pub run_id: String,
     pub agent_id: Option<String>,
     pub title: String,
-    /// "chat" or "test".
+    /// "chat", "test" or "job".
     pub source: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
     pub started_at: u64,
     #[serde(skip)]
     pub cancel: Arc<AtomicBool>,
@@ -62,7 +66,21 @@ pub struct AppState {
     tool_host: tokio::sync::Mutex<Option<Arc<ToolHost>>>,
     /// Set while the tool runtime is being set up.
     pub tools_installing: Mutex<bool>,
+    /// Questions and tool approvals waiting for the user, from every run.
+    pub asks: AskBroker,
+    /// The job scheduler, started once the app is up.
+    pub jobs: OnceLock<Manager<AppJobs>>,
+    /// Set once the user chose to quit, so closing windows really quits.
+    pub quitting: AtomicBool,
+    /// Whether the tray icon could be created (some Linux desktops have none).
+    pub tray_ready: AtomicBool,
+    /// Held while this copy of Chummy runs, so a second copy can't run the
+    /// same jobs or write the same files.
+    _instance: std::fs::File,
 }
+
+/// Returned by [`AppState::open`] when another copy of Chummy is running.
+pub const ALREADY_RUNNING: &str = "Chummy is already running.";
 
 /// What the main window needs to know before it unlocks chat.
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -78,6 +96,21 @@ impl AppState {
         let dirs = ChummyDirs::at(data_dir);
         dirs.create()
             .map_err(|e| format!("couldn't create the Chummy folder: {e}"))?;
+
+        // The single-instance plugin normally stops a second copy first;
+        // this lock is the backstop (e.g. without a session bus on Linux).
+        let instance = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(dirs.root.join("chummy.lock"))
+            .map_err(|e| format!("couldn't open the Chummy folder's lock: {e}"))?;
+        if let Err(e) = instance.try_lock() {
+            return Err(match e {
+                std::fs::TryLockError::WouldBlock => ALREADY_RUNNING.to_string(),
+                std::fs::TryLockError::Error(e) => format!("couldn't lock the Chummy folder: {e}"),
+            });
+        }
 
         let mut chummy: Vec<&Path> = vec![&dirs.root];
         chummy.extend_from_slice(extra_protected);
@@ -121,6 +154,11 @@ impl AppState {
             tool_paths: ToolPaths::new(&dirs.tools),
             tool_host: tokio::sync::Mutex::new(None),
             tools_installing: Mutex::new(false),
+            asks: AskBroker::new(),
+            jobs: OnceLock::new(),
+            quitting: AtomicBool::new(false),
+            tray_ready: AtomicBool::new(false),
+            _instance: instance,
             dirs,
         })
     }
@@ -216,6 +254,19 @@ mod tests {
         assert!(tmp.path().join("chummy/models").is_dir());
         assert!(tmp.path().join("chummy/chats").is_dir());
         assert!(state.recovery.is_none());
+    }
+
+    #[test]
+    fn only_one_copy_opens_the_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path().join("chummy");
+        let first = AppState::open(&data, &[]).unwrap();
+        assert_eq!(
+            AppState::open(&data, &[]).err().as_deref(),
+            Some(ALREADY_RUNNING)
+        );
+        drop(first);
+        assert!(AppState::open(&data, &[]).is_ok());
     }
 
     #[test]
