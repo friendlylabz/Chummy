@@ -68,6 +68,8 @@ pub struct AppState {
     pub tools_installing: Mutex<bool>,
     /// Questions and tool approvals waiting for the user, from every run.
     pub asks: AskBroker,
+    /// Tokens used per model connection per day, for daily limits.
+    pub usage: Arc<chummy_runner::usage::UsageLedger>,
     /// The job scheduler, started once the app is up.
     pub jobs: OnceLock<Manager<AppJobs>>,
     /// Set once the user chose to quit, so closing windows really quits.
@@ -155,6 +157,9 @@ impl AppState {
             tool_host: tokio::sync::Mutex::new(None),
             tools_installing: Mutex::new(false),
             asks: AskBroker::new(),
+            usage: Arc::new(chummy_runner::usage::UsageLedger::open(
+                &dirs.root.join("usage.json"),
+            )),
             jobs: OnceLock::new(),
             quitting: AtomicBool::new(false),
             tray_ready: AtomicBool::new(false),

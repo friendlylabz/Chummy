@@ -34,10 +34,14 @@
                 ? commands.openWindow("editor")
                 : p.origin.agent_id && commands.setActiveAgent(p.origin.agent_id)}
           >
-            <Icon name={p.ask.kind === "tool_approval" ? "shield" : "ask"} size={15} />
+            <Icon name={p.ask.kind === "tool_approval" ? "shield" : p.ask.kind === "budget" ? "gauge" : "ask"} size={15} />
             <span class="w-text">
               <span class="w-title">{p.origin.title}</span>
-              <span class="w-sub">{p.ask.kind === "tool_approval" ? `Allow ${p.ask.tool}?` : p.ask.text}</span>
+              <span class="w-sub">{p.ask.kind === "tool_approval"
+                  ? `Allow ${p.ask.tool}?`
+                  : p.ask.kind === "budget"
+                    ? `${p.ask.model}: daily tokens used`
+                    : p.ask.text}</span>
             </span>
           </button>
         {/each}

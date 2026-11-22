@@ -359,6 +359,7 @@ mod tests {
             model: "fake-model".into(),
             local: None,
             temperature: None,
+            daily_tokens: Some(chummy_llm::DEFAULT_DAILY_TOKENS),
         };
         let report = probe(&Client::new(&provider, Some(ep.token.clone())).unwrap()).await;
         assert!(report.ok, "{:?}", report.steps);

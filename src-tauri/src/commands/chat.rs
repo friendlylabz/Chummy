@@ -194,13 +194,15 @@ pub fn prepare(
     loop_id: Option<&str>,
 ) -> CmdResult<(LoopFile, Jail)> {
     let id = loop_id.unwrap_or(&agent.loop_id);
-    let file = state.library.load(id).map_err(|_| match loop_id {
+    let original = state.library.load(id).map_err(|_| match loop_id {
         Some(_) => format!("The loop “{id}” is missing. Choose another for the job."),
         None => format!(
             "“{}”'s loop is missing. Choose one in Settings → Agents.",
             agent.name
         ),
     })?;
+    // The agent's own block settings (Agent Loop Configuration).
+    let (file, _missing) = original.with_overrides(&agent.overrides(id));
     let analysis = analyze(&file);
     if let Some(e) = analysis
         .issues
@@ -285,6 +287,7 @@ pub fn send_message(
     let host = agent_host(
         &app,
         &s,
+        Some(&agent),
         s.agent_model(&agent).cloned(),
         Some(jail),
         Some(origin),
@@ -349,7 +352,7 @@ pub fn test_run(
         job_id: None,
         title: format!("Test: {}", file.name),
     };
-    let host = agent_host(&app, &s, model, jail, Some(origin));
+    let host = agent_host(&app, &s, agent.as_ref(), model, jail, Some(origin));
     start(
         &app,
         &state,

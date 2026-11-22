@@ -11,6 +11,7 @@
     "allow-setup-status",
     "allow-open-window",
     "allow-get-settings",
+    "allow-add-recommended-loop",
     "allow-set-theme",
     "allow-app-info",
     "allow-reveal-data-dir",
@@ -45,6 +46,13 @@
     "allow-set-tool-enabled",
     "allow-set-tool-network",
     "allow-set-general",
-    "allow-set-tool-ask"
+    "allow-set-tool-ask",
+    "allow-set-agent-access",
+    "allow-agent-loop-config",
+    "allow-set-agent-block-config",
+    "allow-export-agent-loop-config",
+    "allow-import-agent-loop-config",
+    "allow-usage-today",
+    "allow-block-catalog"
   ]
 }

@@ -690,6 +690,7 @@ dependencies = [
  "chummy-llm",
  "chummy-sandbox",
  "chummy-scheduler",
+ "chummy-store",
  "chummy-tools",
  "jiff 0.2.46",
  "serde",

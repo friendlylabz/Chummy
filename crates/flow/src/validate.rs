@@ -108,7 +108,7 @@ pub fn analyze(l: &LoopFile) -> Analysis {
             issues: &mut issues,
             function: None,
         };
-        if l.format != FORMAT || l.version != VERSION {
+        if l.format != FORMAT || !(1..=VERSION).contains(&l.version) {
             top.err(
                 None,
                 format!(
@@ -596,6 +596,15 @@ fn param_problems(k: &BlockKind) -> Vec<String> {
         BlockKind::RunTool(p) if p.max_result_chars < 100 => {
             v.push("longest result must be at least 100 characters".into())
         }
+        BlockKind::Store(p) if !crate::text::valid_memory_key(p.key.trim()) => {
+            v.push("the memory name must be 1–40 letters, digits or _".into())
+        }
+        BlockKind::Recall(p) if !crate::text::valid_memory_key(p.key.trim()) => {
+            v.push("the memory name must be 1–40 letters, digits or _".into())
+        }
+        BlockKind::Store(p) if p.max_chars < 100 => {
+            v.push("the longest memory must be at least 100 characters".into())
+        }
         BlockKind::AskUser(p) => {
             if p.timeout_minutes > 10_080 {
                 v.push("give up after must be at most 10,080 minutes (a week)".into());
@@ -623,7 +632,7 @@ fn param_problems(k: &BlockKind) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::format::{Block, Link, PortRef, Position};
+    use crate::format::{Block, Link, Position};
     use serde_json::json;
 
     pub(crate) fn block(id: &str, kind: &str, params: serde_json::Value) -> Block {
@@ -633,20 +642,12 @@ mod tests {
             label: String::new(),
             position: Position::default(),
             params,
+            comment: String::new(),
         }
     }
 
     pub(crate) fn link(a: &str, ap: &str, b: &str, bp: &str) -> Link {
-        Link {
-            from: PortRef {
-                block: a.into(),
-                port: ap.into(),
-            },
-            to: PortRef {
-                block: b.into(),
-                port: bp.into(),
-            },
-        }
+        Link::new((a, ap), (b, bp))
     }
 
     #[test]

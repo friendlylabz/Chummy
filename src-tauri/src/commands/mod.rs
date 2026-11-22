@@ -3,6 +3,7 @@
 //!
 //! Errors cross to the UI as plain, user-readable strings.
 
+pub mod agent_setup;
 pub mod agents;
 pub mod asks;
 pub mod chat;

@@ -96,6 +96,7 @@ pub fn start_forwarding(app: &AppHandle) {
                 let what = match &pending.ask.kind {
                     AskKind::Question => "has a question for you",
                     AskKind::ToolApproval { .. } => "wants to run a tool",
+                    AskKind::Budget { .. } => "needs more of its daily tokens",
                 };
                 notify::show(
                     &app,

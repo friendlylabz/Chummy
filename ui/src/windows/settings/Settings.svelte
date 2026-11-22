@@ -91,7 +91,7 @@
       {:else if active === "engine"}
         <LocalEnginePane addModel={() => go("models", "local")} />
       {:else if active === "agents"}
-        <AgentsPane gotoModels={() => go("models", "pick")} />
+        <AgentsPane gotoModels={() => go("models", "pick")} gotoTools={() => go("tools")} />
       {:else if active === "tools"}
         <ToolsPane gotoPermissions={() => go("permissions")} />
       {:else if active === "permissions"}
@@ -101,14 +101,14 @@
           <div class="row">
             <div>
               <div class="row-title">Internet access</div>
-              <div class="row-sub">Let tools that you allow in Tools reach the internet. Off means no tool can go online.</div>
+              <div class="row-sub">The app-wide switch. A tool goes online only if this, the tool's internet switch in Tools, the agent's internet switch in Agents, and the block's “may use the internet” are all on.</div>
             </div>
             <Toggle checked={perms.network} label="Internet access" onchange={(v) => commands.setPermission("network", v)} />
           </div>
           <div class="row">
             <div>
               <div class="row-title">Tools</div>
-              <div class="row-sub">Let agents run the tools you switch on in Tools. Tools stay locked to the agent's workspace.</div>
+              <div class="row-sub">The app-wide switch. A tool runs only if this and the tool are on in Tools, the agent may use it (Agents), and the loop block ticks it. Tools stay locked to the agent's workspace.</div>
             </div>
             <Toggle checked={perms.tools} label="Tools" onchange={(v) => commands.setPermission("tools", v)} />
           </div>

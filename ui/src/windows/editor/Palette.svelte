@@ -2,21 +2,25 @@
   import type { BlockInfo, Category, FunctionDef } from "$lib/ipc";
   import { loops } from "$lib/stores/loops.svelte";
   import { categoryColor, categoryLabel } from "./loopdoc";
+  import Icon from "$lib/components/Icon.svelte";
 
   let {
     onadd,
     functions = [],
     current = null,
     onaddfunction,
+    onaddnote,
   }: {
     onadd: (info: BlockInfo) => void;
+    /** Add a note for people to the canvas. */
+    onaddnote: () => void;
     functions?: FunctionDef[];
     /** The function being edited, which can't be added inside itself. */
     current?: string | null;
     onaddfunction: (f: FunctionDef) => void;
   } = $props();
 
-  const order: Category[] = ["start", "think", "you", "exchange", "text", "flow", "workspace", "finish"];
+  const order: Category[] = ["start", "think", "you", "exchange", "text", "flow", "workspace", "memory", "finish"];
   const groups = $derived(
     order
       .map((c) => ({ c, items: loops.catalog.filter((b) => b.category === c && b.palette) }))
@@ -52,6 +56,13 @@
       {/each}
     </div>
   {/each}
+  <div class="group">
+    <div class="group-title">Notes</div>
+    <button type="button" class="item" title="A note for people. It doesn't change what the loop does." onclick={onaddnote}>
+      <Icon name="note" size={13} />
+      <span class="name">Add note</span>
+    </button>
+  </div>
   <div class="group">
     <div class="group-title">Functions</div>
     {#each usable as f (f.id)}

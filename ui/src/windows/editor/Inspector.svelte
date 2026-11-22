@@ -1,15 +1,17 @@
 <script lang="ts">
-  import { commands, type Block, type BlockPorts, type FunctionDef, type Issue, type LoopFile, type ParamSpec } from "$lib/ipc";
+  import type { Edge } from "@xyflow/svelte";
+  import type { Block, BlockPorts, FunctionDef, Issue, LoopFile } from "$lib/ipc";
   import { loops } from "$lib/stores/loops.svelte";
-  import { settings } from "$lib/stores/settings.svelte";
-  import { tools } from "$lib/stores/tools.svelte";
   import { outputCandidates, portKey } from "./loopdoc";
   import Button from "$lib/components/Button.svelte";
   import Icon from "$lib/components/Icon.svelte";
   import { categoryColor, categoryLabel } from "./loopdoc";
+  import ParamFields from "$lib/components/ParamFields.svelte";
 
   let {
     block,
+    link = null,
+    onlinklabel,
     meta = $bindable(),
     issues,
     onchange,
@@ -23,6 +25,9 @@
     ondeletefunction,
   }: {
     block: Block | null;
+    /** The selected link, when no block is selected. */
+    link?: Edge | null;
+    onlinklabel: (id: string, label: string) => void;
     meta: LoopFile;
     issues: Issue[];
     onchange: (b: Block) => void;
@@ -42,20 +47,6 @@
   const fnOf = (b: Block | null) =>
     b?.type === "function" ? (meta.functions ?? []).find((f) => f.id === b.params.function) : undefined;
   const blockFn = $derived(fnOf(block));
-  const roleOptions = ["user", "assistant", "system", "tool"];
-
-  function roles(): string[] {
-    const v = block?.params.roles;
-    return Array.isArray(v) ? (v as string[]) : ["user"];
-  }
-  function toolList(): string[] {
-    const v = block?.params.tools;
-    return Array.isArray(v) ? (v as string[]) : [];
-  }
-  function toggleTool(name: string, on: boolean) {
-    const cur = toolList().filter((t) => t !== name);
-    setParam("tools", on ? [...cur, name] : cur.length ? cur : undefined);
-  }
 
   function setFn(patch: Partial<FunctionDef>) {
     if (scope) onfunctionchange({ ...scope, ...patch });
@@ -82,9 +73,12 @@
   }
 
   const info = $derived(block ? loops.info(block.type) : undefined);
-  $effect(() => {
-    if (info?.params.some((p) => p.kind === "tools")) tools.init();
-  });
+  /** Says which blocks and ports a link joins, for people. */
+  function linkEnds(e: Edge) {
+    const scopeBlocks = scope ? scope.blocks : meta.blocks;
+    const name = (id: string) => scopeBlocks.find((b) => b.id === id)?.label || id;
+    return `${name(e.source)} (${e.sourceHandle}) → ${name(e.target)} (${e.targetHandle})`;
+  }
   const blockIssues = $derived(block ? issues.filter((i) => i.block === block.id) : []);
   const errors = $derived(issues.filter((i) => i.severity === "error"));
   const warnings = $derived(issues.filter((i) => i.severity === "warning"));
@@ -95,16 +89,6 @@
     if (value === undefined || value === "") delete params[key];
     else params[key] = value;
     onchange({ ...block, params });
-  }
-
-  function value(p: ParamSpec): unknown {
-    return block?.params[p.key];
-  }
-
-  function numberInput(p: ParamSpec, raw: string) {
-    if (raw.trim() === "") return setParam(p.key, p.optional ? undefined : 0);
-    const n = Number(raw);
-    if (!isNaN(n)) setParam(p.key, p.kind === "integer" ? Math.round(n) : n);
   }
 </script>
 
@@ -139,101 +123,23 @@
       />
     </div>
 
-    {#each info.params as p (p.key)}
-      <div class="field">
-        {#if p.kind === "bool"}
-          <label class="check">
-            <input type="checkbox" checked={!!value(p)} onchange={(e) => setParam(p.key, (e.currentTarget as HTMLInputElement).checked)} />
-            {p.label}
-          </label>
-        {:else}
-          <label for="in-{p.key}">{p.label}</label>
-          {#if p.kind === "multiline"}
-            <textarea
-              id="in-{p.key}"
-              class="input area"
-              rows={p.key === "prompt" || p.key === "format" ? 8 : 4}
-              spellcheck="false"
-              value={(value(p) as string) ?? ""}
-              oninput={(e) => setParam(p.key, (e.currentTarget as HTMLTextAreaElement).value)}
-            ></textarea>
-          {:else if p.kind === "text"}
-            <input
-              id="in-{p.key}"
-              class="input mono"
-              spellcheck="false"
-              value={(value(p) as string) ?? ""}
-              oninput={(e) => setParam(p.key, (e.currentTarget as HTMLInputElement).value)}
-            />
-          {:else if p.kind === "number" || p.kind === "integer"}
-            <input
-              id="in-{p.key}"
-              class="input"
-              type="number"
-              min={p.min}
-              max={p.max}
-              step={p.kind === "number" ? p.step : 1}
-              placeholder={p.optional ? "Default" : ""}
-              value={value(p) ?? ""}
-              oninput={(e) => numberInput(p, (e.currentTarget as HTMLInputElement).value)}
-            />
-          {:else if p.kind === "choice"}
-            <select
-              id="in-{p.key}"
-              class="input"
-              value={(value(p) as string) ?? p.options[0]?.value}
-              onchange={(e) => setParam(p.key, (e.currentTarget as HTMLSelectElement).value)}
-            >
-              {#each p.options as o (o.value)}<option value={o.value}>{o.label}</option>{/each}
-            </select>
-          {:else if p.kind === "roles"}
-            <div class="roles">
-              {#each roles() as r, i (i)}
-                <div class="role">
-                  <span class="faint xs">{i + 1}.</span>
-                  <select class="input" value={r} onchange={(e) => { const v = [...roles()]; v[i] = (e.currentTarget as HTMLSelectElement).value; setParam(p.key, v); }}>
-                    {#each roleOptions as o (o)}<option value={o}>{o[0].toUpperCase() + o.slice(1)}</option>{/each}
-                  </select>
-                  {#if roles().length > 1}
-                    <button type="button" class="mini" aria-label="Remove" onclick={() => setParam(p.key, roles().filter((_, j) => j !== i))}><Icon name="minus" size={13} /></button>
-                  {/if}
-                </div>
-              {/each}
-              <button type="button" class="mini add" onclick={() => setParam(p.key, [...roles(), "assistant"])}><Icon name="plus" size={13} /> Add role</button>
-            </div>
-          {:else if p.kind === "tools"}
-            {#if !tools.ready}
-              <p class="hint">No tools yet. Set them up in Settings → Tools.</p>
-              <Button variant="ghost" icon="wrench" onclick={() => commands.openWindow("settings", "tools")}>Open Tools settings</Button>
-            {:else}
-              <div class="tools">
-                {#each tools.installed as t (t.name)}
-                  <label class="check" title={t.description}>
-                    <input type="checkbox" checked={toolList().includes(t.name)} onchange={(e) => toggleTool(t.name, (e.currentTarget as HTMLInputElement).checked)} />
-                    <span class="tname">{t.title}</span>
-                    {#if !t.enabled || !settings.current.permissions.tools}<span class="off">off</span>{/if}
-                  </label>
-                {/each}
-                {#each toolList().filter((n) => !tools.installed.some((t) => t.name === n)) as missing (missing)}
-                  <label class="check"><input type="checkbox" checked onchange={() => toggleTool(missing, false)} /><span class="tname mono">{missing}</span><span class="off">not installed</span></label>
-                {/each}
-              </div>
-            {/if}
-          {:else if p.kind === "model"}
-            <select
-              id="in-{p.key}"
-              class="input"
-              value={(value(p) as string) ?? ""}
-              onchange={(e) => setParam(p.key, (e.currentTarget as HTMLSelectElement).value || undefined)}
-            >
-              <option value="">The agent's model</option>
-              {#each settings.current.providers as m (m.id)}<option value={m.id}>{m.name}</option>{/each}
-            </select>
-          {/if}
-        {/if}
-        {#if p.help}<span class="hint">{p.help}</span>{/if}
-      </div>
-    {/each}
+    <div class="field">
+      <label for="in-comment">Comment</label>
+      <textarea
+        id="in-comment"
+        class="input area plain"
+        rows="2"
+        placeholder="What this block is for (shown on the block; the model never sees it)"
+        value={block.comment ?? ""}
+        oninput={(e) => {
+          const v = (e.currentTarget as HTMLTextAreaElement).value;
+          const { comment: _c, ...rest } = block;
+          onchange(v ? { ...rest, comment: v } : rest);
+        }}
+      ></textarea>
+    </div>
+
+    <ParamFields {info} params={block.params} onset={setParam} />
 
     {#if blockIssues.length}
       <ul class="issues">
@@ -246,6 +152,20 @@
     <div class="foot">
       <span class="faint mono">{block.id}</span>
       <Button variant="ghost" icon="trash" onclick={() => ondelete(block.id)}>Delete block</Button>
+    </div>
+  {:else if link}
+    <div class="head"><Icon name="tag" size={15} /><span class="kind">Link</span></div>
+    <p class="desc">{linkEnds(link)}</p>
+    <div class="field">
+      <label for="in-link-label">Label</label>
+      <input
+        id="in-link-label"
+        class="input"
+        placeholder="e.g. “if the plan needs more steps”"
+        value={typeof link.label === "string" ? link.label : ""}
+        oninput={(e) => onlinklabel(link.id, (e.currentTarget as HTMLInputElement).value)}
+      />
+      <span class="hint">Shown on the path, to say what travels along it. It doesn't change what the loop does.</span>
     </div>
   {:else if scope}
     <div class="head"><Icon name="layers" size={15} /><span class="kind">Function</span></div>

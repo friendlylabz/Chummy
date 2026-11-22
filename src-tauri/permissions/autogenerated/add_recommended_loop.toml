@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-add-recommended-loop"
+description = "Enables the add_recommended_loop command without any pre-configured scope."
+commands.allow = ["add_recommended_loop"]
+
+[[permission]]
+identifier = "deny-add-recommended-loop"
+description = "Denies the add_recommended_loop command without any pre-configured scope."
+commands.deny = ["add_recommended_loop"]

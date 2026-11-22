@@ -5,14 +5,14 @@
 use std::sync::Arc;
 
 use chummy_llm::ProviderConfig;
-use chummy_runner::{AgentHost, AgentSetup, Permissions, Services, ToolGrant};
+use chummy_runner::{AgentGrant, AgentHost, AgentSetup, Permissions, Services, ToolGrant};
 use chummy_sandbox::Jail;
 use chummy_scheduler::Origin;
 use chummy_tools::ToolHost;
 use tauri::{AppHandle, Manager};
 
 use crate::commands::local::start_engine_for;
-use crate::settings::Settings;
+use crate::settings::{Agent, Settings};
 use crate::state::AppState;
 
 pub struct AppServices {
@@ -46,6 +46,7 @@ pub type AppHost = AgentHost<AppServices>;
 pub fn agent_host(
     app: &AppHandle,
     s: &Settings,
+    agent: Option<&Agent>,
     model: Option<ProviderConfig>,
     jail: Option<Jail>,
     origin: Option<Origin>,
@@ -73,6 +74,10 @@ pub fn agent_host(
                 )
             })
             .collect(),
+        agent: agent.map(|a| AgentGrant {
+            tools: a.tools.clone(),
+            network: a.network,
+        }),
         installed: if s.permissions.tools {
             chummy_tools::installed(&state.tool_paths)
         } else {
@@ -81,6 +86,7 @@ pub fn agent_host(
         jail,
         asks: origin.map(|o| (state.asks.clone(), o)),
         time_zone: iana_time_zone::get_timezone().ok(),
+        usage: Some(state.usage.clone()),
     };
     AgentHost::new(Arc::new(AppServices { app: app.clone() }), setup)
 }

@@ -3,10 +3,14 @@
  * edges). The loop file is what's saved; the canvas is how it's edited.
  *
  * - each block is a node of type "block" whose id is the block id;
- * - each link is an edge whose handles are the port names.
+ * - each link is an edge whose handles are the port names;
+ * - each note is a node of type "note" whose id is `note:` + the note id.
  */
 import type { Edge, Node } from "@xyflow/svelte";
-import type { Block, BlockInfo, BlockPorts, Category, FunctionDef, Link, LoopFile, PortSpec } from "$lib/ipc";
+import type { Block, BlockInfo, BlockPorts, Category, FunctionDef, Link, LoopFile, Note, PortSpec } from "$lib/ipc";
+
+/** The output a block uses for a failure it can recover from. */
+export const FAILED = "error";
 
 export interface BlockData extends Record<string, unknown> {
   block: Block;
@@ -23,6 +27,40 @@ export interface BlockData extends Record<string, unknown> {
 
 export type BlockNode = Node<BlockData, "block">;
 
+export interface NoteData extends Record<string, unknown> {
+  note: Note;
+}
+export type NoteNode = Node<NoteData, "note">;
+export type CanvasNode = BlockNode | NoteNode;
+
+export const NOTE_PREFIX = "note:";
+export function isBlock(n: CanvasNode): n is BlockNode {
+  return n.type === "block";
+}
+export function isNote(n: CanvasNode): n is NoteNode {
+  return n.type === "note";
+}
+
+export function noteNode(note: Note, selected = false): NoteNode {
+  return {
+    id: NOTE_PREFIX + note.id,
+    type: "note",
+    position: { ...note.position },
+    width: note.width ?? 240,
+    height: note.height ?? 120,
+    zIndex: -1,
+    selected,
+    data: { note: clone(note) },
+  };
+}
+
+export function newNoteId(taken: Iterable<string>): string {
+  const ids = new Set(taken);
+  let n = 1;
+  while (ids.has(`note-${n}`)) n++;
+  return `note-${n}`;
+}
+
 /** Deep copy that also works on Svelte state proxies (structuredClone doesn't). */
 export function clone<T>(v: T): T {
   return JSON.parse(JSON.stringify(v));
@@ -32,42 +70,57 @@ export function edgeId(l: Link): string {
   return `${l.from.block}:${l.from.port}->${l.to.block}:${l.to.port}`;
 }
 
-export function toCanvas(file: LoopFile): { nodes: BlockNode[]; edges: Edge[] } {
-  const nodes: BlockNode[] = file.blocks.map((b) => ({
-    id: b.id,
-    type: "block",
-    position: { ...b.position },
-    data: { block: clone(b), inputs: [], outputs: [], issues: [] },
-  }));
-  const edges: Edge[] = file.links.map((l) => ({
+export function linkEdge(l: Link): Edge {
+  return {
     id: edgeId(l),
     source: l.from.block,
     sourceHandle: l.from.port,
     target: l.to.block,
     targetHandle: l.to.port,
-  }));
-  return { nodes, edges };
-}
-
-/** The blocks and links on the canvas. */
-export function toGraph(nodes: BlockNode[], edges: Edge[]): { blocks: Block[]; links: Link[] } {
-  return {
-    blocks: nodes.map((n) => ({
-      ...n.data.block,
-      position: { x: Math.round(n.position.x), y: Math.round(n.position.y) },
-    })),
-    links: edges
-      .filter((e) => e.sourceHandle && e.targetHandle)
-      .map((e) => ({
-        from: { block: e.source, port: e.sourceHandle! },
-        to: { block: e.target, port: e.targetHandle! },
-      })),
+    label: l.label || undefined,
+    class: l.from.port === FAILED ? "failed-path" : undefined,
   };
 }
 
-/** Builds the loop file from the canvas plus the loop's own fields. */
-export function toFile(meta: LoopFile, nodes: BlockNode[], edges: Edge[]): LoopFile {
-  return { ...meta, ...toGraph(nodes, edges) };
+export function toCanvas(file: { blocks: Block[]; links: Link[]; notes?: Note[] }): { nodes: CanvasNode[]; edges: Edge[] } {
+  const nodes: CanvasNode[] = [
+    ...(file.notes ?? []).map((n) => noteNode(n)),
+    ...file.blocks.map(
+      (b): BlockNode => ({
+        id: b.id,
+        type: "block",
+        position: { ...b.position },
+        data: { block: clone(b), inputs: [], outputs: [], issues: [] },
+      }),
+    ),
+  ];
+  return { nodes, edges: file.links.map(linkEdge) };
+}
+
+/** The blocks, links and notes on the canvas. */
+export function toGraph(nodes: CanvasNode[], edges: Edge[]): { blocks: Block[]; links: Link[]; notes: Note[] } {
+  const pos = (n: CanvasNode) => ({ x: Math.round(n.position.x), y: Math.round(n.position.y) });
+  return {
+    blocks: nodes.filter(isBlock).map((n) => ({ ...n.data.block, position: pos(n) })),
+    links: edges
+      .filter((e) => e.sourceHandle && e.targetHandle)
+      .map((e) => {
+        const l: Link = {
+          from: { block: e.source, port: e.sourceHandle! },
+          to: { block: e.target, port: e.targetHandle! },
+        };
+        if (typeof e.label === "string" && e.label.trim()) l.label = e.label.trim();
+        return l;
+      }),
+    notes: nodes.filter(isNote).map((n) => {
+      const note: Note = { ...n.data.note, position: pos(n) };
+      const w = n.measured?.width ?? n.width;
+      const h = n.measured?.height ?? n.height;
+      if (w) note.width = Math.round(w);
+      if (h) note.height = Math.round(h);
+      return note;
+    }),
+  };
 }
 
 // ------------------------------------------------------------ functions
@@ -128,6 +181,8 @@ export function makeFunction(
     }
     for (const p of ports[b.id]?.outputs ?? []) {
       const k = key(b.id, p.name);
+      // An unused Failed output stays closed: the failure stops the run.
+      if (p.name === FAILED && !usedOutside.has(k)) continue;
       if (!usedInside.has(k) || usedOutside.has(k)) {
         const name = freeName("out", names);
         outMap.set(k, name);
@@ -173,7 +228,10 @@ export function makeFunction(
   return { def, block, blocks: [...blocks.filter((b) => !selected.has(b.id)), block], links: newLinks };
 }
 
-/** Output ports inside a function that no inner block uses: what it may expose. */
+/**
+ * Output ports inside a function that no inner block uses: what it may
+ * expose. Failed outputs can be exposed but are never added on their own.
+ */
 export function outputCandidates(def: FunctionDef, ports: Record<string, BlockPorts>): { block: string; port: PortSpec }[] {
   const used = new Set(def.links.map((l) => key(l.from.block, l.from.port)));
   return def.blocks.flatMap((b) =>
@@ -213,6 +271,7 @@ export function syncFunctionPorts(
   const outputs = def.outputs.filter((o) => exists(o.from.block, o.from.port));
   for (const c of outputCandidates(def, ports)) {
     const k = key(c.block, c.port.name);
+    if (c.port.name === FAILED) continue;
     if (!knownOutputs.has(k)) {
       knownOutputs.add(k);
       if (!outputs.some((o) => key(o.from.block, o.from.port) === k)) {
@@ -229,11 +288,11 @@ export function portKey(block: string, port: string): string {
 }
 
 /** A key that changes only when the loop's structure (not positions) changes. */
-export function structureKey(meta: LoopFile, nodes: BlockNode[], edges: Edge[]): string {
+export function structureKey(meta: LoopFile, nodes: CanvasNode[], edges: Edge[]): string {
   return JSON.stringify([
     meta.limits,
     meta.functions ?? [],
-    nodes.map((n) => [n.id, n.data.block.type, n.data.block.label, n.data.block.params]),
+    nodes.filter(isBlock).map((n) => [n.id, n.data.block.type, n.data.block.label, n.data.block.params]),
     edges.map((e) => [e.source, e.sourceHandle, e.target, e.targetHandle]),
   ]);
 }
@@ -262,6 +321,7 @@ export const categoryLabel: Record<Category, string> = {
   text: "Text",
   flow: "Flow",
   workspace: "Workspace",
+  memory: "Memory",
   finish: "Finish",
 };
 
@@ -274,6 +334,7 @@ export const categoryColor: Record<Category, string> = {
   text: "#a78bfa",
   flow: "#e8c16d",
   workspace: "#7fd1a4",
+  memory: "#c9a0dc",
   finish: "#ef8fa8",
 };
 
@@ -287,7 +348,8 @@ export function summary(b: Block): string {
       const prompt = s(p.prompt).replace(/\s+/g, " ").trim();
       const sys = s(p.system).replace(/\s+/g, " ").trim();
       const base = prompt && prompt !== "_INPUT_" ? prompt : sys;
-      return tools ? `${tools} tool${tools === 1 ? "" : "s"} · ${base}` : base;
+      const mode = p.tool_mode === "prompted" ? " (prompted)" : p.tool_mode === "off" ? " (off)" : "";
+      return tools ? `${tools} tool${tools === 1 ? "" : "s"}${mode} · ${base}` : base;
     }
     case "augment":
       return `${s(p.role) || "user"}: ${s(p.format).replace(/\s+/g, " ").trim()}`;
@@ -322,6 +384,16 @@ export function summary(b: Block): string {
     }
     case "run_tool":
       return p.confirm ? "Asks you first" : "";
+    case "store":
+      return `Keeps {{${s(p.key)}}}`;
+    case "recall":
+      return `Reads {{${s(p.key)}}}`;
+    case "find_call": {
+      const n = Array.isArray(p.tools) ? p.tools.length : 0;
+      return n ? `${n} tool${n === 1 ? "" : "s"}` : "No tools ticked";
+    }
+    case "decline_calls":
+      return "Answers each call: not run";
     default:
       return "";
   }
@@ -330,7 +402,7 @@ export function summary(b: Block): string {
 export function blankLoop(name = "New loop"): LoopFile {
   return {
     format: "chummy.loop",
-    version: 1,
+    version: 2,
     name,
     description: "",
     limits: { max_steps: 200, max_llm_calls: 20, max_tool_calls: 20 },
@@ -340,6 +412,11 @@ export function blankLoop(name = "New loop"): LoopFile {
 }
 
 /** Set by the editor so blocks can ask it to do things. */
-export const editorActions: { openFunction: (functionId: string) => void } = {
+export const editorActions: {
+  openFunction: (functionId: string) => void;
+  /** A note's text changed on the canvas. */
+  setNote: (nodeId: string, text: string) => void;
+} = {
   openFunction: () => {},
+  setNote: () => {},
 };

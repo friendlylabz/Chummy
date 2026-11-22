@@ -9,12 +9,13 @@ until you say so.
 
 ![Chatting with an agent](docs/screenshot-main.png)
 
-> **Status:** passes 1–5 of the roadmap are done: the app shell, the folder
+> **Status:** passes 1–6 of the roadmap are done: the app shell, the folder
 > jail, settings, model connections (including a basic built-in engine), the
 > loop engine and editor, agents and chat, sandboxed Python tools, exchanges,
-> block functions, the *5 step recursive plan* templates, and the scheduler
-> with tray mode and questions for you. Next: chummyd, an optional
-> background service ([plan](docs/chummyd-plan.md)).
+> block functions, the scheduler with tray mode and questions for you, and
+> the default **Chummy assistant** loop with tool modes, working notes,
+> failure outputs, daily token limits and per-agent settings. Next: chummyd,
+> an optional background service ([plan](docs/chummyd-plan.md)).
 
 ![The 5 step recursive plan answering in chat, using tools](docs/screenshot-plan-chat.png)
 
@@ -30,7 +31,9 @@ until you say so.
   [docs/loop-format.md](docs/loop-format.md).
 - **Loop editor.** A node editor with a block palette, an inspector for every
   parameter, live checks, templates, import and export, and test runs that
-  light up each block as it works.
+  light up each block as it works. Blocks can carry a **comment**, links a
+  **label**, and the canvas **notes**, all saved in the loop file so a loop
+  explains itself.
 - **Tools.** A tool is one Python file with a standard PEP 723 header. It runs
   as WebAssembly (CPython for WASI, under Wasmtime) and can see only the
   agent's workspace. It can't go online except through Chummy, and only if
@@ -39,20 +42,42 @@ until you say so.
   and must be pure Python. Seven built-in tools ship with Chummy: read,
   write, list and search files, calculator, current time, and fetch web page.
   See [docs/tool-format.md](docs/tool-format.md).
-- **Model block with tools.** Ask the model has three outputs: **Answer**,
-  **Tool call** (fires instead of Answer when the model calls a tool) and
-  **Reasoning**. Each block picks its own tools, which keeps prompts short
-  for small models. Bad calls (unknown tool, wrong arguments, no call when
+- **Model block with tools.** Ask the model has outputs **Answer**,
+  **Tool call** (fires instead of Answer when the model calls a tool),
+  **Reasoning** and **Failed**. Each block picks its own tools, which keeps
+  prompts short for small models. **Tool handling** is *Native* (the
+  server's tool calling, the default), *Prompted* (tools described in the
+  system message and calls parsed from the text, for models or servers
+  without tool calling) or *Off* (the loop handles tools itself with
+  `_TOOLS_` in a prompt and a **Find tool call** block). Bad calls (unknown tool, wrong arguments, no call when
   one is required) can be explained to the model and retried, stop the run,
   or fall back to the text. A **Run tool** block runs the calls and passes
   the results back.
+- **Failures you can route.** Blocks that can fail (model, Run tool, Ask me
+  and the file blocks) have a **Failed** output carrying the error message.
+  Link it and the loop carries on; leave it unlinked and the failure stops
+  the run as before.
+- **Working notes.** **Save to memory** and **Read memory** blocks keep text
+  under a name for the rest of the run, and any prompt can include it with
+  `{{name}}`. The assistant uses this to keep notes that every model call
+  sees and that the model updates after each step.
+- **Daily token limits.** Each model connection has a daily limit (1,000,000
+  tokens by default, or off), shown with today's use in Settings → Models.
+  When it runs out, each model block waits until midnight, stops the run, or
+  asks you for more, as you choose.
 - **Exchanges.** A conversation with the model that flows between blocks:
   *Start exchange*, *Add to exchange* and *Read exchange* build and read it,
   and model blocks continue it.
 - **Block functions.** Select some blocks and choose **Make function**: they
   become one block whose ports are exactly the inputs and outputs you left
   open. Double-click to edit inside. Functions are saved in the loop file.
-- **Templates.** Blank, Simple chat, Draft and self-check, **5 step
+- **Chummy assistant (the default).** Asks you one question if your request
+  is unclear, tries it with tools (the model checks each call before it
+  runs), breaks anything too big into steps, checks every result and plan,
+  keeps working notes, asks you when it's stuck, and carries on past
+  failures. Onboarding offers it with one click, and a first agent gets it
+  automatically.
+- **Templates.** Chummy assistant, Blank, Simple chat, Draft and self-check, **5 step
   recursive plan** and **5 step recursive plan verify**. The planner tries
   your goal straight away (by writing or with tools); anything too big is
   broken into 5 or fewer steps, and each step is tried the same way,
@@ -77,7 +102,10 @@ until you say so.
 - **Agents.** An agent is a loop, a model, and **its own workspace folder**.
   Each folder belongs to exactly one agent, and no agent's folder can be inside
   another's. Chat with an agent from the main window; its loop runs inside its
-  folder, and progress shows live.
+  folder, and progress shows live. Each agent has its own **tool and internet
+  switches**, and **Agent Loop Configuration** changes any block's settings
+  for that agent alone, without touching the loop file. Those settings can be
+  exported and imported as `chummy.loopconfig` files.
 - **Workspace jail.** Each agent is locked to its folder, which you pick and
   confirm in a native dialog. Whole drives, your home folder, system folders, hidden
   settings folders (`.ssh`, `.config`, …) and Chummy's own folder are always
@@ -86,7 +114,8 @@ until you say so.
   escape the folder.
 - **Permissions.** Internet access and tools are off by default, and so is
   every tool, and every tool's internet access. Turning any of them on needs
-  a native confirmation, shown by Rust, not by the web UI. See
+  a native confirmation, shown by Rust, not by the web UI. A tool runs only
+  when it's on at every level: app-wide, for the agent, and in the block. See
   [docs/security.md](docs/security.md) for the threat model and the latest
   audit.
 - **Model connections.** Ollama, LM Studio, llama.cpp, vLLM, any
@@ -103,6 +132,10 @@ until you say so.
   are installed on first use with [uv](https://github.com/astral-sh/uv), inside
   Chummy's folder; none of them ship with the app. The engine is much slower
   than vLLM or llama.cpp, and the app says so.
+
+![The Chummy assistant in the loop editor, with comments, link labels and notes](docs/screenshot-assistant.png)
+
+![Agent Loop Configuration: a block's setting changed for one agent](docs/screenshot-agent-loop-config.png)
 
 ![A block function open in the editor: the model block and Run tool in a cycle](docs/screenshot-function.png)
 
@@ -127,7 +160,8 @@ until you say so.
 It holds `settings.json` (versioned, written atomically, with a `.bak`
 backup), `loops/` (your loops, one JSON file each), `chats/` (chat history,
 one file per agent), `jobs/` (scheduled jobs, their state and run history),
-`models/`, `runtime/` (the built-in engine), `tools/` (the WebAssembly Python
+`usage.json` (tokens used per model per day, kept 31 days), `models/`,
+`runtime/` (the built-in engine), `tools/` (the WebAssembly Python
 and installed tools) and `logs/`.
 Secrets are never stored here; they go to the system keychain (Keychain,
 Credential Manager, or Secret Service on Linux). Set `HF_ENDPOINT` to use a
@@ -252,7 +286,10 @@ OpenAI-compatible endpoint (127.0.0.1, random bearer token, offline).
 3. **Loop engine & editor.** Done.
 4. **Tools, exchanges, functions.** Done.
 5. **Scheduler, tray mode, questions for you, security audit.** Done.
-6. **chummyd.** An optional, separately installed background service for jobs,
+6. **Default assistant loop, tool modes, failure outputs, working notes,
+   daily token limits, per-agent switches and loop configuration, editor
+   comments and notes.** Done.
+7. **chummyd.** An optional, separately installed background service for jobs,
    with an authenticated API, configured from the app. See
    [docs/chummyd-plan.md](docs/chummyd-plan.md).
 

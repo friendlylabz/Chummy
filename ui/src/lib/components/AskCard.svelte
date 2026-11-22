@@ -26,6 +26,8 @@
 
   const approval = $derived(pending.ask.kind === "tool_approval");
   const tool = $derived(pending.ask.kind === "tool_approval" ? pending.ask.tool : "");
+  const budget = $derived(pending.ask.kind === "budget" ? pending.ask : null);
+  const fmt = (n: number) => n.toLocaleString();
   const who = $derived(
     pending.origin.kind === "job"
       ? `The job “${pending.origin.title}”`
@@ -49,16 +51,34 @@
   }
 </script>
 
-<div class="card" class:approval role="group" aria-label={approval ? `Allow ${tool}?` : "Question"}>
+<div
+  class="card"
+  class:approval={approval || !!budget}
+  role="group"
+  aria-label={approval ? `Allow ${tool}?` : budget ? "Daily token limit reached" : "Question"}
+>
   <div class="head">
-    <Icon name={approval ? "shield" : "ask"} size={15} />
+    <Icon name={approval ? "shield" : budget ? "gauge" : "ask"} size={15} />
     <span>
-      {#if showOrigin}{who}{approval ? " wants to run a tool" : " asks"}{:else}{approval ? "Allow this tool call?" : "Question"}{/if}
+      {#if budget}
+        {showOrigin ? `${who}: ` : ""}{budget.model} has used today's tokens
+      {:else if showOrigin}{who}{approval ? " wants to run a tool" : " asks"}{:else}{approval ? "Allow this tool call?" : "Question"}{/if}
     </span>
   </div>
   <div class="text" data-selectable>{pending.ask.text}</div>
 
-  {#if approval}
+  {#if budget}
+    <div class="hint">
+      Used {fmt(budget.used)} of {fmt(budget.limit)} tokens today. The allowance refreshes at midnight; you can change
+      the limit in Settings → Models.
+    </div>
+    <div class="actions">
+      <Button variant="primary" icon="check" disabled={busy} onclick={() => reply({ kind: "allow" })}
+        >Allow {fmt(budget.extra)} more today</Button
+      >
+      <Button icon="stop" disabled={busy} onclick={() => reply({ kind: "deny", text: "" })}>Stop the run</Button>
+    </div>
+  {:else if approval}
     <button type="button" class="link" aria-expanded={showAll} onclick={() => (showAll = !showAll)}>
       {showAll ? "Hide" : "Show"} the exact arguments
     </button>

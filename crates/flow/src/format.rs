@@ -1,4 +1,4 @@
-//! The `chummy.loop` file format, version 1.
+//! The `chummy.loop` file format, version 2 (version 1 files still load).
 //!
 //! ```json
 //! {
@@ -33,14 +33,16 @@ use crate::FlowError;
 use crate::engine::RunLimits;
 
 pub const FORMAT: &str = "chummy.loop";
-pub const VERSION: u32 = 1;
+/// Version 2 added block comments, link labels and notes. Version 1 files
+/// read as version 2 with none of them.
+pub const VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LoopFile {
     /// Always `"chummy.loop"`.
     pub format: String,
-    /// Format version; this build reads version 1.
+    /// Format version; this build reads versions 1 and 2.
     pub version: u32,
     pub name: String,
     #[serde(default)]
@@ -54,6 +56,25 @@ pub struct LoopFile {
     /// `function`) anywhere in this loop.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub functions: Vec<FunctionDef>,
+    /// Notes on the canvas, for people. They don't run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<Note>,
+}
+
+/// A note on the editor's canvas.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Note {
+    pub id: String,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub position: Position,
+    /// Size on the canvas; 0 means the default.
+    #[serde(default)]
+    pub width: f64,
+    #[serde(default)]
+    pub height: f64,
 }
 
 /// A block made of other blocks.
@@ -79,6 +100,8 @@ pub struct FunctionDef {
     pub blocks: Vec<Block>,
     #[serde(default)]
     pub links: Vec<Link>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<Note>,
 }
 
 /// A function input: values arriving here go to `to`, an inner input port.
@@ -119,6 +142,9 @@ pub struct Block {
     /// Type-specific parameters.
     #[serde(default = "empty_object")]
     pub params: serde_json::Value,
+    /// What this block is for, in words. Shown on the block.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub comment: String,
 }
 
 fn empty_object() -> serde_json::Value {
@@ -146,6 +172,25 @@ pub struct PortRef {
 pub struct Link {
     pub from: PortRef,
     pub to: PortRef,
+    /// Shown on the link in the editor.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+}
+
+impl Link {
+    pub fn new(from: (&str, &str), to: (&str, &str)) -> Self {
+        Self {
+            from: PortRef {
+                block: from.0.into(),
+                port: from.1.into(),
+            },
+            to: PortRef {
+                block: to.0.into(),
+                port: to.1.into(),
+            },
+            label: String::new(),
+        }
+    }
 }
 
 impl LoopFile {
@@ -159,6 +204,7 @@ impl LoopFile {
             blocks: vec![],
             links: vec![],
             functions: vec![],
+            notes: vec![],
         }
     }
 
@@ -215,6 +261,14 @@ mod tests {
             label: "A".into(),
             position: Position { x: 1.0, y: 2.0 },
             params: empty_object(),
+            comment: "Where it starts".into(),
+        });
+        l.notes.push(Note {
+            id: "n1".into(),
+            text: "Hello".into(),
+            position: Position::default(),
+            width: 0.0,
+            height: 0.0,
         });
         let back = LoopFile::from_json(&l.to_json()).unwrap();
         assert_eq!(l, back);
@@ -244,6 +298,11 @@ mod tests {
         assert!(
             LoopFile::from_json(r#"{"format":"chummy.loop","version":1.5,"name":"x","blocks":[]}"#)
                 .is_err()
+        );
+        // Version 1 files still load.
+        assert!(
+            LoopFile::from_json(r#"{"format":"chummy.loop","version":1,"name":"x","blocks":[]}"#)
+                .is_ok()
         );
         // Unknown fields are errors, not silently dropped.
         let extra = r#"{"format":"chummy.loop","version":1,"name":"x","blocks":[],"nodes":[]}"#;

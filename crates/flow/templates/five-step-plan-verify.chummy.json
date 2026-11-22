@@ -1,6 +1,6 @@
 {
   "format": "chummy.loop",
-  "version": 1,
+  "version": 2,
   "name": "5 step recursive plan verify",
   "description": "Treats your message as a goal and tries to do it straight away, by writing or with tools. Anything too big is broken into 5 or fewer smaller steps, and each step is tried the same way, breadth-first. Every result and plan is shown, and added to one running exchange. Each result and plan is also checked: the model writes a yes/no question for it and answers it. Results that fail are broken down; plans that fail are made again once. Slower, but more careful.",
   "limits": {
@@ -339,7 +339,7 @@
           },
           "params": {
             "inputs": 2,
-            "format": "Request: _INPUT1_\n\nAnswer: _INPUT2_\n\nWrite one yes-or-no question that checks this answer against the request, such as \"Does this answer make sense given the request?\" Write only the question."
+            "format": "(?i)^\\W*question\\s*:"
           }
         },
         {

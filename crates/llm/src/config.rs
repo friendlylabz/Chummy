@@ -85,6 +85,17 @@ pub struct ProviderConfig {
     /// Sampling temperature to use unless a loop step overrides it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
+    /// Most tokens (sent and received) per day; `None` means no limit.
+    /// Missing in older files means the default limit.
+    #[serde(default = "default_daily_tokens")]
+    pub daily_tokens: Option<u64>,
+}
+
+/// The daily token limit new connections start with.
+pub const DEFAULT_DAILY_TOKENS: u64 = 1_000_000;
+
+fn default_daily_tokens() -> Option<u64> {
+    Some(DEFAULT_DAILY_TOKENS)
 }
 
 impl ProviderConfig {
@@ -262,6 +273,7 @@ mod tests {
             model: "llama3.2:3b".into(),
             local: None,
             temperature: None,
+            daily_tokens: Some(crate::DEFAULT_DAILY_TOKENS),
         };
         let json = serde_json::to_string(&cfg).unwrap();
         assert!(json.contains("\"kind\":\"ollama\""));

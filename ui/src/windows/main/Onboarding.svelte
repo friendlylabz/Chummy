@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { commands } from "$lib/ipc";
+  import { commands, errorText } from "$lib/ipc";
   import { setup } from "$lib/stores/setup.svelte";
   import Button from "$lib/components/Button.svelte";
   import Icon from "$lib/components/Icon.svelte";
@@ -7,6 +7,20 @@
   const s = $derived(setup.status);
   // The first step that isn't done is the one to highlight.
   const next = $derived(!s.model_configured ? 1 : !s.loop_configured ? 2 : !s.agent_configured ? 3 : 0);
+  let adding = $state(false);
+  let error = $state("");
+
+  async function recommended() {
+    adding = true;
+    error = "";
+    try {
+      await commands.addRecommendedLoop();
+    } catch (e) {
+      error = errorText(e);
+    } finally {
+      adding = false;
+    }
+  }
 </script>
 
 <section class="card" aria-labelledby="welcome-title">
@@ -30,11 +44,22 @@
       <span class="num">{#if s.loop_configured}<Icon name="check" size={14} />{:else}2{/if}</span>
       <div class="text">
         <h2>Add a loop</h2>
-        <p>How an agent thinks. Start from a template, import one, or build your own.</p>
+        <p>
+          How an agent thinks. The recommended <b>Chummy assistant</b> plans, checks its work, asks you when it's unsure,
+          and keeps notes. Or build your own in the loop editor.
+        </p>
+        {#if error}<p class="err">{error}</p>{/if}
       </div>
-      <Button variant={next === 2 ? "primary" : "secondary"} icon="flow" onclick={() => commands.openWindow("editor")}>
-        Loop editor
-      </Button>
+      <div class="btns">
+        {#if !s.loop_configured}
+          <Button variant={next === 2 ? "primary" : "secondary"} disabled={adding} onclick={recommended}>
+            Use recommended
+          </Button>
+        {/if}
+        <Button variant={s.loop_configured ? "secondary" : "ghost"} icon="flow" onclick={() => commands.openWindow("editor")}>
+          {s.loop_configured ? "Loop editor" : "Build my own"}
+        </Button>
+      </div>
     </li>
 
     <li class:done={s.agent_configured}>
@@ -56,6 +81,15 @@
 </section>
 
 <style>
+  .btns {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    align-items: stretch;
+  }
+  .err {
+    color: var(--danger);
+  }
   .card {
     width: min(540px, 100%);
     margin: auto;

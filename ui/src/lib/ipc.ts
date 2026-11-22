@@ -39,7 +39,11 @@ export interface ProviderConfig {
   model: string;
   local?: LocalModel | null;
   temperature?: number | null;
+  /** Tokens this model may use per day; `null` means no limit. */
+  daily_tokens?: number | null;
 }
+
+export const DEFAULT_DAILY_TOKENS = 1_000_000;
 
 export interface ProviderView extends ProviderConfig {
   has_key: boolean;
@@ -57,7 +61,16 @@ export interface Agent {
   model: string | null;
   workspace: Workspace;
   created_at: number;
+  /** Tools this agent may use (each must also be on in Settings → Tools). */
+  tools?: string[];
+  /** Whether this agent's tools may go online (needs the app switch too). */
+  network?: boolean;
+  /** Per-loop block settings that replace the loop file's, by loop id. */
+  loop_config?: Record<string, Overrides>;
 }
+
+/** Block settings by block id (or `function/block`); `null` removes a key. */
+export type Overrides = Record<string, Record<string, unknown>>;
 
 export interface Settings {
   theme: Theme;
@@ -259,6 +272,16 @@ export interface Block {
   label: string;
   position: Position;
   params: Record<string, unknown>;
+  /** A note for people about what the block is for. */
+  comment?: string;
+}
+/** A free-standing note on the canvas. */
+export interface Note {
+  id: string;
+  text: string;
+  position: Position;
+  width?: number;
+  height?: number;
 }
 export interface PortRef {
   block: string;
@@ -267,6 +290,8 @@ export interface PortRef {
 export interface Link {
   from: PortRef;
   to: PortRef;
+  /** A short label shown on the path. */
+  label?: string;
 }
 export interface RunLimits {
   max_steps: number;
@@ -291,6 +316,7 @@ export interface FunctionDef {
   outputs: FunctionOutput[];
   blocks: Block[];
   links: Link[];
+  notes?: Note[];
 }
 export interface LoopFile {
   format: "chummy.loop";
@@ -301,6 +327,7 @@ export interface LoopFile {
   blocks: Block[];
   links: Link[];
   functions?: FunctionDef[];
+  notes?: Note[];
 }
 export interface Issue {
   severity: "error" | "warning";
@@ -330,7 +357,7 @@ export type ParamKind =
   | { kind: "roles" }
   | { kind: "tools" };
 export type ParamSpec = ParamKind & { key: string; label: string; help: string; optional: boolean };
-export type Category = "start" | "think" | "you" | "exchange" | "text" | "flow" | "workspace" | "finish";
+export type Category = "start" | "think" | "you" | "exchange" | "text" | "flow" | "workspace" | "memory" | "finish";
 export interface BlockInfo {
   kind: string;
   label: string;
@@ -431,7 +458,26 @@ export type ToolsProgress =
   | { type: "failed"; error: string };
 // ---- questions for the user
 
-export type AskKind = { kind: "question" } | { kind: "tool_approval"; tool: string; arguments: Record<string, unknown> };
+export type AskKind =
+  | { kind: "question" }
+  | { kind: "tool_approval"; tool: string; arguments: Record<string, unknown> }
+  | { kind: "budget"; model: string; used: number; limit: number; extra: number };
+
+export interface AgentLoopConfig {
+  loop_id: string;
+  file: LoopFile;
+  overrides: Overrides;
+  /** Overridden blocks the loop no longer has. */
+  missing: string[];
+}
+export interface UsageView {
+  provider_id: string;
+  name: string;
+  used: number;
+  extra: number;
+  calls: number;
+  limit: number | null;
+}
 export type Ask = AskKind & { block: string; label: string; text: string };
 export interface Pending {
   id: string;
@@ -569,6 +615,16 @@ export const commands = {
   ) => call<string>("save_agent", { agent, workspaceToken }),
   deleteAgent: (id: string) => call<boolean>("delete_agent", { id }),
   setActiveAgent: (id: string) => call<void>("set_active_agent", { id }),
+  setAgentAccess: (agentId: string, tools: string[], network: boolean) =>
+    call<boolean>("set_agent_access", { agentId, tools, network }, () => network),
+  agentLoopConfig: (agentId: string) => call<AgentLoopConfig>("agent_loop_config", { agentId }),
+  setAgentBlockConfig: (agentId: string, block: string, params: Record<string, unknown> | null) =>
+    call<void>("set_agent_block_config", { agentId, block, params }),
+  exportAgentLoopConfig: (agentId: string) =>
+    call<boolean>("export_agent_loop_config", { agentId }, () => false),
+  importAgentLoopConfig: (agentId: string) =>
+    call<number | null>("import_agent_loop_config", { agentId }, () => null),
+  usageToday: () => call<UsageView[]>("usage_today", undefined, () => []),
 
   blockCatalog: () => call<BlockInfo[]>("block_catalog", undefined, () => []),
   loopTemplates: () => call<Template[]>("loop_templates", undefined, () => []),
@@ -576,6 +632,8 @@ export const commands = {
   loadLoop: (id: string) => call<LoopFile>("load_loop", { id }),
   analyzeLoop: (file: LoopFile) => call<Analysis>("analyze_loop", { file }),
   saveLoop: (id: string | null, file: LoopFile) => call<string>("save_loop", { id, file }),
+  /** Adds the recommended loop (Chummy assistant), or finds it. Returns its id. */
+  addRecommendedLoop: () => call<string>("add_recommended_loop", undefined, () => "chummy-assistant"),
   deleteLoop: (id: string) => call<boolean>("delete_loop", { id }),
   importLoop: () => call<string | null>("import_loop", undefined, () => null),
   exportLoop: (id: string) => call<boolean>("export_loop", { id }),

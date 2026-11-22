@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-import-agent-loop-config"
+description = "Enables the import_agent_loop_config command without any pre-configured scope."
+commands.allow = ["import_agent_loop_config"]
+
+[[permission]]
+identifier = "deny-import-agent-loop-config"
+description = "Denies the import_agent_loop_config command without any pre-configured scope."
+commands.deny = ["import_agent_loop_config"]

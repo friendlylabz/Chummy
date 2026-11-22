@@ -1,0 +1,2783 @@
+{
+  "format": "chummy.loop",
+  "version": 2,
+  "name": "Chummy assistant",
+  "description": "The default loop. It asks you a question first if your request is unclear, then tries it straight away, with tools. Anything too big is broken into 5 or fewer steps, tried the same way. Every tool call is checked before it runs, every result and plan is checked, and the model keeps working notes as it goes. Failures are caught and reported instead of stopping the run.",
+  "limits": {
+    "max_steps": 2500,
+    "max_llm_calls": 150,
+    "max_tool_calls": 40
+  },
+  "blocks": [
+    {
+      "id": "message",
+      "type": "input",
+      "label": "Your message",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "params": {}
+    },
+    {
+      "id": "history",
+      "type": "history",
+      "label": "Recent conversation",
+      "position": {
+        "x": 0,
+        "y": -250
+      },
+      "params": {
+        "max_messages": 10
+      }
+    },
+    {
+      "id": "context",
+      "type": "combine",
+      "label": "Conversation and request",
+      "position": {
+        "x": 300,
+        "y": -250
+      },
+      "params": {
+        "inputs": 2,
+        "format": "Conversation so far:\n_INPUT1_\n\nThe user now says:\n_INPUT2_"
+      }
+    },
+    {
+      "id": "clarify",
+      "type": "function",
+      "label": "Clarify the request",
+      "position": {
+        "x": 600,
+        "y": 0
+      },
+      "params": {
+        "function": "clarify"
+      },
+      "comment": "Asks you one question if the request is unclear."
+    },
+    {
+      "id": "blank_notes",
+      "type": "fixed",
+      "label": "Empty notes",
+      "position": {
+        "x": 0,
+        "y": 250
+      },
+      "params": {
+        "text": "(nothing yet)"
+      }
+    },
+    {
+      "id": "start_notes",
+      "type": "store",
+      "label": "Start the notes",
+      "position": {
+        "x": 300,
+        "y": 250
+      },
+      "params": {
+        "key": "notes",
+        "max_chars": 2000
+      }
+    },
+    {
+      "id": "goal_text",
+      "type": "combine",
+      "label": "Goal with context",
+      "position": {
+        "x": 900,
+        "y": -250
+      },
+      "params": {
+        "inputs": 2,
+        "format": "Conversation so far:\n_INPUT1_\n\nGoal: _INPUT2_"
+      }
+    },
+    {
+      "id": "start",
+      "type": "exchange",
+      "label": "Running exchange",
+      "position": {
+        "x": 1200,
+        "y": -250
+      },
+      "params": {
+        "system": "You are a careful assistant working toward the user's goal one task at a time. Keep every answer short and concrete.\n\nYour working notes:\n{{notes}}",
+        "roles": [
+          "user"
+        ]
+      },
+      "comment": "The system message includes {{notes}}, read fresh at every model call."
+    },
+    {
+      "id": "queue",
+      "type": "forward",
+      "label": "Tasks to do",
+      "position": {
+        "x": 900,
+        "y": 100
+      },
+      "params": {}
+    },
+    {
+      "id": "pair",
+      "type": "augment",
+      "label": "Next task",
+      "position": {
+        "x": 1200,
+        "y": 0
+      },
+      "params": {
+        "role": "user",
+        "format": "Task: _INPUT_"
+      },
+      "comment": "Waits for the running exchange and the next task, so tasks go strictly in order."
+    },
+    {
+      "id": "attempt",
+      "type": "function",
+      "label": "Attempt the task",
+      "position": {
+        "x": 1500,
+        "y": 0
+      },
+      "params": {
+        "function": "attempt"
+      }
+    },
+    {
+      "id": "show_result",
+      "type": "output",
+      "label": "Show result",
+      "position": {
+        "x": 1800,
+        "y": -250
+      },
+      "params": {}
+    },
+    {
+      "id": "notes_result",
+      "type": "function",
+      "label": "Update the notes",
+      "position": {
+        "x": 1800,
+        "y": -450
+      },
+      "params": {
+        "function": "update_notes"
+      }
+    },
+    {
+      "id": "plan",
+      "type": "function",
+      "label": "Plan smaller steps",
+      "position": {
+        "x": 1800,
+        "y": 200
+      },
+      "params": {
+        "function": "break_down"
+      }
+    },
+    {
+      "id": "show_plan",
+      "type": "output",
+      "label": "Show plan",
+      "position": {
+        "x": 2100,
+        "y": 200
+      },
+      "params": {}
+    },
+    {
+      "id": "notes_plan",
+      "type": "function",
+      "label": "Update the notes",
+      "position": {
+        "x": 2100,
+        "y": 0
+      },
+      "params": {
+        "function": "update_notes"
+      }
+    },
+    {
+      "id": "more",
+      "type": "for_each",
+      "label": "Up to 5 steps",
+      "position": {
+        "x": 2100,
+        "y": 400
+      },
+      "params": {
+        "limit": 5
+      },
+      "comment": "New steps join the back of the queue: breadth-first."
+    }
+  ],
+  "links": [
+    {
+      "from": {
+        "block": "history",
+        "port": "out"
+      },
+      "to": {
+        "block": "context",
+        "port": "in1"
+      }
+    },
+    {
+      "from": {
+        "block": "message",
+        "port": "out"
+      },
+      "to": {
+        "block": "context",
+        "port": "in2"
+      }
+    },
+    {
+      "from": {
+        "block": "context",
+        "port": "out"
+      },
+      "to": {
+        "block": "clarify",
+        "port": "context"
+      }
+    },
+    {
+      "from": {
+        "block": "message",
+        "port": "out"
+      },
+      "to": {
+        "block": "clarify",
+        "port": "request"
+      }
+    },
+    {
+      "from": {
+        "block": "blank_notes",
+        "port": "out"
+      },
+      "to": {
+        "block": "start_notes",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "block": "history",
+        "port": "out"
+      },
+      "to": {
+        "block": "goal_text",
+        "port": "in1"
+      }
+    },
+    {
+      "from": {
+        "block": "clarify",
+        "port": "request"
+      },
+      "to": {
+        "block": "goal_text",
+        "port": "in2"
+      }
+    },
+    {
+      "from": {
+        "block": "clarify",
+        "port": "request"
+      },
+      "to": {
+        "block": "queue",
+        "port": "in"
+      },
+      "label": "the first task: the request itself"
+    },
+    {
+      "from": {
+        "block": "goal_text",
+        "port": "out"
+      },
+      "to": {
+        "block": "start",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "block": "start",
+        "port": "out"
+      },
+      "to": {
+        "block": "pair",
+        "port": "exchange"
+      }
+    },
+    {
+      "from": {
+        "block": "queue",
+        "port": "out"
+      },
+      "to": {
+        "block": "pair",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "block": "pair",
+        "port": "out"
+      },
+      "to": {
+        "block": "attempt",
+        "port": "exchange"
+      }
+    },
+    {
+      "from": {
+        "block": "attempt",
+        "port": "message"
+      },
+      "to": {
+        "block": "show_result",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "block": "attempt",
+        "port": "message"
+      },
+      "to": {
+        "block": "notes_result",
+        "port": "what"
+      }
+    },
+    {
+      "from": {
+        "block": "attempt",
+        "port": "done"
+      },
+      "to": {
+        "block": "pair",
+        "port": "exchange"
+      },
+      "label": "the exchange, with the result"
+    },
+    {
+      "from": {
+        "block": "attempt",
+        "port": "breakdown"
+      },
+      "to": {
+        "block": "plan",
+        "port": "exchange"
+      },
+      "label": "too big"
+    },
+    {
+      "from": {
+        "block": "plan",
+        "port": "message"
+      },
+      "to": {
+        "block": "show_plan",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "block": "plan",
+        "port": "message"
+      },
+      "to": {
+        "block": "notes_plan",
+        "port": "what"
+      }
+    },
+    {
+      "from": {
+        "block": "plan",
+        "port": "after"
+      },
+      "to": {
+        "block": "pair",
+        "port": "exchange"
+      },
+      "label": "the exchange, with the plan"
+    },
+    {
+      "from": {
+        "block": "plan",
+        "port": "steps"
+      },
+      "to": {
+        "block": "more",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "block": "more",
+        "port": "out"
+      },
+      "to": {
+        "block": "queue",
+        "port": "in"
+      },
+      "label": "each step"
+    }
+  ],
+  "functions": [
+    {
+      "id": "verify",
+      "name": "Verify",
+      "description": "Writes a yes/no check question for an answer, then asks the model that question about it. Passed sends the answer on; Failed sends the reason. If a check can't run, the answer passes, so a failing model never blocks the work.",
+      "inputs": [
+        {
+          "name": "request",
+          "label": "Request",
+          "to": {
+            "block": "req",
+            "port": "in"
+          }
+        },
+        {
+          "name": "answer",
+          "label": "Answer",
+          "to": {
+            "block": "ans",
+            "port": "in"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "passed",
+          "label": "Passed",
+          "from": {
+            "block": "pass",
+            "port": "yes"
+          }
+        },
+        {
+          "name": "failed",
+          "label": "Failed (reason)",
+          "from": {
+            "block": "why",
+            "port": "no"
+          }
+        },
+        {
+          "name": "verdict",
+          "label": "Verdict",
+          "from": {
+            "block": "verdict_fwd",
+            "port": "out"
+          }
+        }
+      ],
+      "blocks": [
+        {
+          "id": "req",
+          "type": "forward",
+          "label": "Request",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "params": {}
+        },
+        {
+          "id": "ans",
+          "type": "forward",
+          "label": "Answer",
+          "position": {
+            "x": 0,
+            "y": 200
+          },
+          "params": {}
+        },
+        {
+          "id": "ask_q",
+          "type": "combine",
+          "label": "Ask for a check",
+          "position": {
+            "x": 260,
+            "y": 0
+          },
+          "params": {
+            "inputs": 2,
+            "format": "(?i)^\\W*question\\s*:"
+          }
+        },
+        {
+          "id": "question",
+          "type": "llm",
+          "label": "Write a check question",
+          "position": {
+            "x": 520,
+            "y": 0
+          },
+          "params": {
+            "system": "Write one short yes-or-no question.",
+            "temperature": 0.2,
+            "max_tokens": 80
+          },
+          "comment": "A small model checks itself best with a question it wrote."
+        },
+        {
+          "id": "ask_c",
+          "type": "combine",
+          "label": "Ask the check",
+          "position": {
+            "x": 780,
+            "y": 100
+          },
+          "params": {
+            "inputs": 3,
+            "format": "Request: _INPUT1_\n\nAnswer: _INPUT2_\n\nQuestion: _INPUT3_\n\nAnswer the question about the answer above. Start with YES or NO, then give one short reason."
+          }
+        },
+        {
+          "id": "check",
+          "type": "llm",
+          "label": "Answer the check",
+          "position": {
+            "x": 1040,
+            "y": 100
+          },
+          "params": {
+            "system": "Answer YES or NO first, then give one short reason.",
+            "temperature": 0.0,
+            "max_tokens": 80
+          },
+          "comment": "Must start with YES or NO."
+        },
+        {
+          "id": "pass",
+          "type": "branch",
+          "label": "Passed?",
+          "position": {
+            "x": 1300,
+            "y": 200
+          },
+          "params": {
+            "pattern": "(?i)^\\W*yes"
+          }
+        },
+        {
+          "id": "why",
+          "type": "branch",
+          "label": "Reason if not",
+          "position": {
+            "x": 1300,
+            "y": 0
+          },
+          "params": {
+            "pattern": "(?i)^\\W*yes"
+          }
+        },
+        {
+          "id": "q_fallback",
+          "type": "combine",
+          "label": "Fallback question",
+          "position": {
+            "x": 520,
+            "y": 250
+          },
+          "params": {
+            "inputs": 1,
+            "format": "Does this answer make sense given the request?"
+          },
+          "comment": "If writing a question fails, use the standard one."
+        },
+        {
+          "id": "c_fallback",
+          "type": "combine",
+          "label": "Pass if the check fails",
+          "position": {
+            "x": 1040,
+            "y": 300
+          },
+          "params": {
+            "inputs": 1,
+            "format": "YES (the check couldn't run: _INPUT1_)"
+          },
+          "comment": "A check that can't run doesn't hold the work up."
+        },
+        {
+          "id": "verdict_fwd",
+          "type": "forward",
+          "label": "Verdict",
+          "position": {
+            "x": 1560,
+            "y": 100
+          },
+          "params": {}
+        }
+      ],
+      "links": [
+        {
+          "from": {
+            "block": "req",
+            "port": "out"
+          },
+          "to": {
+            "block": "ask_q",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "ans",
+            "port": "out"
+          },
+          "to": {
+            "block": "ask_q",
+            "port": "in2"
+          }
+        },
+        {
+          "from": {
+            "block": "ask_q",
+            "port": "out"
+          },
+          "to": {
+            "block": "question",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "req",
+            "port": "out"
+          },
+          "to": {
+            "block": "ask_c",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "ans",
+            "port": "out"
+          },
+          "to": {
+            "block": "ask_c",
+            "port": "in2"
+          }
+        },
+        {
+          "from": {
+            "block": "question",
+            "port": "out"
+          },
+          "to": {
+            "block": "ask_c",
+            "port": "in3"
+          }
+        },
+        {
+          "from": {
+            "block": "ask_c",
+            "port": "out"
+          },
+          "to": {
+            "block": "check",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "ans",
+            "port": "out"
+          },
+          "to": {
+            "block": "pass",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "check",
+            "port": "out"
+          },
+          "to": {
+            "block": "pass",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "check",
+            "port": "out"
+          },
+          "to": {
+            "block": "why",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "check",
+            "port": "out"
+          },
+          "to": {
+            "block": "why",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "question",
+            "port": "error"
+          },
+          "to": {
+            "block": "q_fallback",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "q_fallback",
+            "port": "out"
+          },
+          "to": {
+            "block": "ask_c",
+            "port": "in3"
+          }
+        },
+        {
+          "from": {
+            "block": "check",
+            "port": "error"
+          },
+          "to": {
+            "block": "c_fallback",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "c_fallback",
+            "port": "out"
+          },
+          "to": {
+            "block": "pass",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "c_fallback",
+            "port": "out"
+          },
+          "to": {
+            "block": "why",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "c_fallback",
+            "port": "out"
+          },
+          "to": {
+            "block": "why",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "check",
+            "port": "out"
+          },
+          "to": {
+            "block": "verdict_fwd",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "c_fallback",
+            "port": "out"
+          },
+          "to": {
+            "block": "verdict_fwd",
+            "port": "in"
+          }
+        }
+      ],
+      "notes": [
+        {
+          "id": "n1",
+          "text": "Verify: the model writes a yes/no question about an answer, then answers it. Passed sends the answer on; Failed sends the reason.",
+          "position": {
+            "x": 0,
+            "y": 380
+          },
+          "width": 320,
+          "height": 0
+        }
+      ]
+    },
+    {
+      "id": "clarify",
+      "name": "Clarify the request",
+      "description": "Asks the model whether the request is clear enough. If not, asks you its one question, and adds your answer to the request. Any failure lets the request through unchanged.",
+      "inputs": [
+        {
+          "name": "context",
+          "label": "Conversation and request",
+          "to": {
+            "block": "judge",
+            "port": "in"
+          }
+        },
+        {
+          "name": "request",
+          "label": "Request",
+          "to": {
+            "block": "req",
+            "port": "in"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "request",
+          "label": "Request",
+          "from": {
+            "block": "out",
+            "port": "out"
+          }
+        }
+      ],
+      "blocks": [
+        {
+          "id": "req",
+          "type": "forward",
+          "label": "Request",
+          "position": {
+            "x": 0,
+            "y": 250
+          },
+          "params": {}
+        },
+        {
+          "id": "judge",
+          "type": "llm",
+          "label": "Clear enough?",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "params": {
+            "prompt": "_INPUT_\n\nIs the user's latest request clear enough to act on? If it is, reply with only: CLEAR\nIf not, reply with the one short question you most need answered.",
+            "system": "Reply with CLEAR or one short question.",
+            "temperature": 0.0,
+            "max_tokens": 100
+          },
+          "comment": "Replies CLEAR, or with one question."
+        },
+        {
+          "id": "clear",
+          "type": "branch",
+          "label": "Clear?",
+          "position": {
+            "x": 300,
+            "y": 100
+          },
+          "params": {
+            "pattern": "(?i)^\\W*clear"
+          }
+        },
+        {
+          "id": "unclear",
+          "type": "branch",
+          "label": "Question",
+          "position": {
+            "x": 300,
+            "y": -100
+          },
+          "params": {
+            "pattern": "(?i)^\\W*clear"
+          }
+        },
+        {
+          "id": "ask",
+          "type": "ask_user",
+          "label": "Ask you",
+          "position": {
+            "x": 600,
+            "y": -100
+          },
+          "params": {
+            "prompt": "_INPUT_",
+            "timeout_minutes": 60,
+            "default_answer": "No answer came. Use your best judgement and carry on."
+          },
+          "comment": "Waits up to an hour, then carries on without an answer."
+        },
+        {
+          "id": "added",
+          "type": "combine",
+          "label": "Add your answer",
+          "position": {
+            "x": 900,
+            "y": -50
+          },
+          "params": {
+            "inputs": 3,
+            "format": "_INPUT1_\n\n(I asked: _INPUT2_\nThe user answered: _INPUT3_)"
+          }
+        },
+        {
+          "id": "no_answer",
+          "type": "combine",
+          "label": "No answer",
+          "position": {
+            "x": 600,
+            "y": 100
+          },
+          "params": {
+            "inputs": 1,
+            "format": "No answer came. Use your best judgement and carry on."
+          }
+        },
+        {
+          "id": "as_is",
+          "type": "branch",
+          "label": "Use as is",
+          "position": {
+            "x": 600,
+            "y": 300
+          },
+          "params": {
+            "pattern": "(?s)."
+          },
+          "comment": "If the check fails, the request goes on unchanged."
+        },
+        {
+          "id": "out",
+          "type": "forward",
+          "label": "Request",
+          "position": {
+            "x": 1200,
+            "y": 100
+          },
+          "params": {}
+        }
+      ],
+      "links": [
+        {
+          "from": {
+            "block": "req",
+            "port": "out"
+          },
+          "to": {
+            "block": "clear",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "judge",
+            "port": "out"
+          },
+          "to": {
+            "block": "clear",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "clear",
+            "port": "yes"
+          },
+          "to": {
+            "block": "out",
+            "port": "in"
+          },
+          "label": "clear: as it is"
+        },
+        {
+          "from": {
+            "block": "judge",
+            "port": "out"
+          },
+          "to": {
+            "block": "unclear",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "judge",
+            "port": "out"
+          },
+          "to": {
+            "block": "unclear",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "unclear",
+            "port": "no"
+          },
+          "to": {
+            "block": "ask",
+            "port": "in"
+          },
+          "label": "the question"
+        },
+        {
+          "from": {
+            "block": "req",
+            "port": "out"
+          },
+          "to": {
+            "block": "added",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "unclear",
+            "port": "no"
+          },
+          "to": {
+            "block": "added",
+            "port": "in2"
+          }
+        },
+        {
+          "from": {
+            "block": "ask",
+            "port": "out"
+          },
+          "to": {
+            "block": "added",
+            "port": "in3"
+          }
+        },
+        {
+          "from": {
+            "block": "ask",
+            "port": "error"
+          },
+          "to": {
+            "block": "no_answer",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "no_answer",
+            "port": "out"
+          },
+          "to": {
+            "block": "added",
+            "port": "in3"
+          }
+        },
+        {
+          "from": {
+            "block": "added",
+            "port": "out"
+          },
+          "to": {
+            "block": "out",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "req",
+            "port": "out"
+          },
+          "to": {
+            "block": "as_is",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "judge",
+            "port": "error"
+          },
+          "to": {
+            "block": "as_is",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "as_is",
+            "port": "yes"
+          },
+          "to": {
+            "block": "out",
+            "port": "in"
+          },
+          "label": "the check failed"
+        }
+      ],
+      "notes": [
+        {
+          "id": "n1",
+          "text": "Clarify runs once, before any work. Clear requests pass straight through; unclear ones get one question to you.",
+          "position": {
+            "x": 0,
+            "y": 450
+          },
+          "width": 320,
+          "height": 0
+        }
+      ]
+    },
+    {
+      "id": "check_call",
+      "name": "Check the tool call",
+      "description": "Before a tool call runs, the model checks that it makes sense and is safe for the task. Approved calls go on to Run tool; others are declined with the reason, which goes back to the model. If the check can't run, the call is approved (your own approvals still apply).",
+      "inputs": [
+        {
+          "name": "exchange",
+          "label": "Tool call",
+          "to": {
+            "block": "ex",
+            "port": "in"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "approved",
+          "label": "Approved",
+          "from": {
+            "block": "ok",
+            "port": "out"
+          }
+        },
+        {
+          "name": "declined",
+          "label": "Declined",
+          "from": {
+            "block": "decline",
+            "port": "out"
+          }
+        }
+      ],
+      "blocks": [
+        {
+          "id": "ex",
+          "type": "forward",
+          "label": "Tool call",
+          "position": {
+            "x": 0,
+            "y": 100
+          },
+          "params": {}
+        },
+        {
+          "id": "read",
+          "type": "read_exchange",
+          "label": "Task and call",
+          "position": {
+            "x": 250,
+            "y": 0
+          },
+          "params": {
+            "role": "user"
+          }
+        },
+        {
+          "id": "ask",
+          "type": "combine",
+          "label": "Ask about the call",
+          "position": {
+            "x": 500,
+            "y": 0
+          },
+          "params": {
+            "inputs": 2,
+            "format": "Task: _INPUT1_\n\nThe next step calls a tool:\n_INPUT2_\n\nIs this call sensible and safe for the task? Start with YES or NO, then give one short reason."
+          }
+        },
+        {
+          "id": "judge",
+          "type": "llm",
+          "label": "Sensible and safe?",
+          "position": {
+            "x": 750,
+            "y": 0
+          },
+          "params": {
+            "system": "Answer YES or NO first, then give one short reason.",
+            "temperature": 0.0,
+            "max_tokens": 80
+          },
+          "comment": "Must start with YES or NO."
+        },
+        {
+          "id": "br",
+          "type": "branch",
+          "label": "Approved?",
+          "position": {
+            "x": 1000,
+            "y": 150
+          },
+          "params": {
+            "pattern": "(?i)^\\W*yes"
+          }
+        },
+        {
+          "id": "why",
+          "type": "branch",
+          "label": "Reason if not",
+          "position": {
+            "x": 1000,
+            "y": -50
+          },
+          "params": {
+            "pattern": "(?i)^\\W*yes"
+          }
+        },
+        {
+          "id": "decline",
+          "type": "decline_calls",
+          "label": "Decline the call",
+          "position": {
+            "x": 1250,
+            "y": 50
+          },
+          "params": {},
+          "comment": "Answers the call with “Not run: <reason>”, so the model can try something else."
+        },
+        {
+          "id": "err",
+          "type": "branch",
+          "label": "Check failed",
+          "position": {
+            "x": 1000,
+            "y": 350
+          },
+          "params": {
+            "pattern": "(?s)."
+          }
+        },
+        {
+          "id": "ok",
+          "type": "forward",
+          "label": "Approved",
+          "position": {
+            "x": 1250,
+            "y": 250
+          },
+          "params": {}
+        }
+      ],
+      "links": [
+        {
+          "from": {
+            "block": "ex",
+            "port": "out"
+          },
+          "to": {
+            "block": "read",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "read",
+            "port": "last"
+          },
+          "to": {
+            "block": "ask",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "read",
+            "port": "calls"
+          },
+          "to": {
+            "block": "ask",
+            "port": "in2"
+          }
+        },
+        {
+          "from": {
+            "block": "ask",
+            "port": "out"
+          },
+          "to": {
+            "block": "judge",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "ex",
+            "port": "out"
+          },
+          "to": {
+            "block": "br",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "judge",
+            "port": "out"
+          },
+          "to": {
+            "block": "br",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "judge",
+            "port": "out"
+          },
+          "to": {
+            "block": "why",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "judge",
+            "port": "out"
+          },
+          "to": {
+            "block": "why",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "br",
+            "port": "yes"
+          },
+          "to": {
+            "block": "ok",
+            "port": "in"
+          },
+          "label": "yes"
+        },
+        {
+          "from": {
+            "block": "br",
+            "port": "no"
+          },
+          "to": {
+            "block": "decline",
+            "port": "in"
+          },
+          "label": "no"
+        },
+        {
+          "from": {
+            "block": "why",
+            "port": "no"
+          },
+          "to": {
+            "block": "decline",
+            "port": "reason"
+          },
+          "label": "the reason"
+        },
+        {
+          "from": {
+            "block": "ex",
+            "port": "out"
+          },
+          "to": {
+            "block": "err",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "judge",
+            "port": "error"
+          },
+          "to": {
+            "block": "err",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "err",
+            "port": "yes"
+          },
+          "to": {
+            "block": "ok",
+            "port": "in"
+          },
+          "label": "check couldn't run"
+        }
+      ]
+    },
+    {
+      "id": "update_notes",
+      "name": "Update the notes",
+      "description": "After each result or plan, the model rewrites its working notes ({{notes}}), which every attempt and plan sees. If that fails, the old notes stay.",
+      "inputs": [
+        {
+          "name": "what",
+          "label": "What happened",
+          "to": {
+            "block": "upd",
+            "port": "in"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "notes",
+          "label": "Notes",
+          "from": {
+            "block": "save",
+            "port": "out"
+          }
+        }
+      ],
+      "blocks": [
+        {
+          "id": "upd",
+          "type": "llm",
+          "label": "Rewrite the notes",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "params": {
+            "prompt": "Your working notes so far:\n{{notes}}\n\nWhat just happened:\n_INPUT_\n\nRewrite the working notes for the rest of the work: key facts found, decisions made, what is done and what is left. At most 10 short lines. Write only the notes.",
+            "temperature": 0.2,
+            "max_tokens": 300
+          },
+          "comment": "Sees the notes so far and what just happened."
+        },
+        {
+          "id": "save",
+          "type": "store",
+          "label": "Save the notes",
+          "position": {
+            "x": 300,
+            "y": 0
+          },
+          "params": {
+            "key": "notes",
+            "max_chars": 2000
+          },
+          "comment": "Read anywhere as {{notes}}."
+        },
+        {
+          "id": "keep",
+          "type": "store",
+          "label": "Note the failure",
+          "position": {
+            "x": 300,
+            "y": 200
+          },
+          "params": {
+            "key": "notes_error",
+            "max_chars": 1000
+          },
+          "comment": "Keeps the old notes; just remembers what went wrong."
+        }
+      ],
+      "links": [
+        {
+          "from": {
+            "block": "upd",
+            "port": "out"
+          },
+          "to": {
+            "block": "save",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "upd",
+            "port": "error"
+          },
+          "to": {
+            "block": "keep",
+            "port": "in"
+          }
+        }
+      ]
+    },
+    {
+      "id": "attempt",
+      "name": "Attempt the task",
+      "description": "The model tries the task, calling tools (each checked first) as often as it needs, or asks you a question. Its result is checked with Verify. If it says the task is too big, or the result fails its check, the exchange goes out of Breakdown instead. A failed model call becomes a short message.",
+      "inputs": [
+        {
+          "name": "exchange",
+          "label": "Exchange",
+          "to": {
+            "block": "entry",
+            "port": "in"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "message",
+          "label": "Result message",
+          "from": {
+            "block": "message",
+            "port": "out"
+          }
+        },
+        {
+          "name": "done",
+          "label": "Exchange with result",
+          "from": {
+            "block": "done",
+            "port": "out"
+          }
+        },
+        {
+          "name": "breakdown",
+          "label": "Breakdown",
+          "from": {
+            "block": "to_plan",
+            "port": "out"
+          }
+        }
+      ],
+      "blocks": [
+        {
+          "id": "entry",
+          "type": "forward",
+          "label": "Exchange",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "params": {}
+        },
+        {
+          "id": "which",
+          "type": "read_exchange",
+          "label": "Which task",
+          "position": {
+            "x": 0,
+            "y": -220
+          },
+          "params": {
+            "role": "user"
+          }
+        },
+        {
+          "id": "work",
+          "type": "llm",
+          "label": "Try the task",
+          "position": {
+            "x": 300,
+            "y": 0
+          },
+          "params": {
+            "system": "Do the user's latest task now. Use a tool if it helps. If you can do it, give the result in a few sentences. If it is too big to finish in one go, reply with only: TOO BIG\nIf you can't go on without the user's input, reply with only: QUESTION: and your question.\n\nYour working notes:\n{{notes}}",
+            "max_tokens": 800,
+            "tools": [
+              "read_file",
+              "write_file",
+              "list_files",
+              "search_files",
+              "fetch_page",
+              "calculator",
+              "current_time"
+            ],
+            "retries": 2,
+            "network": true,
+            "on_limit": "ask"
+          },
+          "comment": "Can use tools (all three switches must allow each one), answer, say TOO BIG, or ask a QUESTION."
+        },
+        {
+          "id": "check",
+          "type": "function",
+          "label": "Check the tool call",
+          "position": {
+            "x": 300,
+            "y": 300
+          },
+          "params": {
+            "function": "check_call"
+          },
+          "comment": "Every call is checked before it runs."
+        },
+        {
+          "id": "run",
+          "type": "run_tool",
+          "label": "Run tool",
+          "position": {
+            "x": 600,
+            "y": 300
+          },
+          "params": {
+            "max_result_chars": 4000
+          },
+          "comment": "Tool errors go back to the model, which can try again."
+        },
+        {
+          "id": "asks",
+          "type": "branch",
+          "label": "A question for you?",
+          "position": {
+            "x": 600,
+            "y": 0
+          },
+          "params": {
+            "pattern": "(?i)^\\W*question\\s*:"
+          }
+        },
+        {
+          "id": "ask",
+          "type": "ask_user",
+          "label": "Ask you",
+          "position": {
+            "x": 900,
+            "y": -300
+          },
+          "params": {
+            "prompt": "_INPUT_",
+            "timeout_minutes": 60,
+            "default_answer": "No answer came. Use your best judgement and carry on."
+          },
+          "comment": "Waits up to an hour, then carries on without an answer."
+        },
+        {
+          "id": "no_answer",
+          "type": "combine",
+          "label": "No answer",
+          "position": {
+            "x": 900,
+            "y": -150
+          },
+          "params": {
+            "inputs": 1,
+            "format": "No answer came. Use your best judgement and carry on."
+          }
+        },
+        {
+          "id": "keep",
+          "type": "remember",
+          "label": "Task exchange",
+          "position": {
+            "x": 600,
+            "y": -450
+          },
+          "params": {},
+          "comment": "Re-sends the task's exchange each time a question or failure needs it."
+        },
+        {
+          "id": "q_ex",
+          "type": "augment",
+          "label": "Add the question",
+          "position": {
+            "x": 1200,
+            "y": -450
+          },
+          "params": {
+            "role": "assistant",
+            "format": "_INPUT_"
+          }
+        },
+        {
+          "id": "q_ans",
+          "type": "augment",
+          "label": "Add your answer",
+          "position": {
+            "x": 1200,
+            "y": -300
+          },
+          "params": {
+            "role": "user",
+            "format": "_INPUT_"
+          }
+        },
+        {
+          "id": "big_answer",
+          "type": "branch",
+          "label": "Too big? (answer)",
+          "position": {
+            "x": 900,
+            "y": 0
+          },
+          "params": {
+            "pattern": "(?i)^\\W*too\\s*big"
+          }
+        },
+        {
+          "id": "big_exchange",
+          "type": "branch",
+          "label": "Too big? (exchange)",
+          "position": {
+            "x": 900,
+            "y": 200
+          },
+          "params": {
+            "pattern": "(?i)^\\W*too\\s*big"
+          }
+        },
+        {
+          "id": "verify",
+          "type": "function",
+          "label": "Verify the result",
+          "position": {
+            "x": 1200,
+            "y": 0
+          },
+          "params": {
+            "function": "verify"
+          }
+        },
+        {
+          "id": "checked",
+          "type": "branch",
+          "label": "Passed the check?",
+          "position": {
+            "x": 1200,
+            "y": 200
+          },
+          "params": {
+            "pattern": "(?i)^\\W*yes"
+          }
+        },
+        {
+          "id": "note",
+          "type": "augment",
+          "label": "Note the failed check",
+          "position": {
+            "x": 1500,
+            "y": 450
+          },
+          "params": {
+            "role": "assistant",
+            "format": "My attempt didn't pass this check: _INPUT_"
+          }
+        },
+        {
+          "id": "add_result",
+          "type": "augment",
+          "label": "Add result",
+          "position": {
+            "x": 1500,
+            "y": 150
+          },
+          "params": {
+            "role": "assistant",
+            "format": "_INPUT_"
+          }
+        },
+        {
+          "id": "message",
+          "type": "combine",
+          "label": "Result message",
+          "position": {
+            "x": 1500,
+            "y": -150
+          },
+          "params": {
+            "inputs": 2,
+            "format": "**✓ _INPUT1_**\n\n_INPUT2_"
+          }
+        },
+        {
+          "id": "to_plan",
+          "type": "forward",
+          "label": "Needs a plan",
+          "position": {
+            "x": 1800,
+            "y": 450
+          },
+          "params": {}
+        },
+        {
+          "id": "err_text",
+          "type": "combine",
+          "label": "Explain the failure",
+          "position": {
+            "x": 900,
+            "y": 550
+          },
+          "params": {
+            "inputs": 1,
+            "format": "I couldn't finish this task. (_INPUT1_)"
+          },
+          "comment": "If the model call fails, say so and move on."
+        },
+        {
+          "id": "err_add",
+          "type": "augment",
+          "label": "Add the failure",
+          "position": {
+            "x": 1500,
+            "y": 650
+          },
+          "params": {
+            "role": "assistant",
+            "format": "_INPUT_"
+          }
+        },
+        {
+          "id": "done",
+          "type": "forward",
+          "label": "Exchange with result",
+          "position": {
+            "x": 1800,
+            "y": 150
+          },
+          "params": {}
+        }
+      ],
+      "links": [
+        {
+          "from": {
+            "block": "entry",
+            "port": "out"
+          },
+          "to": {
+            "block": "work",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "entry",
+            "port": "out"
+          },
+          "to": {
+            "block": "which",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "entry",
+            "port": "out"
+          },
+          "to": {
+            "block": "keep",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "work",
+            "port": "tool"
+          },
+          "to": {
+            "block": "check",
+            "port": "exchange"
+          },
+          "label": "a tool call"
+        },
+        {
+          "from": {
+            "block": "check",
+            "port": "approved"
+          },
+          "to": {
+            "block": "run",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "check",
+            "port": "declined"
+          },
+          "to": {
+            "block": "work",
+            "port": "in"
+          },
+          "label": "declined, with the reason"
+        },
+        {
+          "from": {
+            "block": "run",
+            "port": "out"
+          },
+          "to": {
+            "block": "work",
+            "port": "in"
+          },
+          "label": "results"
+        },
+        {
+          "from": {
+            "block": "work",
+            "port": "out"
+          },
+          "to": {
+            "block": "asks",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "work",
+            "port": "out"
+          },
+          "to": {
+            "block": "asks",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "asks",
+            "port": "yes"
+          },
+          "to": {
+            "block": "ask",
+            "port": "in"
+          },
+          "label": "QUESTION: …"
+        },
+        {
+          "from": {
+            "block": "asks",
+            "port": "yes"
+          },
+          "to": {
+            "block": "keep",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "ask",
+            "port": "error"
+          },
+          "to": {
+            "block": "no_answer",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "no_answer",
+            "port": "out"
+          },
+          "to": {
+            "block": "q_ans",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "keep",
+            "port": "out"
+          },
+          "to": {
+            "block": "q_ex",
+            "port": "exchange"
+          }
+        },
+        {
+          "from": {
+            "block": "asks",
+            "port": "yes"
+          },
+          "to": {
+            "block": "q_ex",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "q_ex",
+            "port": "out"
+          },
+          "to": {
+            "block": "q_ans",
+            "port": "exchange"
+          }
+        },
+        {
+          "from": {
+            "block": "ask",
+            "port": "out"
+          },
+          "to": {
+            "block": "q_ans",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "q_ans",
+            "port": "out"
+          },
+          "to": {
+            "block": "work",
+            "port": "in"
+          },
+          "label": "try again with your answer"
+        },
+        {
+          "from": {
+            "block": "asks",
+            "port": "no"
+          },
+          "to": {
+            "block": "big_answer",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "asks",
+            "port": "no"
+          },
+          "to": {
+            "block": "big_answer",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "entry",
+            "port": "out"
+          },
+          "to": {
+            "block": "big_exchange",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "asks",
+            "port": "no"
+          },
+          "to": {
+            "block": "big_exchange",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "big_exchange",
+            "port": "yes"
+          },
+          "to": {
+            "block": "to_plan",
+            "port": "in"
+          },
+          "label": "too big"
+        },
+        {
+          "from": {
+            "block": "which",
+            "port": "last"
+          },
+          "to": {
+            "block": "message",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "which",
+            "port": "last"
+          },
+          "to": {
+            "block": "verify",
+            "port": "request"
+          }
+        },
+        {
+          "from": {
+            "block": "big_answer",
+            "port": "no"
+          },
+          "to": {
+            "block": "verify",
+            "port": "answer"
+          },
+          "label": "a result"
+        },
+        {
+          "from": {
+            "block": "big_exchange",
+            "port": "no"
+          },
+          "to": {
+            "block": "checked",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "verify",
+            "port": "verdict"
+          },
+          "to": {
+            "block": "checked",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "checked",
+            "port": "yes"
+          },
+          "to": {
+            "block": "add_result",
+            "port": "exchange"
+          }
+        },
+        {
+          "from": {
+            "block": "verify",
+            "port": "passed"
+          },
+          "to": {
+            "block": "add_result",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "verify",
+            "port": "passed"
+          },
+          "to": {
+            "block": "message",
+            "port": "in2"
+          }
+        },
+        {
+          "from": {
+            "block": "checked",
+            "port": "no"
+          },
+          "to": {
+            "block": "note",
+            "port": "exchange"
+          }
+        },
+        {
+          "from": {
+            "block": "verify",
+            "port": "failed"
+          },
+          "to": {
+            "block": "note",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "note",
+            "port": "out"
+          },
+          "to": {
+            "block": "to_plan",
+            "port": "in"
+          },
+          "label": "failed its check"
+        },
+        {
+          "from": {
+            "block": "work",
+            "port": "error"
+          },
+          "to": {
+            "block": "err_text",
+            "port": "in1"
+          },
+          "label": "the call failed"
+        },
+        {
+          "from": {
+            "block": "work",
+            "port": "error"
+          },
+          "to": {
+            "block": "keep",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "err_text",
+            "port": "out"
+          },
+          "to": {
+            "block": "message",
+            "port": "in2"
+          }
+        },
+        {
+          "from": {
+            "block": "keep",
+            "port": "out"
+          },
+          "to": {
+            "block": "err_add",
+            "port": "exchange"
+          }
+        },
+        {
+          "from": {
+            "block": "err_text",
+            "port": "out"
+          },
+          "to": {
+            "block": "err_add",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "add_result",
+            "port": "out"
+          },
+          "to": {
+            "block": "done",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "err_add",
+            "port": "out"
+          },
+          "to": {
+            "block": "done",
+            "port": "in"
+          }
+        }
+      ],
+      "notes": [
+        {
+          "id": "n1",
+          "text": "The work cycle: Try the task ⇄ Check the tool call ⇄ Run tool, until the model answers. A QUESTION: answer goes to you, then back to the model with your answer.",
+          "position": {
+            "x": 300,
+            "y": -600
+          },
+          "width": 420,
+          "height": 0
+        },
+        {
+          "id": "n2",
+          "text": "Failures don't stop the run: a failed model call becomes “I couldn't finish this task”, and the work moves on.",
+          "position": {
+            "x": 900,
+            "y": 800
+          },
+          "width": 360,
+          "height": 0
+        }
+      ]
+    },
+    {
+      "id": "break_down",
+      "name": "Plan smaller steps",
+      "description": "Plans 5 or fewer smaller steps for a task that's too big, checks the plan with Verify, and plans once more, with the reason, if it fails.",
+      "inputs": [
+        {
+          "name": "exchange",
+          "label": "Exchange",
+          "to": {
+            "block": "entry",
+            "port": "in"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "message",
+          "label": "Plan message",
+          "from": {
+            "block": "message",
+            "port": "out"
+          }
+        },
+        {
+          "name": "after",
+          "label": "Exchange with plan",
+          "from": {
+            "block": "after",
+            "port": "out"
+          }
+        },
+        {
+          "name": "steps",
+          "label": "Steps",
+          "from": {
+            "block": "parse",
+            "port": "group1"
+          }
+        }
+      ],
+      "blocks": [
+        {
+          "id": "entry",
+          "type": "forward",
+          "label": "Exchange",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "params": {}
+        },
+        {
+          "id": "which",
+          "type": "read_exchange",
+          "label": "Which task",
+          "position": {
+            "x": 260,
+            "y": 200
+          },
+          "params": {
+            "role": "user"
+          }
+        },
+        {
+          "id": "ask",
+          "type": "augment",
+          "label": "Ask for smaller steps",
+          "position": {
+            "x": 520,
+            "y": 0
+          },
+          "params": {
+            "role": "user",
+            "format": "_INPUT_\n\nThis is too big to do in one go. Break it into 5 or fewer smaller steps, as broad or as narrow as each needs to be. Write only the steps, one per line, numbered like:\n1. First step\n2. Second step"
+          }
+        },
+        {
+          "id": "sub",
+          "type": "llm",
+          "label": "Plan smaller steps",
+          "position": {
+            "x": 780,
+            "y": 0
+          },
+          "params": {
+            "temperature": 0.3,
+            "max_tokens": 400
+          },
+          "comment": "Sees the running exchange, including the working notes."
+        },
+        {
+          "id": "plan",
+          "type": "forward",
+          "label": "The plan",
+          "position": {
+            "x": 1300,
+            "y": 0
+          },
+          "params": {}
+        },
+        {
+          "id": "parse",
+          "type": "capture",
+          "label": "Steps",
+          "position": {
+            "x": 1560,
+            "y": 0
+          },
+          "params": {
+            "pattern": "(?m)^\\s*\\d+[.)]\\s*(.+?)\\s*$"
+          }
+        },
+        {
+          "id": "message",
+          "type": "combine",
+          "label": "Plan message",
+          "position": {
+            "x": 1560,
+            "y": 200
+          },
+          "params": {
+            "inputs": 2,
+            "format": "**Breaking down _INPUT1_**\n\n_INPUT2_"
+          }
+        },
+        {
+          "id": "after",
+          "type": "augment",
+          "label": "Add the plan",
+          "position": {
+            "x": 1560,
+            "y": -200
+          },
+          "params": {
+            "role": "assistant",
+            "format": "I broke this task into smaller steps:\n_INPUT_"
+          }
+        },
+        {
+          "id": "verify",
+          "type": "function",
+          "label": "Verify the plan",
+          "position": {
+            "x": 1040,
+            "y": 0
+          },
+          "params": {
+            "function": "verify"
+          }
+        },
+        {
+          "id": "with_plan",
+          "type": "augment",
+          "label": "Keep the first plan",
+          "position": {
+            "x": 1040,
+            "y": 250
+          },
+          "params": {
+            "role": "assistant",
+            "format": "_INPUT_"
+          }
+        },
+        {
+          "id": "checked",
+          "type": "branch",
+          "label": "Passed the check?",
+          "position": {
+            "x": 1300,
+            "y": 250
+          },
+          "params": {
+            "pattern": "(?i)^\\W*yes"
+          }
+        },
+        {
+          "id": "feedback",
+          "type": "augment",
+          "label": "Explain the failed check",
+          "position": {
+            "x": 1300,
+            "y": 450
+          },
+          "params": {
+            "role": "user",
+            "format": "That plan didn't pass this check: _INPUT_\n\nWrite a better plan in the same format."
+          }
+        },
+        {
+          "id": "again",
+          "type": "llm",
+          "label": "Plan again",
+          "position": {
+            "x": 1040,
+            "y": 450
+          },
+          "params": {
+            "temperature": 0.3,
+            "max_tokens": 400
+          },
+          "comment": "Only once, so a plan can't loop."
+        },
+        {
+          "id": "fail_text",
+          "type": "combine",
+          "label": "Explain the failure",
+          "position": {
+            "x": 1040,
+            "y": 700
+          },
+          "params": {
+            "inputs": 1,
+            "format": "(I couldn't break this task down: _INPUT1_)"
+          },
+          "comment": "If planning fails, say so; no steps are added."
+        }
+      ],
+      "links": [
+        {
+          "from": {
+            "block": "entry",
+            "port": "out"
+          },
+          "to": {
+            "block": "ask",
+            "port": "exchange"
+          }
+        },
+        {
+          "from": {
+            "block": "entry",
+            "port": "out"
+          },
+          "to": {
+            "block": "which",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "which",
+            "port": "last"
+          },
+          "to": {
+            "block": "ask",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "ask",
+            "port": "out"
+          },
+          "to": {
+            "block": "sub",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "plan",
+            "port": "out"
+          },
+          "to": {
+            "block": "parse",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "plan",
+            "port": "out"
+          },
+          "to": {
+            "block": "message",
+            "port": "in2"
+          }
+        },
+        {
+          "from": {
+            "block": "plan",
+            "port": "out"
+          },
+          "to": {
+            "block": "after",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "which",
+            "port": "last"
+          },
+          "to": {
+            "block": "message",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "entry",
+            "port": "out"
+          },
+          "to": {
+            "block": "after",
+            "port": "exchange"
+          }
+        },
+        {
+          "from": {
+            "block": "which",
+            "port": "last"
+          },
+          "to": {
+            "block": "verify",
+            "port": "request"
+          }
+        },
+        {
+          "from": {
+            "block": "sub",
+            "port": "out"
+          },
+          "to": {
+            "block": "verify",
+            "port": "answer"
+          }
+        },
+        {
+          "from": {
+            "block": "verify",
+            "port": "passed"
+          },
+          "to": {
+            "block": "plan",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "ask",
+            "port": "out"
+          },
+          "to": {
+            "block": "with_plan",
+            "port": "exchange"
+          }
+        },
+        {
+          "from": {
+            "block": "sub",
+            "port": "out"
+          },
+          "to": {
+            "block": "with_plan",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "with_plan",
+            "port": "out"
+          },
+          "to": {
+            "block": "checked",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "verify",
+            "port": "verdict"
+          },
+          "to": {
+            "block": "checked",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "checked",
+            "port": "no"
+          },
+          "to": {
+            "block": "feedback",
+            "port": "exchange"
+          }
+        },
+        {
+          "from": {
+            "block": "verify",
+            "port": "failed"
+          },
+          "to": {
+            "block": "feedback",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "feedback",
+            "port": "out"
+          },
+          "to": {
+            "block": "again",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "again",
+            "port": "out"
+          },
+          "to": {
+            "block": "plan",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "sub",
+            "port": "error"
+          },
+          "to": {
+            "block": "fail_text",
+            "port": "in1"
+          },
+          "label": "planning failed"
+        },
+        {
+          "from": {
+            "block": "again",
+            "port": "error"
+          },
+          "to": {
+            "block": "fail_text",
+            "port": "in1"
+          },
+          "label": "planning failed"
+        },
+        {
+          "from": {
+            "block": "fail_text",
+            "port": "out"
+          },
+          "to": {
+            "block": "message",
+            "port": "in2"
+          }
+        },
+        {
+          "from": {
+            "block": "fail_text",
+            "port": "out"
+          },
+          "to": {
+            "block": "after",
+            "port": "in"
+          }
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "id": "n1",
+      "text": "Chummy assistant\n\n1. Clarify: one question to you if the request is unclear.\n2. Attempt: try each task now, with checked tool calls; ask you if stuck.\n3. Plan: tasks that are too big become up to 5 steps, done breadth-first.\n4. Notes: after every result and plan, the model updates its working notes ({{notes}}).\n\nDouble-click a function block to see inside.",
+      "position": {
+        "x": 0,
+        "y": 500
+      },
+      "width": 440,
+      "height": 230
+    },
+    {
+      "id": "n2",
+      "text": "Each task pairs with the running exchange at Next task, so the model always sees the goal and everything done so far.",
+      "position": {
+        "x": 1200,
+        "y": -450
+      },
+      "width": 380,
+      "height": 0
+    }
+  ]
+}

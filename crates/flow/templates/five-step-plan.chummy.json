@@ -1,6 +1,6 @@
 {
   "format": "chummy.loop",
-  "version": 1,
+  "version": 2,
   "name": "5 step recursive plan",
   "description": "Treats your message as a goal and tries to do it straight away, by writing or with tools. Anything too big is broken into 5 or fewer smaller steps, and each step is tried the same way, breadth-first. Every result and plan is shown, and added to one running exchange.",
   "limits": {

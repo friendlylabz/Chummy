@@ -30,10 +30,15 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
-use crate::blocks::{BadCall, BlockKind, LlmParams, OnToolError, ToolChoice};
+use crate::blocks::{
+    BadCall, BlockKind, FAILED, LlmParams, OnLimit, OnToolError, ToolChoice, ToolMode,
+};
 use crate::exchange::{ExMessage, Exchange, Role, ToolCall, ToolInfo, check_arguments};
 use crate::format::{Block, FunctionDef, Link, LoopFile};
-use crate::text::{fill_prompt, split, strip_thinking, thinking, truncate};
+use crate::prompted;
+use crate::text::{
+    Memory, fill_template, split, strip_thinking, thinking, truncate, valid_memory_key,
+};
 use crate::validate::{Analysis, Severity, analyze};
 
 /// A value flowing between blocks.
@@ -205,6 +210,30 @@ pub enum AskKind {
     Question,
     /// A tool call waiting to be allowed or refused.
     ToolApproval { tool: String, arguments: Json },
+    /// A model has used its daily tokens: allow `extra` more today?
+    Budget {
+        model: String,
+        used: u64,
+        limit: u64,
+        extra: u64,
+    },
+}
+
+/// Whether a model may be called now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Budget {
+    Ok,
+    /// Its daily tokens are used up.
+    Exhausted {
+        /// The model connection's name, for people.
+        model: String,
+        used: u64,
+        limit: u64,
+        /// Until the allowance refreshes.
+        resets_in: Duration,
+        /// How much more to offer when asking the user.
+        extra: u64,
+    },
 }
 
 /// A request for the user, from a block.
@@ -243,10 +272,13 @@ pub trait Host: Send + Sync {
     /// A tool that's installed and switched on, if there is one by that name.
     fn tool_info(&self, name: &str) -> Option<ToolInfo>;
     /// Runs a tool. `Err` means it couldn't run at all.
+    /// Runs a tool. `online`: the calling block lets its tools use the
+    /// internet (the host decides whether the app and agent do too).
     fn run_tool(
         &self,
         name: &str,
         arguments: Json,
+        online: bool,
     ) -> impl Future<Output = Result<ToolOutput, String>> + Send;
     fn read_file(&self, path: &str) -> Result<String, String>;
     fn write_file(&self, path: &str, content: &str, append: bool) -> Result<(), String>;
@@ -257,10 +289,16 @@ pub trait Host: Send + Sync {
     /// The engine handles stopping and timeouts; this just waits.
     fn ask(&self, ask: Ask) -> impl Future<Output = Result<Answer, String>> + Send;
     /// Whether calls to `tool` must be allowed by the user first, whatever
-    /// the Run tool block says (e.g. tools that use the internet).
-    fn must_confirm(&self, _tool: &str) -> bool {
+    /// the Run tool block says (e.g. tools that would go online).
+    fn must_confirm(&self, _tool: &str, _online: bool) -> bool {
         false
     }
+    /// Whether the model (`None`: the agent's) may be called now.
+    fn budget(&self, _model: Option<&str>) -> Budget {
+        Budget::Ok
+    }
+    /// The user allowed `tokens` more for the model today.
+    fn grant(&self, _model: Option<&str>, _tokens: u64) {}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -525,6 +563,8 @@ struct Runner<'a, H: Host> {
     tool_calls: u32,
     /// Notices already shown, so a block in a cycle doesn't repeat them.
     noticed: std::collections::HashSet<String>,
+    /// Saved with Save to memory; read as `{{name}}`.
+    memory: Memory,
 }
 
 /// Runs `l` to completion (or until stopped or limited).
@@ -565,6 +605,7 @@ pub async fn run<H: Host>(
         llm_calls: 0,
         tool_calls: 0,
         noticed: Default::default(),
+        memory: Memory::new(),
     };
     let mut frame = Frame::new(&l.blocks, &l.links, String::new(), &r.analysis);
     let status = match r.drive(&mut frame, &mut on_event).await {
@@ -661,6 +702,39 @@ impl<'a, H: Host> Runner<'a, H> {
                             BlockErr::Failed(e) => e,
                             _ => "it ran out of time".to_string(),
                         };
+                        // A linked Failed output takes the error instead of
+                        // stopping the run.
+                        let key = (id.clone(), FAILED.to_string());
+                        let caught = frame.kinds[&id].can_fail_softly()
+                            && (frame.routes.contains_key(&key)
+                                || frame.exposed.contains_key(&key));
+                        if caught {
+                            on_event(Event::Notice {
+                                block: path.clone(),
+                                text: format!("Failed, handled by the loop: {e}"),
+                            });
+                            on_event(Event::BlockState {
+                                block: path.clone(),
+                                label: label.clone(),
+                                state: BlockState::Done,
+                            });
+                            let value = Value::Text(e);
+                            on_event(Event::BlockOutput {
+                                block: path.clone(),
+                                port: FAILED.into(),
+                                preview: value.preview(),
+                            });
+                            if let Some(names) = frame.exposed.get(&key) {
+                                for n in names.clone() {
+                                    frame.collected.push((n, value.clone()));
+                                }
+                            }
+                            for (to, idx) in frame.routes.get(&key).cloned().unwrap_or_default() {
+                                frame.queues.get_mut(&to).unwrap()[idx].push_back(value.clone());
+                                frame.schedule(&to);
+                            }
+                            continue;
+                        }
                         on_event(Event::BlockState {
                             block: path.clone(),
                             label: label.clone(),
@@ -788,7 +862,7 @@ impl<'a, H: Host> Runner<'a, H> {
                         tool: call.name.clone(),
                         arguments: call.arguments.to_string(),
                     });
-                    let refused = if p.confirm || self.host.must_confirm(&call.name) {
+                    let refused = if p.confirm || self.host.must_confirm(&call.name, call.online) {
                         let ask = Ask {
                             block: path.clone(),
                             label: frame.label(id),
@@ -817,7 +891,9 @@ impl<'a, H: Host> Runner<'a, H> {
                             is_error: true,
                         })
                     } else {
-                        let fut = self.host.run_tool(&call.name, call.arguments.clone());
+                        let fut =
+                            self.host
+                                .run_tool(&call.name, call.arguments.clone(), call.online);
                         tokio::select! {
                             r = fut => r,
                             _ = cancelled(self.cancel) => return Err(Stop::Cancelled.into()),
@@ -849,7 +925,7 @@ impl<'a, H: Host> Runner<'a, H> {
                 one(Value::Exchange(ex))
             }
             BlockKind::AskUser(p) => {
-                let text = fill_prompt(&p.prompt, &arg(0).as_text());
+                let text = fill_template(&p.prompt, Some(&arg(0).as_text()), &self.memory);
                 let ask = Ask {
                     block: path.clone(),
                     label: frame.label(id),
@@ -879,6 +955,95 @@ impl<'a, H: Host> Runner<'a, H> {
                     Err(e) => Err(e),
                 }
             }
+            BlockKind::DeclineCalls(_) => {
+                let Value::Exchange(mut ex) = arg(0) else {
+                    return Err(BlockErr::Failed(
+                        "it needs an exchange from a model block's Tool call output".into(),
+                    ));
+                };
+                let reason = arg(1).as_text();
+                let reason = reason.trim();
+                for call in ex.pending_calls() {
+                    ex.messages.push(ExMessage {
+                        call_id: Some(call.id.clone()),
+                        name: Some(call.name.clone()),
+                        ..ExMessage::new(
+                            Role::Tool,
+                            if reason.is_empty() {
+                                "Not run.".to_string()
+                            } else {
+                                format!("Not run: {reason}")
+                            },
+                        )
+                    });
+                }
+                one(Value::Exchange(ex))
+            }
+            BlockKind::FindCall(p) => {
+                let Value::Exchange(mut ex) = arg(0) else {
+                    return Err(BlockErr::Failed(
+                        "the Exchange input needs an exchange".into(),
+                    ));
+                };
+                let text = arg(1).as_text();
+                let (rest, found, bad) = prompted::find_calls(&text);
+                let mut calls = Vec::new();
+                let mut problems: Vec<String> = bad
+                    .iter()
+                    .map(|b| format!("a tool call couldn't be read ({})", b.error))
+                    .collect();
+                for f in found {
+                    // Like a model block, only the tools ticked in the block.
+                    let allowed = p.tools.contains(&f.name);
+                    match self.host.tool_info(&f.name).filter(|_| allowed) {
+                        None => problems.push(format!("there's no tool called “{}” here", f.name)),
+                        Some(t) => match check_arguments(&t.parameters, &f.arguments) {
+                            Ok(args) => calls.push(ToolCall {
+                                id: format!("call_{}_{}", self.steps, calls.len() + 1),
+                                name: f.name,
+                                arguments: args,
+                                online: p.network,
+                            }),
+                            Err(e) => problems.push(format!("in the call to {}, {e}", f.name)),
+                        },
+                    }
+                }
+                if calls.is_empty() {
+                    if !problems.is_empty() {
+                        on_event(Event::Notice {
+                            block: path,
+                            text: format!("No usable tool call: {}.", problems.join("; ")),
+                        });
+                    }
+                    return Ok(vec![("none".into(), Value::Text(text))]);
+                }
+                ex.messages.push(ExMessage {
+                    calls,
+                    ..ExMessage::new(Role::Assistant, rest)
+                });
+                Ok(vec![("call".into(), Value::Exchange(ex))])
+            }
+            BlockKind::Store(p) => {
+                let key = p.key.trim();
+                if !valid_memory_key(key) {
+                    return Err(BlockErr::Failed(format!(
+                        "“{key}” isn't a valid memory name"
+                    )));
+                }
+                let text = arg(0).as_text();
+                let max = p.max_chars.max(1) as usize;
+                let n = text.chars().count();
+                let kept = if n > max {
+                    text.chars().skip(n - max).collect()
+                } else {
+                    text.clone()
+                };
+                self.memory.insert(key.to_string(), kept);
+                one(Value::Text(text))
+            }
+            BlockKind::Recall(p) => one(Value::Text(
+                self.memory.get(p.key.trim()).cloned().unwrap_or_default(),
+            )),
             BlockKind::Exchange(p) => {
                 let mut ex = Exchange::default();
                 let system = p.system.trim();
@@ -908,13 +1073,8 @@ impl<'a, H: Host> Runner<'a, H> {
                         "the Exchange input needs an exchange".into(),
                     ));
                 };
-                let fmt = |t: &str| {
-                    if p.format.contains("_INPUT_") {
-                        p.format.replace("_INPUT_", t)
-                    } else {
-                        fill_prompt(&p.format, t)
-                    }
-                };
+                let memory = &self.memory;
+                let fmt = |t: &str| fill_template(&p.format, Some(t), memory);
                 match arg(1) {
                     Value::Text(t) => ex.messages.push(ExMessage::new(p.role, fmt(&t))),
                     Value::List(items) => {
@@ -939,9 +1099,16 @@ impl<'a, H: Host> Runner<'a, H> {
                     .find(|m| p.role.matches(m.role) && !(m.text.is_empty() && !m.calls.is_empty()))
                     .map(|m| m.text.clone())
                     .unwrap_or_default();
+                let calls = ex
+                    .pending_calls()
+                    .iter()
+                    .map(|c| describe_call(&c.name, &c.arguments))
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
                 Ok(vec![
                     ("last".into(), Value::Text(last)),
                     ("all".into(), Value::Text(ex.transcript())),
+                    ("calls".into(), Value::Text(calls)),
                 ])
             }
             BlockKind::Function(p) => {
@@ -949,8 +1116,13 @@ impl<'a, H: Host> Runner<'a, H> {
                     .await
             }
             BlockKind::Combine(p) => {
+                // Memory first, then the inputs, so neither rewrites the other.
                 let values: Vec<String> = args.iter().map(Value::as_text).collect();
-                one(Value::Text(crate::text::fill_numbered(&p.format, &values)))
+                one(Value::Text(crate::text::fill_numbered_with(
+                    &p.format,
+                    &values,
+                    &self.memory,
+                )))
             }
             BlockKind::Forward(_) => one(arg(0)),
             BlockKind::Remember(_) => {
@@ -1052,6 +1224,75 @@ impl<'a, H: Host> Runner<'a, H> {
         }
     }
 
+    /// Waits for, asks about, or stops at a model's daily token limit, as
+    /// the block says.
+    async fn check_budget(
+        &mut self,
+        path: &str,
+        model: Option<&str>,
+        on_limit: OnLimit,
+        on_event: &mut Emit<'_>,
+    ) -> Result<(), BlockErr> {
+        loop {
+            let Budget::Exhausted {
+                model: name,
+                used,
+                limit,
+                resets_in,
+                extra,
+            } = self.host.budget(model)
+            else {
+                return Ok(());
+            };
+            let what = format!("{name} has used its {limit} tokens for today");
+            match on_limit {
+                OnLimit::Stop => {
+                    return Err(Stop::Limit(format!(
+                        "Stopped: {what}. Raise its limit in Settings → Models."
+                    ))
+                    .into());
+                }
+                OnLimit::Wait => {
+                    let text = format!("{what}; waiting until it refreshes.");
+                    if self.noticed.insert(text.clone()) {
+                        on_event(Event::Notice {
+                            block: path.to_string(),
+                            text,
+                        });
+                    }
+                    // Check again at least every minute (the limit may be raised).
+                    let nap = resets_in.clamp(Duration::from_secs(1), Duration::from_secs(60));
+                    tokio::select! {
+                        _ = tokio::time::sleep(nap) => {}
+                        _ = cancelled(self.cancel) => return Err(Stop::Cancelled.into()),
+                    }
+                }
+                OnLimit::Ask => {
+                    let ask = Ask {
+                        block: path.to_string(),
+                        label: "Daily token limit".into(),
+                        kind: AskKind::Budget {
+                            model: name.clone(),
+                            used,
+                            limit,
+                            extra,
+                        },
+                        text: format!("{what} ({used} used). Allow {extra} more tokens today?"),
+                    };
+                    match self.wait_for(ask, None, on_event).await? {
+                        Answer::Allow => self.host.grant(model, extra),
+                        _ => {
+                            return Err(Stop::Limit(format!(
+                                "Stopped: {what}, and more wasn't allowed."
+                            ))
+                            .into());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Asks the user and waits, until answered, stopped or `limit` passes.
     async fn wait_for(
         &mut self,
@@ -1144,37 +1385,13 @@ impl<'a, H: Host> Runner<'a, H> {
         input: Value,
         on_event: &mut Emit<'_>,
     ) -> Result<Outputs, BlockErr> {
-        let system = p.system.trim();
-        // The exchange this block continues, and what it sends the model.
-        let (base, mut messages) = match input {
-            Value::Exchange(ex) => {
-                let mut msgs = ex.messages.clone();
-                if !system.is_empty() {
-                    msgs.retain(|m| m.role != Role::System);
-                    msgs.insert(0, ExMessage::new(Role::System, system));
-                }
-                (ex, msgs)
-            }
-            other => {
-                let mut ex = Exchange::default();
-                if !system.is_empty() {
-                    ex.messages.push(ExMessage::new(Role::System, system));
-                }
-                ex.messages.push(ExMessage::new(
-                    Role::User,
-                    fill_prompt(&p.prompt, &other.as_text()),
-                ));
-                let msgs = ex.messages.clone();
-                (ex, msgs)
-            }
-        };
         let mut tools = Vec::new();
         for name in &p.tools {
             match self.host.tool_info(name) {
                 Some(t) => tools.push(t),
                 None => {
                     let text = format!(
-                        "The tool “{name}” isn't switched on (Settings → Tools), so the model wasn't offered it."
+                        "The tool “{name}” isn't available to this agent (Settings → Tools, and the agent's tools), so the model wasn't offered it."
                     );
                     if self.noticed.insert(text.clone()) {
                         on_event(Event::Notice {
@@ -1185,9 +1402,63 @@ impl<'a, H: Host> Runner<'a, H> {
                 }
             }
         }
+        // `_TOOLS_` in the prompt or system message lists the block's tools,
+        // and `{{name}}` reads memory.
+        let listed = prompted::tool_list(&tools);
+        let system = fill_template(&p.system.replace("_TOOLS_", &listed), None, &self.memory);
+        let system = system.trim();
+        let use_tools = !tools.is_empty() && p.tool_mode != ToolMode::Off;
+        let prompted_mode = use_tools && p.tool_mode == ToolMode::Prompted;
+
+        // The exchange this block continues, and what it sends the model.
+        let (base, mut messages) = match input {
+            Value::Exchange(ex) => {
+                let mut msgs = ex.messages.clone();
+                if !system.is_empty() {
+                    msgs.retain(|m| m.role != Role::System);
+                    msgs.insert(0, ExMessage::new(Role::System, system));
+                } else {
+                    // An exchange's own system message can read memory too,
+                    // as it is at the time of each call.
+                    for m in msgs.iter_mut().filter(|m| m.role == Role::System) {
+                        m.text = fill_template(&m.text, None, &self.memory);
+                    }
+                }
+                (ex, msgs)
+            }
+            other => {
+                let mut ex = Exchange::default();
+                if !system.is_empty() {
+                    ex.messages.push(ExMessage::new(Role::System, system));
+                }
+                let prompt = p.prompt.replace("_TOOLS_", &listed);
+                ex.messages.push(ExMessage::new(
+                    Role::User,
+                    fill_template(&prompt, Some(&other.as_text()), &self.memory),
+                ));
+                let msgs = ex.messages.clone();
+                (ex, msgs)
+            }
+        };
+        if prompted_mode {
+            messages = prompted::plain_history(&messages);
+            let section = prompted::tool_section(&tools);
+            match messages.iter_mut().find(|m| m.role == Role::System) {
+                Some(sys) => sys.text = format!("{}\n\n{section}", sys.text),
+                None => messages.insert(0, ExMessage::new(Role::System, section)),
+            }
+        }
+        let offered = if use_tools && !prompted_mode {
+            tools.clone()
+        } else {
+            vec![]
+        };
+        let model = p.model.clone().filter(|m| !m.is_empty());
 
         let mut attempt = 0;
         loop {
+            self.check_budget(path, model.as_deref(), p.on_limit, on_event)
+                .await?;
             if self.llm_calls >= self.file.limits.max_llm_calls {
                 return Err(Stop::Limit(format!(
                     "Stopped after {} model calls, the loop's limit.",
@@ -1199,13 +1470,39 @@ impl<'a, H: Host> Runner<'a, H> {
             let call = LlmCall {
                 block: path.to_string(),
                 messages: messages.clone(),
-                tools: tools.clone(),
+                tools: offered.clone(),
                 tool_choice: p.tool_choice,
                 temperature: p.temperature,
                 max_tokens: p.max_tokens,
-                model: p.model.clone().filter(|m| !m.is_empty()),
+                model: model.clone(),
             };
-            let answer = self.ask(path, call, on_event).await?;
+            let mut answer = self.ask(path, call, on_event).await?;
+            if prompted_mode {
+                let (rest, found, bad) = prompted::find_calls(&strip_thinking(&answer.text));
+                let inline = thinking(&answer.text);
+                answer.text = if inline.is_empty() {
+                    rest
+                } else {
+                    format!("<think>{inline}</think>{rest}")
+                };
+                answer.calls.extend(found.into_iter().map(|f| ToolCall {
+                    id: String::new(),
+                    name: f.name,
+                    arguments: f.arguments,
+                    online: false,
+                }));
+                answer
+                    .malformed
+                    .extend(bad.into_iter().map(|b| MalformedCall {
+                        name: if b.name.is_empty() {
+                            "a tool".into()
+                        } else {
+                            b.name
+                        },
+                        raw: b.raw,
+                        error: b.error,
+                    }));
+            }
             let mut reasoning = answer.reasoning.trim().to_string();
             let inline = thinking(&answer.text);
             if !inline.is_empty() {
@@ -1216,7 +1513,7 @@ impl<'a, H: Host> Runner<'a, H> {
             }
             let text = strip_thinking(&answer.text);
 
-            if tools.is_empty() {
+            if !use_tools {
                 return Ok(vec![
                     ("out".into(), Value::Text(text)),
                     ("reasoning".into(), Value::Text(reasoning)),
@@ -1264,7 +1561,8 @@ impl<'a, H: Host> Runner<'a, H> {
                             good.push(ToolCall {
                                 id,
                                 arguments: args,
-                                ..c.clone()
+                                online: p.network,
+                                name: c.name.clone(),
                             })
                         }
                         Err(e) => problems.push(format!("in the call to {}, {e}", c.name)),
@@ -1418,6 +1716,10 @@ mod tests {
         /// Set when asked, like a user stopping the run (which withdraws
         /// the question).
         stop_on_ask: Option<std::sync::Arc<AtomicBool>>,
+        /// The model's daily tokens are used up until granted more.
+        exhausted: Mutex<bool>,
+        granted: Mutex<Vec<u64>>,
+        online_runs: Mutex<Vec<bool>>,
     }
 
     fn text(s: &str) -> LlmAnswer {
@@ -1433,6 +1735,7 @@ mod tests {
                 id: format!("c-{name}"),
                 name: name.into(),
                 arguments: args,
+                online: false,
             }],
             ..Default::default()
         }
@@ -1483,7 +1786,13 @@ mod tests {
                 }),
             })
         }
-        async fn run_tool(&self, name: &str, arguments: Json) -> Result<ToolOutput, String> {
+        async fn run_tool(
+            &self,
+            name: &str,
+            arguments: Json,
+            online: bool,
+        ) -> Result<ToolOutput, String> {
+            self.online_runs.lock().unwrap().push(online);
             self.tool_runs
                 .lock()
                 .unwrap()
@@ -1528,8 +1837,25 @@ mod tests {
                 .pop_front()
                 .ok_or_else(|| "nobody to ask".to_string())
         }
-        fn must_confirm(&self, tool: &str) -> bool {
+        fn must_confirm(&self, tool: &str, _online: bool) -> bool {
             self.confirm_tools.iter().any(|t| t == tool)
+        }
+        fn budget(&self, _model: Option<&str>) -> Budget {
+            if *self.exhausted.lock().unwrap() {
+                Budget::Exhausted {
+                    model: "Fake".into(),
+                    used: 100,
+                    limit: 100,
+                    resets_in: Duration::from_secs(3600),
+                    extra: 25,
+                }
+            } else {
+                Budget::Ok
+            }
+        }
+        fn grant(&self, _model: Option<&str>, tokens: u64) {
+            self.granted.lock().unwrap().push(tokens);
+            *self.exhausted.lock().unwrap() = false;
         }
     }
 
@@ -1540,19 +1866,11 @@ mod tests {
             label: id.into(),
             position: Position::default(),
             params,
+            comment: String::new(),
         }
     }
     fn ln(a: &str, ap: &str, c: &str, cp: &str) -> Link {
-        Link {
-            from: PortRef {
-                block: a.into(),
-                port: ap.into(),
-            },
-            to: PortRef {
-                block: c.into(),
-                port: cp.into(),
-            },
-        }
+        Link::new((a, ap), (c, cp))
     }
     fn lp(blocks: Vec<Block>, links: Vec<Link>) -> LoopFile {
         let mut l = LoopFile::new("t");
@@ -1954,9 +2272,11 @@ mod tests {
         let (o, ev) = go(&l, &host, "x").await;
         assert_eq!(o.replies, vec!["fine"]);
         assert!(host.calls.lock().unwrap()[0].tools.is_empty());
-        assert!(ev.iter().any(
-            |e| matches!(e, Event::Notice { text, .. } if text.contains("isn't switched on"))
-        ));
+        assert!(
+            ev.iter().any(
+                |e| matches!(e, Event::Notice { text, .. } if text.contains("isn't available"))
+            )
+        );
     }
 
     #[tokio::test]
@@ -2058,6 +2378,7 @@ mod tests {
                 .collect(),
             blocks,
             links,
+            notes: vec![],
         }
     }
 
@@ -2164,6 +2485,7 @@ mod tests {
             id: id.into(),
             name: "echo".into(),
             arguments: json!({ "text": "a" }),
+            online: false,
         };
         let host = Fake::script(vec![
             LlmAnswer {
@@ -2436,5 +2758,280 @@ mod tests {
         let o = run(&l, &host, &RunInputs::default(), &cancel, |_| {}).await;
         assert_eq!(o.status, RunStatus::Stopped);
         assert_eq!(host.asks.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn prompted_tools_are_described_and_read_from_text() {
+        let mut l = tool_loop();
+        l.blocks[1].params = json!({ "prompt": "Do: _INPUT_", "tools": ["echo"], "tool_mode": "prompted", "network": true });
+        let host = Fake::script(vec![
+            text(
+                "Sure.\n<tool_call>\n{\"name\": \"echo\", \"arguments\": {\"text\": \"hi\"}}\n</tool_call>",
+            ),
+            text("done"),
+        ]);
+        let (o, _) = go(&l, &host, "x").await;
+        assert_eq!(o.replies, ["done"], "{o:?}");
+        let calls = host.calls.lock().unwrap();
+        // No tools through the API; they're in the system message instead.
+        assert!(calls[0].tools.is_empty());
+        assert!(
+            calls[0].messages[0].role == Role::System
+                && calls[0].messages[0].text.contains("<tools>")
+        );
+        // The second call sees the call and result as plain text.
+        let second = &calls[1].messages;
+        assert!(
+            second
+                .iter()
+                .all(|m| m.role != Role::Tool && m.calls.is_empty())
+        );
+        assert!(
+            second
+                .iter()
+                .any(|m| m.text.contains("<tool_response>") && m.text.contains("echoed hi"))
+        );
+        assert_eq!(
+            *host.online_runs.lock().unwrap(),
+            [true],
+            "the block's internet switch rides with the call"
+        );
+    }
+
+    #[tokio::test]
+    async fn tools_off_lets_the_loop_handle_them() {
+        // model (tools listed in the prompt, not offered) → Find tool call →
+        // Run tool → Read exchange → Reply; plain answers go out of No call.
+        let l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b(
+                    "m",
+                    "llm",
+                    json!({ "prompt": "Tools:\n_TOOLS_\n\n_INPUT_", "tools": ["echo"], "tool_mode": "off" }),
+                ),
+                b("ex", "exchange", json!({})),
+                b("find", "find_call", json!({ "tools": ["echo"] })),
+                b("run", "run_tool", json!({})),
+                b("read", "read_exchange", json!({ "role": "tool" })),
+                b("out", "output", json!({})),
+            ],
+            vec![
+                ln("in", "out", "m", "in"),
+                ln("in", "out", "ex", "in"),
+                ln("ex", "out", "find", "exchange"),
+                ln("m", "out", "find", "in"),
+                ln("find", "call", "run", "in"),
+                ln("run", "out", "read", "in"),
+                ln("read", "last", "out", "in"),
+                ln("find", "none", "out", "in"),
+            ],
+        );
+        let host = Fake::with(&["{\"name\": \"echo\", \"arguments\": {\"text\": \"yo\"}}"]);
+        let (o, _) = go(&l, &host, "x").await;
+        assert_eq!(o.replies, ["echoed yo"], "{o:?}");
+        let first = host.calls.lock().unwrap()[0].clone();
+        assert!(first.tools.is_empty());
+        assert!(
+            first.messages[0]
+                .text
+                .contains("- echo(text): Echoes text.")
+        );
+        assert!(
+            !BlockKind::parse("llm", &json!({ "tools": ["echo"], "tool_mode": "off" }))
+                .unwrap()
+                .outputs()
+                .iter()
+                .any(|p| p.name == "tool")
+        );
+        let host = Fake::with(&["no call here"]);
+        assert_eq!(go(&l, &host, "x").await.0.replies, ["no call here"]);
+        // A tool that isn't ticked in Find tool call is never run.
+        let mut l = l;
+        l.blocks[3].params = json!({ "tools": [] });
+        let call = "{\"name\": \"echo\", \"arguments\": {\"text\": \"yo\"}}";
+        let host = Fake::with(&[call]);
+        assert_eq!(go(&l, &host, "x").await.0.replies, [call]);
+    }
+
+    #[tokio::test]
+    async fn failed_outputs_catch_errors_when_linked() {
+        // Read file fails (no such file); its Failed output feeds the reply.
+        let l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b("read", "read_file", json!({})),
+                b("out", "output", json!({})),
+            ],
+            vec![
+                ln("in", "out", "read", "path"),
+                ln("read", "error", "out", "in"),
+            ],
+        );
+        let (o, _) = go(&l, &Fake::default(), "missing.txt").await;
+        assert_eq!(o.status, RunStatus::Completed);
+        assert_eq!(o.replies, ["missing.txt: not found"]);
+        // Unlinked, the run stops as before.
+        let mut l2 = l.clone();
+        l2.links.pop();
+        let (o, _) = go(&l2, &Fake::default(), "missing.txt").await;
+        assert!(matches!(o.status, RunStatus::Failed { .. }));
+    }
+
+    #[tokio::test]
+    async fn memory_is_saved_and_read_in_prompts() {
+        let l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b("save", "store", json!({ "key": "notes", "max_chars": 100 })),
+                b(
+                    "m",
+                    "llm",
+                    json!({ "system": "Notes: {{notes}}", "prompt": "Q: _INPUT_" }),
+                ),
+                b("get", "recall", json!({ "key": "notes" })),
+                b(
+                    "both",
+                    "combine",
+                    json!({ "inputs": 2, "format": "_INPUT1_ / {{notes}} / _INPUT2_" }),
+                ),
+                b("out", "output", json!({})),
+            ],
+            vec![
+                ln("in", "out", "save", "in"),
+                ln("save", "out", "m", "in"),
+                ln("m", "out", "get", "in"),
+                ln("m", "out", "both", "in1"),
+                ln("get", "out", "both", "in2"),
+                ln("both", "out", "out", "in"),
+            ],
+        );
+        let host = Fake::with(&["answer"]);
+        let (o, _) = go(&l, &host, "remember {{notes}} this").await;
+        let sent = host.calls.lock().unwrap()[0].messages.clone();
+        assert_eq!(sent[0].text, "Notes: remember {{notes}} this");
+        assert_eq!(sent[1].text, "Q: remember {{notes}} this");
+        assert_eq!(
+            o.replies,
+            ["answer / remember {{notes}} this / remember {{notes}} this"]
+        );
+    }
+
+    #[tokio::test]
+    async fn daily_limits_ask_wait_or_stop() {
+        let l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b("m", "llm", json!({ "on_limit": "ask" })),
+                b("out", "output", json!({})),
+            ],
+            vec![ln("in", "out", "m", "in"), ln("m", "out", "out", "in")],
+        );
+        // Asked and allowed: more is granted and the call goes ahead.
+        let host = Fake::with(&["ok"]);
+        *host.exhausted.lock().unwrap() = true;
+        host.answers_for_user
+            .lock()
+            .unwrap()
+            .push_back(Answer::Allow);
+        let (o, _) = go(&l, &host, "x").await;
+        assert_eq!(o.replies, ["ok"]);
+        assert_eq!(*host.granted.lock().unwrap(), [25]);
+        assert!(matches!(
+            host.asks.lock().unwrap()[0].kind,
+            AskKind::Budget { limit: 100, .. }
+        ));
+        // Refused: the run stops at a limit.
+        let host = Fake::with(&["ok"]);
+        *host.exhausted.lock().unwrap() = true;
+        host.answers_for_user
+            .lock()
+            .unwrap()
+            .push_back(Answer::Deny(String::new()));
+        let (o, _) = go(&l, &host, "x").await;
+        assert!(matches!(o.status, RunStatus::LimitReached { .. }), "{o:?}");
+        // Stop: no question at all.
+        let mut stop = l.clone();
+        stop.blocks[1].params = json!({ "on_limit": "stop" });
+        let host = Fake::with(&["ok"]);
+        *host.exhausted.lock().unwrap() = true;
+        let (o, _) = go(&stop, &host, "x").await;
+        assert!(
+            matches!(o.status, RunStatus::LimitReached { ref message } if message.contains("Settings → Models"))
+        );
+        assert!(host.asks.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn daily_limits_can_wait() {
+        let l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b("m", "llm", json!({ "on_limit": "wait" })),
+                b("out", "output", json!({})),
+            ],
+            vec![ln("in", "out", "m", "in"), ln("m", "out", "out", "in")],
+        );
+        let host = std::sync::Arc::new(Fake::with(&["later"]));
+        *host.exhausted.lock().unwrap() = true;
+        let h = host.clone();
+        let refresh = async move {
+            tokio::time::sleep(Duration::from_secs(150)).await;
+            *h.exhausted.lock().unwrap() = false;
+        };
+        let cancel = AtomicBool::new(false);
+        let inputs = RunInputs::default();
+        let (o, _) = tokio::join!(run(&l, &*host, &inputs, &cancel, |_| {}), refresh);
+        assert_eq!(o.replies, ["later"]);
+    }
+
+    #[tokio::test]
+    async fn checking_calls_before_they_run() {
+        // model → Tool call → Read exchange (calls) → Branch on a check:
+        // allowed calls run; others are declined with the reason.
+        let l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b("m", "llm", json!({ "tools": ["echo"] })),
+                b("read", "read_exchange", json!({})),
+                b("check", "fixed", json!({ "text": "" })),
+                b("br", "branch", json!({ "pattern": "text: ok" })),
+                b("run", "run_tool", json!({})),
+                b("why", "fixed", json!({ "text": "the check said no" })),
+                b("no", "decline_calls", json!({})),
+                b("out", "output", json!({})),
+            ],
+            vec![
+                ln("in", "out", "m", "in"),
+                ln("m", "tool", "read", "in"),
+                ln("m", "tool", "br", "value"),
+                ln("read", "calls", "br", "test"),
+                ln("br", "yes", "run", "in"),
+                ln("br", "no", "no", "in"),
+                ln("why", "out", "no", "reason"),
+                ln("run", "out", "m", "in"),
+                ln("no", "out", "m", "in"),
+                ln("m", "out", "out", "in"),
+            ],
+        );
+        let host = Fake::script(vec![
+            calls("echo", json!({ "text": "bad" })),
+            text("gave up"),
+        ]);
+        let (o, _) = go(&l, &host, "x").await;
+        assert_eq!(o.replies, ["gave up"]);
+        assert!(host.tool_runs.lock().unwrap().is_empty());
+        let last = host.calls.lock().unwrap()[1].messages.clone();
+        assert!(
+            last.iter()
+                .any(|m| m.role == Role::Tool && m.text == "Not run: the check said no")
+        );
+
+        let host = Fake::script(vec![calls("echo", json!({ "text": "ok" })), text("done")]);
+        let (o, _) = go(&l, &host, "x").await;
+        assert_eq!(
+            (o.replies.as_slice(), host.tool_runs.lock().unwrap().len()),
+            (&["done".to_string()][..], 1)
+        );
     }
 }

@@ -179,6 +179,7 @@ fn add_local_provider(
             precision,
         }),
         temperature: None,
+        daily_tokens: Some(chummy_llm::DEFAULT_DAILY_TOKENS),
     };
     state.update(app, |s| {
         match s.providers.iter_mut().find(|p| p.id == id) {

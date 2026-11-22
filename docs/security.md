@@ -94,8 +94,10 @@ without noticing.
    UI only listens to events. Windows now get only event listening, plus
    their own commands.
 8. **Content security policy.** Tightened so objects, frames, workers,
-   `<base>` and form submissions are all blocked, and JavaScript prototypes
-   are frozen.
+   `<base>` and form submissions are all blocked. (Pass 5 also froze
+   JavaScript prototypes; pass 6 removed that because it stopped the loop
+   editor's graph library from loading. The CSP, which allows only
+   Chummy's own scripts, is the protection that matters here.)
 9. **Notifications could show private text on a locked screen.** They now
    only say who is asking ("Morning digest has a question for you") or which
    job finished, never the question or reply.
@@ -130,6 +132,31 @@ without noticing.
 - Secrets are only in the OS keychain. The Chummy folder is private to the
   user (0700 on Unix).
 
+## Pass 6 changes
+
+- **Per-agent tool and internet switches.** A tool runs only when it is on
+  app-wide (Permissions and Tools), for the agent, and ticked in the block.
+  Going online needs four switches: Permissions, the tool, the agent and the
+  block ("may use the internet"). New agents start with no tools and
+  offline; agents that existed before pass 6 kept what they could already
+  use. Turning an agent's internet on asks first.
+- **Daily token limits.** Each model connection has a daily limit (1,000,000
+  tokens by default, can be turned off), so a looping agent or a scheduled
+  job can't run up a large bill. When a limit is reached the block waits
+  until midnight, stops the run, or asks you for more, as set in the block.
+  Usage is kept in `usage.json` (31 days, counts only, no text).
+- **Prompted tool calls are untrusted text.** In prompted and off modes, the
+  model writes calls as text that Chummy parses. Parsed calls go through
+  exactly the same checks as native ones (tool lists, the jail, internet
+  switches and **Ask me**). Calls to tools the block doesn't offer are
+  refused, and malformed calls are reported back to the model, never run.
+- **Agent loop configuration is checked.** Per-agent block settings are
+  validated against the block catalog and the whole loop is re-analyzed
+  before they are saved, so an imported `chummy.loopconfig` file can't
+  break a loop or add blocks. It can only change settings of blocks the
+  loop already has, and it cannot turn on a tool or the internet that the
+  agent or the app doesn't allow.
+
 ## Known risks and what to do next
 
 In rough order of importance:
@@ -138,33 +165,33 @@ In rough order of importance:
    can still steer it to misuse tools that don't go online, for example
    overwriting or deleting files in its folder with write tools. Today's
    mitigations are the jail and per-tool **Ask me before each use**.
-   *Next:* per-agent tool lists (so an agent that reads untrusted files has
-   no write tool), and a one-click "undo this run" that snapshots files
-   before a job changes them.
-2. **Permissions are app-wide.** Tools and internet access are switched on
-   for every agent at once. *Next:* per-agent tool and internet switches.
-3. **Your model provider sees everything the agent reads.** With a cloud
+   Per-agent tool lists (pass 6) let an agent that reads untrusted files
+   have no write tool. *Next:* a one-click "undo this run" that snapshots
+   files before a job changes them.
+2. **Your model provider sees everything the agent reads.** With a cloud
    model, workspace files sent to the model leave your computer. *Next:*
    label connections as "on this computer", "on your network" or "in the
    cloud" wherever a model is chosen.
-4. **Malware running as you** can change `settings.json` (for example, turn
+3. **Malware running as you** can change `settings.json` (for example, turn
    internet access on) without a confirmation. *Next:* protect settings
    with a MAC keyed by a secret in the keychain, and reset permissions to
    off if it doesn't match.
-5. **Trays that can't be seen.** On Linux desktops without a tray host (for
+4. **Trays that can't be seen.** On Linux desktops without a tray host (for
    example GNOME without the AppIndicator extension), the tray icon can be
    created but not shown, so **Keep running in tray** hides Chummy with no
    visible icon. Opening Chummy again brings the window back. *Next:* check
    for a StatusNotifier host and offer "minimize" instead.
-6. **Unsigned releases.** Release builds aren't code-signed or notarized
+5. **Unsigned releases.** Release builds aren't code-signed or notarized
    yet, so people can't verify what they install. *Next:* signing on all
    three OSes, published checksums, and an updater that checks signatures.
-7. **Cost.** A repeating job with a paid model can add up. The Scheduler
-   shows about how many runs a day a schedule makes, and loops have model
-   call limits. *Next:* an optional daily budget per connection.
-8. **No record of what tools sent.** *Next:* an activity log of every web
+6. **Cost.** A repeating job with a paid model can add up. Daily token
+   limits (pass 6) cap it per connection, and the Scheduler shows about how
+   many runs a day a schedule makes. Token counts are what the server
+   reports, or an estimate when it reports nothing. *Next:* limits in money
+   for providers with known prices.
+7. **No record of what tools sent.** *Next:* an activity log of every web
    request a tool made, per run, viewable in the app.
-9. **History is plain text.** Chats and job histories are stored unencrypted
+8. **History is plain text.** Chats and job histories are stored unencrypted
    in the Chummy folder, protected only by OS permissions. Full-disk
    encryption is recommended.
 

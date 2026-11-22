@@ -4,13 +4,13 @@
 //! - every field has a default (`#[serde(default)]`), so older files load;
 //! - renames or meaning changes bump [`VERSION`] and add a step to [`migrate`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use chummy_llm::ProviderConfig;
 use serde::{Deserialize, Serialize};
 
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -43,6 +43,24 @@ pub struct Agent {
     pub model: Option<String>,
     pub workspace: Workspace,
     pub created_at: u64,
+    /// Tools this agent may use (each also needs Tools on in Permissions and
+    /// the tool switched on in Settings → Tools).
+    #[serde(default)]
+    pub tools: BTreeSet<String>,
+    /// This agent's tools may use the internet (also needs Internet access
+    /// in Permissions and the tool's own internet switch).
+    #[serde(default)]
+    pub network: bool,
+    /// Changed block settings, per loop id (Agent Loop Configuration).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub loop_config: BTreeMap<String, chummy_flow::Overrides>,
+}
+
+impl Agent {
+    /// This agent's changes to the loop `loop_id`.
+    pub fn overrides(&self, loop_id: &str) -> chummy_flow::Overrides {
+        self.loop_config.get(loop_id).cloned().unwrap_or_default()
+    }
 }
 
 /// Everything beyond the workspace is off until the user turns it on.
@@ -211,6 +229,30 @@ pub fn migrate(mut v: serde_json::Value) -> serde_json::Value {
         }
         v["version"] = 2.into();
     }
+    if version < 3 {
+        // 2 → 3: tools and internet became per agent too. Existing agents keep
+        // what they could do: every tool switched on, and internet access if
+        // it was on.
+        let tools: Vec<serde_json::Value> = v["tools"]
+            .as_object()
+            .map(|t| {
+                t.iter()
+                    .filter(|(_, p)| p["enabled"].as_bool() == Some(true))
+                    .map(|(n, _)| n.clone().into())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let network = v["permissions"]["network"].as_bool().unwrap_or(false);
+        if let Some(agents) = v.get_mut("agents").and_then(|a| a.as_array_mut()) {
+            for a in agents {
+                if let Some(o) = a.as_object_mut() {
+                    o.entry("tools").or_insert_with(|| tools.clone().into());
+                    o.entry("network").or_insert(network.into());
+                }
+            }
+        }
+        v["version"] = 3.into();
+    }
     v
 }
 
@@ -252,6 +294,21 @@ mod tests {
         let v = migrate(v1);
         assert!(v.get("workspace").is_none());
         let s: Settings = serde_json::from_value(v).unwrap();
-        assert_eq!((s.version, s.theme), (2, Theme::Light));
+        assert_eq!((s.version, s.theme), (VERSION, Theme::Light));
+    }
+
+    #[test]
+    fn v2_agents_keep_their_tools() {
+        let v2 = serde_json::json!({
+            "version": 2,
+            "permissions": { "network": true, "tools": true },
+            "tools": { "calculator": { "enabled": true }, "fetch_page": { "enabled": false, "network": true } },
+            "agents": [{ "id": "a", "name": "A", "loop_id": "l",
+                         "workspace": { "path": "/tmp/a", "confirmed_at": 1 }, "created_at": 1 }]
+        });
+        let s: Settings = serde_json::from_value(migrate(v2)).unwrap();
+        let a = &s.agents[0];
+        assert_eq!(a.tools.iter().collect::<Vec<_>>(), ["calculator"]);
+        assert!(a.network);
     }
 }

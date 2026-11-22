@@ -57,6 +57,9 @@ fn validate(cfg: &ProviderConfig) -> Result<(), String> {
     {
         return Err("Temperature must be between 0 and 2.".into());
     }
+    if cfg.daily_tokens.is_some_and(|n| n < 1000) {
+        return Err("The daily token limit must be at least 1,000 (or turned off).".into());
+    }
     Ok(())
 }
 
@@ -232,6 +235,7 @@ mod tests {
             model: "m".into(),
             local: None,
             temperature: None,
+            daily_tokens: Some(chummy_llm::DEFAULT_DAILY_TOKENS),
         };
         assert!(validate(&c).is_err());
         c.base_url = "http://localhost:8080/v1".into();

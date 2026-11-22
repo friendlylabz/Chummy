@@ -328,6 +328,7 @@ mod tests {
             model: "m".into(),
             local: None,
             temperature: None,
+            daily_tokens: Some(crate::DEFAULT_DAILY_TOKENS),
         }
     }
 

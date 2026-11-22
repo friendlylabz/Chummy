@@ -32,6 +32,13 @@ pub struct PortSpec {
     pub kind: ValueKind,
 }
 
+/// The name of the output that carries a block's error.
+pub const FAILED: &str = "error";
+
+fn failed() -> PortSpec {
+    port(FAILED, "Failed", ValueKind::Text)
+}
+
 fn port(name: impl Into<String>, label: impl Into<String>, kind: ValueKind) -> PortSpec {
     PortSpec {
         name: name.into(),
@@ -80,6 +87,36 @@ pub enum ToolChoice {
     Auto,
     /// The model must call one of the block's tools.
     Required,
+}
+
+/// How a model block offers its tools to the model.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolMode {
+    /// Through the model server's own tool calling, in the model's own
+    /// format. Best when the server supports it.
+    #[default]
+    Native,
+    /// Chummy describes the tools in the system message and reads calls out
+    /// of the answer (`<tool_call>{…}</tool_call>`). For servers or models
+    /// without tool calling.
+    Prompted,
+    /// Not offered automatically; the loop handles tools itself (e.g. with
+    /// `_TOOLS_` in a prompt and a Find tool call block).
+    Off,
+}
+
+/// What a model block does when its model has used its daily tokens.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnLimit {
+    /// Ask the user whether to allow more today.
+    #[default]
+    Ask,
+    /// Wait until the allowance refreshes (at midnight).
+    Wait,
+    /// Stop the run.
+    Stop,
 }
 
 /// What a model block does when the model's tool call is wrong (unknown
@@ -177,6 +214,47 @@ pub struct LlmParams {
     /// How many times to ask again after a bad tool call (0–5).
     #[serde(default = "d_two")]
     pub retries: u32,
+    #[serde(default)]
+    pub tool_mode: ToolMode,
+    /// This block's tools may use the internet (if the app and the agent
+    /// also allow it).
+    #[serde(default)]
+    pub network: bool,
+    #[serde(default)]
+    pub on_limit: OnLimit,
+}
+
+fn d_memory_chars() -> u32 {
+    4000
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoreParams {
+    /// Memory name: letters, digits and `_`. `{{name}}` in prompts reads it.
+    #[serde(default)]
+    pub key: String,
+    /// Longer text is cut (from the start, keeping the newest part).
+    #[serde(default = "d_memory_chars")]
+    pub max_chars: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecallParams {
+    #[serde(default)]
+    pub key: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FindCallParams {
+    /// Tools the text may call.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<String>,
+    /// These tools may use the internet (if the app and the agent also allow it).
+    #[serde(default)]
+    pub network: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -331,6 +409,10 @@ pub enum BlockKind {
     ListFiles(Empty),
     RunTool(RunToolParams),
     AskUser(AskUserParams),
+    DeclineCalls(Empty),
+    FindCall(FindCallParams),
+    Store(StoreParams),
+    Recall(RecallParams),
     Exchange(StartExchangeParams),
     Augment(AugmentParams),
     ReadExchange(ReadExchangeParams),
@@ -362,6 +444,16 @@ impl BlockKind {
             Input(_) | History(_) | Fixed(_) | Function(_) => vec![],
             Output(_) | Split(_) | Regex(_) | Capture(_) => vec![port("in", "In", Text)],
             Llm(_) | AskUser(_) => vec![port("in", "In", Any)],
+            DeclineCalls(_) => vec![
+                port("in", "Tool call", ValueKind::Exchange),
+                port("reason", "Reason", Text),
+            ],
+            FindCall(_) => vec![
+                port("exchange", "Exchange", ValueKind::Exchange),
+                port("in", "Text", Text),
+            ],
+            Store(_) => vec![port("in", "In", Text)],
+            Recall(_) => vec![port("in", "Trigger", Any)],
             RunTool(_) => vec![port("in", "Tool call", ValueKind::Exchange)],
             BlockKind::Exchange(_) => vec![port("in", "In", Any)],
             Augment(_) => vec![
@@ -387,27 +479,37 @@ impl BlockKind {
             Output(_) | Function(_) => vec![],
             Llm(p) => {
                 let mut v = vec![port("out", "Answer", Text)];
-                if !p.tools.is_empty() {
+                if !p.tools.is_empty() && p.tool_mode != ToolMode::Off {
                     v.push(port("tool", "Tool call", ValueKind::Exchange));
                 }
                 v.push(port("reasoning", "Reasoning", Text));
+                v.push(failed());
                 v
             }
-            RunTool(_) => vec![port("out", "Results", ValueKind::Exchange)],
-            AskUser(_) => vec![port("out", "Answer", Text)],
+            RunTool(_) => vec![port("out", "Results", ValueKind::Exchange), failed()],
+            AskUser(_) => vec![port("out", "Answer", Text), failed()],
+            DeclineCalls(_) => vec![port("out", "Exchange", ValueKind::Exchange)],
+            FindCall(_) => vec![
+                port("call", "Tool call", ValueKind::Exchange),
+                port("none", "No call", Text),
+            ],
+            Store(_) | Recall(_) => vec![port("out", "Out", Text)],
             BlockKind::Exchange(_) | Augment(_) => {
                 vec![port("out", "Exchange", ValueKind::Exchange)]
             }
             ReadExchange(_) => vec![
                 port("last", "Last message", Text),
                 port("all", "Transcript", Text),
+                port("calls", "Tool calls", Text),
             ],
-            Input(_) | History(_) | Fixed(_) | Combine(_) | ForEach(_) | Join(_) | ReadFile(_) => {
+            Input(_) | History(_) | Fixed(_) | Combine(_) | ForEach(_) | Join(_) => {
                 vec![port("out", "Out", Text)]
             }
-            WriteFile(_) => vec![port("out", "Path", Text)],
+            ReadFile(_) => vec![port("out", "Out", Text), failed()],
+            WriteFile(_) => vec![port("out", "Path", Text), failed()],
             Forward(_) | Remember(_) => vec![port("out", "Out", Any)],
-            Split(_) | Regex(_) | ListFiles(_) => vec![port("out", "List", List)],
+            Split(_) | Regex(_) => vec![port("out", "List", List)],
+            ListFiles(_) => vec![port("out", "List", List), failed()],
             Separate(p) => (1..=p.outputs.clamp(1, 10))
                 .map(|i| port(format!("out{i}"), format!("Item {i}"), Text))
                 .collect(),
@@ -421,6 +523,12 @@ impl BlockKind {
             }
             Branch(_) => vec![port("yes", "Matches", Any), port("no", "Doesn't", Any)],
         }
+    }
+
+    /// Whether this block has a Failed output, which carries the error
+    /// message instead of stopping the run (when something is linked to it).
+    pub fn can_fail_softly(&self) -> bool {
+        self.outputs().iter().any(|p| p.name == FAILED)
     }
 
     pub fn type_name(&self) -> &'static str {
@@ -446,6 +554,10 @@ impl BlockKind {
             ListFiles(_) => "list_files",
             RunTool(_) => "run_tool",
             AskUser(_) => "ask_user",
+            DeclineCalls(_) => "decline_calls",
+            FindCall(_) => "find_call",
+            Store(_) => "store",
+            Recall(_) => "recall",
             Exchange(_) => "exchange",
             Augment(_) => "augment",
             ReadExchange(_) => "read_exchange",
@@ -463,6 +575,8 @@ pub enum Category {
     Think,
     /// Blocks that wait for the person using Chummy.
     You,
+    /// Remembering text for the rest of the run.
+    Memory,
     Exchange,
     Text,
     Flow,
@@ -600,7 +714,7 @@ pub fn catalog() -> Vec<BlockInfo> {
             "llm",
             "Ask the model",
             Think,
-            "Asks the model. Give it text (with your prompt around it) or an exchange (which it continues). Its answer goes out of Answer; if it calls one of its tools, the exchange goes out of Tool call instead and Answer stays silent. Reasoning carries any thinking the model shows.",
+            "Asks the model. Give it text (with your prompt around it) or an exchange (which it continues). Its answer goes out of Answer; if it calls one of its tools, the exchange goes out of Tool call instead and Answer stays silent. Reasoning carries any thinking the model shows. If the call fails, the error goes out of Failed when something is linked to it (otherwise the run stops).",
             vec![
                 p(
                     "prompt",
@@ -676,8 +790,34 @@ pub fn catalog() -> Vec<BlockInfo> {
                     K::Integer { min: 0, max: 5 },
                     "",
                 ),
+                p(
+                    "tool_mode",
+                    "How tools are offered",
+                    choice(&[
+                        ("native", "Native (the model server's tool calling)"),
+                        ("prompted", "Prompted (described in the system message)"),
+                        ("off", "Off (the loop handles tools)"),
+                    ]),
+                    "Native suits most servers. Prompted works with models or servers that can't call tools. Off leaves tools to the loop: use _TOOLS_ in a prompt and a Find tool call block.",
+                ),
+                p(
+                    "network",
+                    "Tools may use the internet",
+                    K::Bool,
+                    "Also needs Internet access in Settings → Permissions, the tool's own internet switch, and the agent's.",
+                ),
+                p(
+                    "on_limit",
+                    "When the model's daily tokens run out",
+                    choice(&[
+                        ("ask", "Ask me for more"),
+                        ("wait", "Wait until tomorrow"),
+                        ("stop", "Stop the run"),
+                    ]),
+                    "Each model connection has a daily token limit (Settings → Models).",
+                ),
             ],
-            json!({ "prompt": "_INPUT_", "max_tokens": 1024 }),
+            json!({ "prompt": "_INPUT_", "max_tokens": 1024, "tool_mode": "native", "network": false, "on_limit": "ask" }),
         ),
         info(
             "run_tool",
@@ -740,6 +880,60 @@ pub fn catalog() -> Vec<BlockInfo> {
             json!({ "prompt": "_INPUT_", "timeout_minutes": 0, "default_answer": "" }),
         ),
         info(
+            "decline_calls",
+            "Decline tool calls",
+            Think,
+            "Answers the pending tool calls at the end of an exchange with “Not run” and the Reason, without running them. Use it when a check says a call is wrong; link it back to the model block.",
+            vec![],
+            json!({}),
+        ),
+        info(
+            "find_call",
+            "Find tool call",
+            Think,
+            "For loops that handle tools themselves: finds a tool call in the Text (<tool_call>{\"name\": …, \"arguments\": {…}}</tool_call>, or the same JSON on its own) and adds it to the exchange for Run tool. Text without a call goes out of No call.",
+            vec![
+                ParamSpec {
+                    optional: true,
+                    ..p("tools", "Tools", K::Tools, "Tools the text may call.")
+                },
+                p(
+                    "network",
+                    "Tools may use the internet",
+                    K::Bool,
+                    "Also needs Internet access in Settings → Permissions, the tool's own internet switch, and the agent's.",
+                ),
+            ],
+            json!({ "network": false }),
+        ),
+        info(
+            "store",
+            "Save to memory",
+            Memory,
+            "Saves its input under a name for the rest of the run, and passes it on. Any prompt can include it as {{name}}.",
+            vec![
+                p("key", "Name", K::Text, "Letters, digits and _, e.g. notes."),
+                p(
+                    "max_chars",
+                    "Longest (characters)",
+                    K::Integer {
+                        min: 100,
+                        max: 100000,
+                    },
+                    "Longer text keeps its end.",
+                ),
+            ],
+            json!({ "key": "notes", "max_chars": 4000 }),
+        ),
+        info(
+            "recall",
+            "Read memory",
+            Memory,
+            "When triggered, sends out the text saved under a name (empty if nothing is saved yet).",
+            vec![p("key", "Name", K::Text, "")],
+            json!({ "key": "notes" }),
+        ),
+        info(
             "exchange",
             "Start exchange",
             Exchange,
@@ -778,7 +972,7 @@ pub fn catalog() -> Vec<BlockInfo> {
             "read_exchange",
             "Read exchange",
             Exchange,
-            "Gets text out of an exchange: the last message (from a chosen role) and the whole transcript.",
+            "Gets text out of an exchange: the last message (from a chosen role), the whole transcript, and the tool calls waiting at its end (for checking them before they run).",
             vec![p(
                 "role",
                 "Last message from",

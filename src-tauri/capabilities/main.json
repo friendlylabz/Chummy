@@ -11,6 +11,7 @@
     "allow-setup-status",
     "allow-open-window",
     "allow-get-settings",
+    "allow-add-recommended-loop",
     "allow-set-theme",
     "allow-set-active-agent",
     "allow-get-chat",

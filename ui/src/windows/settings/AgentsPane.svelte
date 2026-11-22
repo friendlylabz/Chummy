@@ -6,8 +6,10 @@
   import Button from "$lib/components/Button.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
   import Icon from "$lib/components/Icon.svelte";
+  import AgentAccess from "./AgentAccess.svelte";
+  import AgentLoopConfig from "./AgentLoopConfig.svelte";
 
-  let { gotoModels }: { gotoModels: () => void } = $props();
+  let { gotoModels, gotoTools }: { gotoModels: () => void; gotoTools: () => void } = $props();
 
   let editing = $state<Agent | "new" | null>(null);
   let name = $state("");
@@ -19,6 +21,11 @@
   let saving = $state(false);
 
   const agents = $derived(settings.current.agents);
+  /** The agent being edited, kept current as its settings change. */
+  const live = $derived.by(() => {
+    const e = editing;
+    return e && e !== "new" ? (agents.find((a) => a.id === e.id) ?? null) : null;
+  });
   const providers = $derived(settings.current.providers);
   const defaultModel = $derived(
     providers.find((p) => p.id === settings.current.default_provider) ?? providers[0] ?? null,
@@ -30,7 +37,17 @@
     wsToken = null;
     if (a === "new") {
       name = agents.length ? "" : "Assistant";
-      loopId = loops.list[0]?.id ?? "";
+      // The recommended loop, if it's in the library.
+      loopId = (loops.list.find((l) => l.name === "Chummy assistant") ?? loops.list[0])?.id ?? "";
+      // Nothing set up yet: start with the recommended loop.
+      if (!loops.list.length) {
+        commands
+          .addRecommendedLoop()
+          .then((id) => {
+            if (editing === "new" && !loopId) loopId = id;
+          })
+          .catch(() => {});
+      }
       model = "";
       wsPath = "";
     } else {
@@ -74,6 +91,9 @@
   <button class="back" type="button" onclick={() => (editing = null)}><Icon name="chevron-left" size={16} />Agents</button>
   <h1>{editing === "new" ? "New agent" : `Edit ${editing.name}`}</h1>
   <p class="pane-sub">An agent runs one loop with one model, inside its own workspace folder.</p>
+  {#if editing === "new"}
+    <p class="pane-sub">New agents start with no tools and no internet. You can turn them on here after creating it.</p>
+  {/if}
 
   <div class="card card-pad">
     <div class="field">
@@ -94,8 +114,9 @@
       {:else}
         <div class="notice">
           <Icon name="flow" size={16} />
-          <span style="flex: 1">There are no loops yet. Create one in the loop editor first.</span>
-          <Button onclick={() => commands.openWindow("editor")}>Open loop editor</Button>
+          <span style="flex: 1">There are no loops yet. Add the recommended one, or build your own.</span>
+          <Button variant="primary" onclick={async () => { try { loopId = await commands.addRecommendedLoop(); } catch (e) { error = errorText(e); } }}>Use recommended</Button>
+          <Button variant="ghost" onclick={() => commands.openWindow("editor")}>Loop editor</Button>
         </div>
       {/if}
     </div>
@@ -147,6 +168,17 @@
       </Button>
     </div>
   </div>
+
+  {#if live}
+    <AgentAccess agent={live} {gotoTools} />
+    {#if loopId !== live.loop_id}
+      <div class="card card-pad">
+        <div class="notice"><Icon name="info" size={16} /><span>Save the agent to configure its new loop's blocks.</span></div>
+      </div>
+    {:else}
+      <AgentLoopConfig agent={live} />
+    {/if}
+  {/if}
 {:else}
   <header class="pane-head">
     <div>
@@ -181,6 +213,11 @@
             · {modelName(a.model)}
           </div>
           <div class="faint xs mono a-ws" title={a.workspace.path}>{a.workspace.path}</div>
+          <div class="faint xs">
+            {(a.tools ?? []).length ? `${(a.tools ?? []).length} tool${(a.tools ?? []).length === 1 ? "" : "s"}` : "No tools"}
+            · {a.network ? "internet allowed" : "offline"}
+            {#if Object.keys(a.loop_config?.[a.loop_id] ?? {}).length}· custom block settings{/if}
+          </div>
         </div>
         <div class="a-actions">
           {#if settings.current.active_agent !== a.id}

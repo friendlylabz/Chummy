@@ -34,7 +34,8 @@ mod types;
 
 pub use client::Client;
 pub use config::{
-    LocalModel, Precision, Preset, ProviderConfig, ProviderKind, endpoint_problem, presets,
+    DEFAULT_DAILY_TOKENS, LocalModel, Precision, Preset, ProviderConfig, ProviderKind,
+    endpoint_problem, presets,
 };
 pub use error::LlmError;
 pub use probe::{ProbeReport, ProbeStep, StepStatus, probe};

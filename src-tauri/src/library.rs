@@ -99,8 +99,11 @@ impl Library {
 
     /// Saves atomically. Loops with validation errors may be saved (work in
     /// progress); agents just can't run them until they're fixed.
+    /// Saves a loop, always in the current format version.
     pub fn save(&self, id: &str, file: &LoopFile) -> Result<(), String> {
         let path = self.path(id)?;
+        let mut file = file.clone();
+        file.version = chummy_flow::VERSION;
         let tmp = self.dir.join(format!("{id}.json.tmp"));
         {
             use std::io::Write;
@@ -154,7 +157,11 @@ mod tests {
     fn save_list_load_delete() {
         let tmp = tempfile::tempdir().unwrap();
         let lib = Library::new(tmp.path());
-        let file = chummy_flow::templates().remove(1).file;
+        let file = chummy_flow::templates()
+            .into_iter()
+            .find(|t| t.id == "simple_chat")
+            .unwrap()
+            .file;
         let id = lib.new_id(&file.name);
         assert_eq!(id, "simple-chat");
         lib.save(&id, &file).unwrap();

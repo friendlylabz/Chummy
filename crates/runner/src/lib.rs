@@ -13,12 +13,14 @@
 //! the host builds from its own settings. Nothing a loop or a job says can
 //! widen them.
 
-use std::collections::{BTreeMap, HashMap};
+pub mod usage;
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::sync::Arc;
 
 use chummy_flow::{
-    Answer, Ask, Event, ExMessage, Host, LlmAnswer, LlmCall, LoopFile, MalformedCall, Role,
+    Answer, Ask, Budget, Event, ExMessage, Host, LlmAnswer, LlmCall, LoopFile, MalformedCall, Role,
     RunInputs, RunOutcome, RunStatus, ToolInfo, ToolOutput, run,
 };
 use chummy_llm::{ChatEvent, ChatRequest, Client, Message, ProviderConfig, ProviderKind, ToolSpec};
@@ -65,6 +67,15 @@ pub struct ToolGrant {
     pub ask: bool,
 }
 
+/// What one agent may use, on top of the app-wide switches.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentGrant {
+    /// Tools this agent may call.
+    pub tools: BTreeSet<String>,
+    /// This agent's tools may use the internet.
+    pub network: bool,
+}
+
 /// Everything one run of an agent may use.
 pub struct AgentSetup {
     /// Every model connection (blocks may pick one).
@@ -73,6 +84,9 @@ pub struct AgentSetup {
     pub model: Option<ProviderConfig>,
     pub permissions: Permissions,
     pub tool_grants: BTreeMap<String, ToolGrant>,
+    /// The agent's own switches; `None` (a test run without an agent) allows
+    /// no tools.
+    pub agent: Option<AgentGrant>,
     /// Tools installed now.
     pub installed: Vec<ToolManifest>,
     /// The agent's folder; `None` for editor test runs without an agent.
@@ -82,6 +96,8 @@ pub struct AgentSetup {
     pub asks: Option<(AskBroker, Origin)>,
     /// IANA zone name handed to tools as `TZ`.
     pub time_zone: Option<String>,
+    /// Where tokens are counted for daily limits; `None` means no limits.
+    pub usage: Option<Arc<usage::UsageLedger>>,
 }
 
 /// Connects the engine to the world for one run.
@@ -91,6 +107,8 @@ pub struct AgentHost<S: Services> {
     model: Option<ProviderConfig>,
     permissions: Permissions,
     grants: BTreeMap<String, ToolGrant>,
+    agent: AgentGrant,
+    usage: Option<Arc<usage::UsageLedger>>,
     /// Tools this run may call: installed, switched on, tools allowed.
     tools: HashMap<String, ToolManifest>,
     jail: Option<Jail>,
@@ -136,11 +154,16 @@ pub fn to_llm_message(m: &ExMessage) -> Message {
 
 impl<S: Services> AgentHost<S> {
     pub fn new(services: Arc<S>, setup: AgentSetup) -> Self {
+        let agent = setup.agent.unwrap_or_default();
+        // A tool is offered only with all three switched on: tools in the
+        // app, the tool itself, and the tool for this agent. (Blocks then
+        // choose among these.)
         let tools = if setup.permissions.tools {
             setup
                 .installed
                 .into_iter()
                 .filter(|m| setup.tool_grants.get(&m.name).is_some_and(|g| g.enabled))
+                .filter(|m| agent.tools.contains(&m.name))
                 .map(|m| (m.name.clone(), m))
                 .collect()
         } else {
@@ -152,6 +175,8 @@ impl<S: Services> AgentHost<S> {
             model: setup.model,
             permissions: setup.permissions,
             grants: setup.tool_grants,
+            agent,
+            usage: setup.usage,
             tools,
             jail: setup.jail,
             asks: setup.asks,
@@ -166,23 +191,39 @@ impl<S: Services> AgentHost<S> {
             .ok_or_else(|| "This test run has no workspace. Pick an agent to run as.".to_string())
     }
 
-    fn grant(&self, name: &str) -> ToolGrant {
+    fn tool_grant(&self, name: &str) -> ToolGrant {
         self.grants.get(name).copied().unwrap_or_default()
     }
 
-    /// Whether `m` may use the internet now, and if not, why (for the model).
-    pub fn net_policy(&self, m: &ToolManifest) -> NetPolicy {
+    /// Whether `m` may use the internet for a call from a block whose
+    /// internet switch is `online`, and if not, why (for the model). Every
+    /// switch must be on: the app's, the tool's, the agent's and the block's.
+    pub fn net_policy(&self, m: &ToolManifest, online: bool) -> NetPolicy {
         if !m.network {
             NetPolicy::off(format!("{} doesn't use the internet.", m.title))
         } else if !self.permissions.network {
             NetPolicy::off("Internet access is off in Chummy, so this tool can't go online.")
-        } else if !self.grant(&m.name).network {
+        } else if !self.tool_grant(&m.name).network {
             NetPolicy::off(format!(
                 "Internet access is off for “{}”, so it can't go online.",
                 m.title
             ))
+        } else if !self.agent.network {
+            NetPolicy::off("Internet access is off for this agent, so this tool can't go online.")
+        } else if !online {
+            NetPolicy::off(
+                "This step of the loop isn't allowed to use the internet, so this tool can't go online.",
+            )
         } else {
             NetPolicy::on()
+        }
+    }
+
+    /// The model connection a call would use.
+    fn provider(&self, model: Option<&str>) -> Option<&ProviderConfig> {
+        match model {
+            Some(id) => self.providers.iter().find(|p| p.id == id),
+            None => self.model.as_ref(),
         }
     }
 
@@ -241,6 +282,12 @@ impl<S: Services> Host for AgentHost<S> {
             max_tokens: Some(call.max_tokens),
         };
         let mut malformed = Vec::new();
+        let sent_chars: usize = req.messages.iter().map(|m| m.content.len()).sum::<usize>()
+            + req
+                .tools
+                .iter()
+                .map(|t| t.description.len() + t.parameters.to_string().len())
+                .sum::<usize>();
         let resp = client
             .chat(&req, |ev| match ev {
                 ChatEvent::Text { text } => on_text(text),
@@ -255,6 +302,22 @@ impl<S: Services> Host for AgentHost<S> {
             })
             .await
             .map_err(|e| format!("{}: {e}", provider.name))?;
+        if let Some(ledger) = &self.usage {
+            let tokens = match resp.usage {
+                Some(u) => u64::from(u.input_tokens) + u64::from(u.output_tokens),
+                None => usage::estimate_tokens(
+                    sent_chars
+                        + resp.text.len()
+                        + resp.reasoning.len()
+                        + resp
+                            .tool_calls
+                            .iter()
+                            .map(|c| c.arguments.to_string().len())
+                            .sum::<usize>(),
+                ),
+            };
+            ledger.add(&provider.id, tokens);
+        }
         Ok(LlmAnswer {
             text: resp.text,
             reasoning: resp.reasoning,
@@ -265,6 +328,7 @@ impl<S: Services> Host for AgentHost<S> {
                     id: c.id,
                     name: c.name,
                     arguments: c.arguments,
+                    online: false,
                 })
                 .collect(),
             malformed,
@@ -283,6 +347,7 @@ impl<S: Services> Host for AgentHost<S> {
         &self,
         name: &str,
         arguments: serde_json::Value,
+        online: bool,
     ) -> Result<ToolOutput, String> {
         let Some(m) = self.tools.get(name) else {
             return Ok(ToolOutput {
@@ -302,7 +367,7 @@ impl<S: Services> Host for AgentHost<S> {
                 name,
                 arguments,
                 workspace.as_deref(),
-                self.net_policy(m),
+                self.net_policy(m, online),
                 env,
             )
             .await
@@ -356,12 +421,35 @@ impl<S: Services> Host for AgentHost<S> {
         }
     }
 
-    fn must_confirm(&self, tool: &str) -> bool {
+    fn must_confirm(&self, tool: &str, online: bool) -> bool {
         let Some(m) = self.tools.get(tool) else {
             return false;
         };
-        self.grant(tool).ask
-            || (self.permissions.confirm_online_tools && self.net_policy(m).allowed)
+        self.tool_grant(tool).ask
+            || (self.permissions.confirm_online_tools && self.net_policy(m, online).allowed)
+    }
+
+    fn budget(&self, model: Option<&str>) -> Budget {
+        let (Some(ledger), Some(p)) = (&self.usage, self.provider(model)) else {
+            return Budget::Ok;
+        };
+        if !ledger.exhausted(&p.id, p.daily_tokens) {
+            return Budget::Ok;
+        }
+        let limit = p.daily_tokens.unwrap_or(0);
+        Budget::Exhausted {
+            model: p.name.clone(),
+            used: ledger.today(&p.id).used,
+            limit,
+            resets_in: usage::until_midnight(),
+            extra: (limit / 4).max(10_000),
+        }
+    }
+
+    fn grant(&self, model: Option<&str>, tokens: u64) {
+        if let (Some(ledger), Some(p)) = (&self.usage, self.provider(model)) {
+            ledger.grant(&p.id, tokens);
+        }
     }
 }
 
@@ -466,7 +554,8 @@ pub async fn run_job<S: Services>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chummy_flow::{AskKind, Block, Link, PortRef, Position};
+    use chummy_flow::{AskKind, Block, Link, Position};
+    use chummy_llm::ProviderKind;
     use chummy_sandbox::Protected;
     use chummy_scheduler::{Job, RunKind};
     use serde_json::json;
@@ -510,88 +599,130 @@ mod tests {
             model: None,
             permissions: Permissions::default(),
             tool_grants: BTreeMap::new(),
+            agent: Some(AgentGrant {
+                tools: ["calc".to_string(), "fetch".to_string()].into(),
+                network: true,
+            }),
             installed: vec![manifest("calc", false), manifest("fetch", true)],
             jail,
             asks: None,
             time_zone: None,
+            usage: None,
         }
+    }
+
+    fn all_on() -> AgentSetup {
+        let mut s = setup(None);
+        s.permissions = Permissions {
+            tools: true,
+            network: true,
+            confirm_online_tools: true,
+        };
+        for name in ["calc", "fetch"] {
+            s.tool_grants.insert(
+                name.into(),
+                ToolGrant {
+                    enabled: true,
+                    network: true,
+                    ask: false,
+                },
+            );
+        }
+        s
     }
 
     #[test]
     fn tools_need_every_switch_and_online_tools_ask() {
-        // Tools off: nothing offered, whatever the per-tool switches say.
-        let mut s = setup(None);
-        s.tool_grants.insert(
-            "calc".into(),
-            ToolGrant {
-                enabled: true,
-                ..Default::default()
-            },
+        // Tools off in the app: nothing offered, whatever else says.
+        let mut s = all_on();
+        s.permissions.tools = false;
+        assert!(
+            AgentHost::new(Arc::new(NoServices), s)
+                .tool_info("calc")
+                .is_none()
         );
-        let h = AgentHost::new(Arc::new(NoServices), s);
-        assert!(h.tool_info("calc").is_none());
 
-        let mut s = setup(None);
-        s.permissions = Permissions {
-            tools: true,
-            network: true,
-            confirm_online_tools: true,
-        };
-        s.tool_grants.insert(
-            "calc".into(),
-            ToolGrant {
-                enabled: true,
-                ..Default::default()
-            },
-        );
-        s.tool_grants.insert(
-            "fetch".into(),
-            ToolGrant {
-                enabled: true,
-                network: true,
-                ask: false,
-            },
-        );
-        let h = AgentHost::new(Arc::new(NoServices), s);
+        // Everything on.
+        let h = AgentHost::new(Arc::new(NoServices), all_on());
         assert!(h.tool_info("calc").is_some() && h.tool_info("fetch").is_some());
         assert!(
-            !h.must_confirm("calc"),
+            !h.must_confirm("calc", true),
             "offline tools don't ask by default"
         );
-        assert!(h.must_confirm("fetch"), "online tools ask");
-        assert!(!h.must_confirm("missing"));
+        assert!(h.must_confirm("fetch", true), "online tools ask");
+        assert!(!h.must_confirm("missing", true));
+        assert!(h.net_policy(&manifest("fetch", true), true).allowed);
 
-        // With the tool's internet off, it can't go online, so it doesn't ask.
-        let mut s = setup(None);
-        s.permissions = Permissions {
-            tools: true,
-            network: true,
-            confirm_online_tools: true,
-        };
-        s.tool_grants.insert(
-            "fetch".into(),
-            ToolGrant {
-                enabled: true,
-                network: false,
-                ask: false,
-            },
-        );
+        // The block's switch: a call from a block without internet can't go
+        // online, so it doesn't need asking either.
+        assert!(!h.net_policy(&manifest("fetch", true), false).allowed);
+        assert!(!h.must_confirm("fetch", false));
+
+        // The agent's switches.
+        let mut s = all_on();
+        s.agent = Some(AgentGrant {
+            tools: ["fetch".to_string()].into(),
+            network: false,
+        });
         let h = AgentHost::new(Arc::new(NoServices), s);
-        assert!(!h.must_confirm("fetch"));
-        assert!(!h.net_policy(&manifest("fetch", true)).allowed);
+        assert!(
+            h.tool_info("calc").is_none(),
+            "not one of this agent's tools"
+        );
+        let why = h.net_policy(&manifest("fetch", true), true);
+        assert!(!why.allowed && why.refusal.contains("this agent"));
+        // No agent (a test run without one): no tools.
+        let mut s = all_on();
+        s.agent = None;
+        assert!(
+            AgentHost::new(Arc::new(NoServices), s)
+                .tool_info("calc")
+                .is_none()
+        );
+
+        // The tool's own internet switch.
+        let mut s = all_on();
+        s.tool_grants.get_mut("fetch").unwrap().network = false;
+        let h = AgentHost::new(Arc::new(NoServices), s);
+        assert!(!h.must_confirm("fetch", true));
+        assert!(!h.net_policy(&manifest("fetch", true), true).allowed);
+
         // A tool set to always ask does.
+        let mut s = all_on();
+        s.tool_grants.get_mut("calc").unwrap().ask = true;
+        assert!(AgentHost::new(Arc::new(NoServices), s).must_confirm("calc", false));
+    }
+
+    #[test]
+    fn daily_limits_come_from_the_connection() {
+        let p = |id: &str, limit: Option<u64>| ProviderConfig {
+            id: id.into(),
+            name: id.to_uppercase(),
+            kind: ProviderKind::OpenAiCompatible,
+            base_url: "http://localhost:1/v1".into(),
+            model: "m".into(),
+            local: None,
+            temperature: None,
+            daily_tokens: limit,
+        };
+        let ledger = Arc::new(usage::UsageLedger::in_memory());
         let mut s = setup(None);
-        s.permissions.tools = true;
-        s.tool_grants.insert(
-            "calc".into(),
-            ToolGrant {
-                enabled: true,
-                network: false,
-                ask: true,
-            },
-        );
+        s.providers = vec![p("a", Some(100_000)), p("b", None)];
+        s.model = Some(p("a", Some(100_000)));
+        s.usage = Some(ledger.clone());
         let h = AgentHost::new(Arc::new(NoServices), s);
-        assert!(h.must_confirm("calc"));
+        assert_eq!(h.budget(None), Budget::Ok);
+        ledger.add("a", 100_000);
+        ledger.add("b", 9_999_999);
+        match h.budget(None) {
+            Budget::Exhausted { model, extra, .. } => {
+                assert_eq!((model.as_str(), extra), ("A", 25_000))
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(h.budget(Some("b")), Budget::Ok, "no limit");
+        Host::grant(&h, None, 25_000);
+        assert_eq!(h.budget(None), Budget::Ok);
     }
 
     #[tokio::test]
@@ -637,20 +768,12 @@ mod tests {
             label: id.into(),
             position: Position::default(),
             params,
+            comment: String::new(),
         }
     }
 
     fn link(a: &str, ap: &str, b: &str, bp: &str) -> Link {
-        Link {
-            from: PortRef {
-                block: a.into(),
-                port: ap.into(),
-            },
-            to: PortRef {
-                block: b.into(),
-                port: bp.into(),
-            },
-        }
+        Link::new((a, ap), (b, bp))
     }
 
     #[tokio::test]

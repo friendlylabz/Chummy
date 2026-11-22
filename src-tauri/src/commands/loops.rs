@@ -1,6 +1,8 @@
 //! The loop library and the editor's helpers.
 
-use chummy_flow::{Analysis, BlockInfo, LoopFile, Template, analyze, catalog, templates};
+use chummy_flow::{
+    ASSISTANT, Analysis, BlockInfo, LoopFile, Template, analyze, catalog, templates,
+};
 use tauri::{AppHandle, Emitter, State, WebviewWindow};
 
 use super::CmdResult;
@@ -60,6 +62,33 @@ pub fn save_loop(
         .unwrap_or_else(|| state.library.new_id(&file.name));
     state.library.save(&id, &file)?;
     changed(&app, &state);
+    Ok(id)
+}
+
+/// Adds the recommended loop (the Chummy assistant template) to the library,
+/// or finds the copy already there. Returns its id.
+#[tauri::command]
+pub fn add_recommended_loop(app: AppHandle, state: State<'_, AppState>) -> CmdResult<String> {
+    let id = recommended_loop(&state)?;
+    changed(&app, &state);
+    Ok(id)
+}
+
+pub fn recommended_loop(state: &AppState) -> CmdResult<String> {
+    let t = templates()
+        .into_iter()
+        .find(|t| t.id == ASSISTANT)
+        .ok_or("The recommended loop is missing.")?;
+    if let Some(found) = state
+        .library
+        .list()
+        .into_iter()
+        .find(|l| l.name == t.file.name)
+    {
+        return Ok(found.id);
+    }
+    let id = state.library.new_id(&t.file.name);
+    state.library.save(&id, &t.file)?;
     Ok(id)
 }
 

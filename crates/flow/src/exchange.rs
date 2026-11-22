@@ -36,6 +36,10 @@ pub struct ToolCall {
     pub name: String,
     /// Always a JSON object.
     pub arguments: Json,
+    /// The block that made this call lets its tools use the internet. (The
+    /// app and the agent must allow it too.)
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub online: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -300,6 +304,7 @@ mod tests {
             id: "1".into(),
             name: "read_file".into(),
             arguments: json!({ "path": "a" }),
+            online: false,
         };
         let mut ex = Exchange {
             messages: vec![ExMessage::new(Role::User, "hi")],

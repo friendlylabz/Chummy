@@ -107,6 +107,10 @@
     </div>
   {/if}
 
+  <p class="muted small" style="margin-bottom: var(--space-3)">
+    Switching a tool on here makes it available. An agent uses it only once you also allow it for that agent (Agents)
+    and tick it in the loop block that calls it.
+  </p>
   <div class="section-label">Installed</div>
   <div class="card rows">
     {#each s.tools as t (t.name)}
@@ -128,6 +132,7 @@
               <div class="small">Internet access for this tool</div>
               <div class="faint xs">
                 {#if !perms.network}Also needs Internet access in Permissions.{:else}Can't reach this computer or your local network.{/if}
+                Each agent and block must allow the internet too.
               </div>
             </div>
             <Toggle checked={t.network_allowed} label="Internet for {t.title}" onchange={(v) => net(t, v)} />

@@ -61,6 +61,7 @@ impl JobRunner for AppJobs {
         let host = agent_host(
             app,
             &s,
+            Some(&agent),
             s.agent_model(&agent).cloned(),
             Some(jail),
             Some(origin),

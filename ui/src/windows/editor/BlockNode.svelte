@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Handle, Position, useUpdateNodeInternals, type NodeProps } from "@xyflow/svelte";
   import { loops } from "$lib/stores/loops.svelte";
-  import { categoryColor, editorActions, summary, type BlockNode } from "./loopdoc";
+  import { FAILED, categoryColor, editorActions, summary, type BlockNode } from "./loopdoc";
 
   let { id, data, selected }: NodeProps<BlockNode> = $props();
 
@@ -39,6 +39,9 @@
     <div class="type">{info.label}</div>
   {/if}
   {#if text}<div class="summary">{text}</div>{/if}
+  {#if data.block.comment?.trim()}
+    <div class="comment" title={data.block.comment}>{data.block.comment.trim()}</div>
+  {/if}
 
   {#if data.inputs.length || data.outputs.length}
     <div class="ports">
@@ -52,7 +55,7 @@
       </div>
       <div class="col right">
         {#each data.outputs as p (p.name)}
-          <div class="port out">
+          <div class="port out" class:fail={p.name === FAILED} title={p.name === FAILED ? "Gets the failure message. Leave it unlinked to stop the run on failure." : undefined}>
             <span class:exposed={data.exposedOut?.includes(p.name)} title={data.exposedOut?.includes(p.name) ? "Function output" : undefined}>{p.label}</span>
             <Handle type="source" position={Position.Right} id={p.name} class="h kind-{p.kind}" />
           </div>
@@ -219,6 +222,26 @@
   }
   .port.out :global(.h) {
     right: -5px;
+  }
+  .comment {
+    margin: 6px var(--space-3) 0;
+    padding-left: var(--space-2);
+    border-left: 2px solid color-mix(in srgb, #e8c16d 70%, transparent);
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    font-style: italic;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-word;
+  }
+  .port.fail {
+    color: color-mix(in srgb, var(--danger) 80%, var(--text-muted));
+  }
+  .port.fail :global(.h) {
+    background: var(--danger);
   }
   .output {
     margin: 0 var(--space-2) var(--space-2);

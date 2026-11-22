@@ -17,7 +17,7 @@ mod windows;
 
 use tauri::{Manager, RunEvent, WindowEvent};
 
-use commands::{agents, asks, chat, general, jobs, local, loops, providers, tools};
+use commands::{agent_setup, agents, asks, chat, general, jobs, local, loops, providers, tools};
 use state::AppState;
 
 pub fn run() {
@@ -87,6 +87,7 @@ pub fn run() {
             loops::load_loop,
             loops::analyze_loop,
             loops::save_loop,
+            loops::add_recommended_loop,
             loops::delete_loop,
             loops::import_loop,
             loops::export_loop,
@@ -119,6 +120,12 @@ pub fn run() {
             tools::set_tool_enabled,
             tools::set_tool_network,
             tools::set_tool_ask,
+            agent_setup::set_agent_access,
+            agent_setup::agent_loop_config,
+            agent_setup::set_agent_block_config,
+            agent_setup::export_agent_loop_config,
+            agent_setup::import_agent_loop_config,
+            agent_setup::usage_today,
             general::set_general,
             jobs::list_jobs,
             jobs::save_job,

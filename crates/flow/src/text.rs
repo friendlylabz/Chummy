@@ -110,6 +110,7 @@ pub fn truncate(s: &str, max: usize) -> String {
 
 /// Replaces `_INPUT_` in `prompt` with `input`, or appends the input if the
 /// placeholder isn't there.
+#[cfg(test)]
 pub fn fill_prompt(prompt: &str, input: &str) -> String {
     if prompt.trim().is_empty() {
         input.to_string()
@@ -122,14 +123,108 @@ pub fn fill_prompt(prompt: &str, input: &str) -> String {
     }
 }
 
+/// Memory saved during a run, read in templates as `{{name}}`.
+pub type Memory = std::collections::HashMap<String, String>;
+
+/// Whether `name` is a valid memory name: 1–40 letters, digits or `_`.
+pub fn valid_memory_key(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 40
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Fills `{{name}}` from memory (empty if nothing is saved under it) and, if
+/// `input` is given, `_INPUT_` with it, in one pass, so text that comes from
+/// memory or the input is never itself searched for placeholders. Without
+/// `_INPUT_` in the template, the input is added after it (as
+/// [`fill_prompt`] does).
+pub fn fill_template(template: &str, input: Option<&str>, memory: &Memory) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    let mut used_input = false;
+    loop {
+        let next_mem = rest.find("{{");
+        let next_in = input.and(rest.find("_INPUT_"));
+        let i = match (next_mem, next_in) {
+            (None, None) => break,
+            (Some(a), None) => a,
+            (None, Some(b)) => b,
+            (Some(a), Some(b)) => a.min(b),
+        };
+        out.push_str(&rest[..i]);
+        let tail = &rest[i..];
+        if let (Some(inp), true) = (input, tail.starts_with("_INPUT_")) {
+            out.push_str(inp);
+            used_input = true;
+            rest = &tail["_INPUT_".len()..];
+            continue;
+        }
+        // `{{name}}`
+        match tail[2..].find("}}") {
+            Some(end) if valid_memory_key(tail[2..2 + end].trim()) => {
+                let key = tail[2..2 + end].trim();
+                out.push_str(memory.get(key).map(String::as_str).unwrap_or(""));
+                rest = &tail[2 + end + 2..];
+            }
+            _ => {
+                out.push_str("{{");
+                rest = &tail[2..];
+            }
+        }
+    }
+    out.push_str(rest);
+    match input {
+        Some(inp) if !used_input => {
+            if out.trim().is_empty() {
+                inp.to_string()
+            } else if inp.is_empty() {
+                out
+            } else {
+                format!("{out}\n\n{inp}")
+            }
+        }
+        _ => out,
+    }
+}
+
 /// Replaces `_INPUT1_`, `_INPUT2_`, … with `values`, in one pass, so text
 /// that arrives on one input is never rewritten by another.
+#[cfg(test)]
 pub fn fill_numbered(format: &str, values: &[String]) -> String {
+    fill_numbered_with(format, values, &Memory::new())
+}
+
+/// [`fill_numbered`] that also fills `{{name}}` from memory, in the same pass.
+pub fn fill_numbered_with(format: &str, values: &[String], memory: &Memory) -> String {
     let mut out = String::with_capacity(format.len());
     let mut rest = format;
-    while let Some(i) = rest.find("_INPUT") {
+    loop {
+        let i = match (rest.find("_INPUT"), rest.find("{{")) {
+            (None, None) => break,
+            (Some(a), None) | (None, Some(a)) => a,
+            (Some(a), Some(b)) => a.min(b),
+        };
         out.push_str(&rest[..i]);
-        let after = &rest[i + "_INPUT".len()..];
+        let tail = &rest[i..];
+        if let Some(inner) = tail.strip_prefix("{{") {
+            match inner.find("}}") {
+                Some(end) if valid_memory_key(inner[..end].trim()) => {
+                    out.push_str(
+                        memory
+                            .get(inner[..end].trim())
+                            .map(String::as_str)
+                            .unwrap_or(""),
+                    );
+                    rest = &inner[end + 2..];
+                }
+                _ => {
+                    out.push_str("{{");
+                    rest = inner;
+                }
+            }
+            continue;
+        }
+        let after = &tail["_INPUT".len()..];
         let digits = after.chars().take_while(|c| c.is_ascii_digit()).count();
         let n: Option<usize> = after[..digits].parse().ok();
         match n {
@@ -215,5 +310,27 @@ mod tests {
         assert_eq!(fill_prompt("Q: _INPUT_?", "x"), "Q: x?");
         assert_eq!(fill_prompt("Summarize.", "text"), "Summarize.\n\ntext");
         assert_eq!(fill_prompt("", "just this"), "just this");
+    }
+
+    #[test]
+    fn templates_fill_memory_and_input_once() {
+        let mut m = Memory::new();
+        m.insert("notes".into(), "saw _INPUT_ and {{notes}}".into());
+        assert_eq!(
+            fill_template("Notes: {{notes}}\nTask: _INPUT_", Some("do {{notes}}"), &m),
+            "Notes: saw _INPUT_ and {{notes}}\nTask: do {{notes}}"
+        );
+        // Unknown names are empty; things that aren't names are left alone.
+        assert_eq!(
+            fill_template("[{{missing}}] {{not a name}} {{", None, &m),
+            "[] {{not a name}} {{"
+        );
+        // Without _INPUT_, the input goes after.
+        assert_eq!(fill_template("Do this:", Some("x"), &m), "Do this:\n\nx");
+        assert_eq!(fill_template("", Some("x"), &m), "x");
+        assert_eq!(
+            fill_template("{{ notes }}", None, &m),
+            "saw _INPUT_ and {{notes}}"
+        );
     }
 }

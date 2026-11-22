@@ -201,8 +201,11 @@ impl AskBroker {
             }
             (AskKind::Question, Answer::Text(_)) => {}
             (AskKind::Question, _) => return Err(AnswerError::NeedsText),
-            (AskKind::ToolApproval { .. }, Answer::Allow | Answer::Deny(_)) => {}
-            (AskKind::ToolApproval { .. }, Answer::Text(_)) => {
+            (
+                AskKind::ToolApproval { .. } | AskKind::Budget { .. },
+                Answer::Allow | Answer::Deny(_),
+            ) => {}
+            (AskKind::ToolApproval { .. } | AskKind::Budget { .. }, Answer::Text(_)) => {
                 return Err(AnswerError::NeedsDecision);
             }
         }

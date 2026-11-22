@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import { commands, errorText, type Preset, type ProbeReport, type ProviderConfig, type ProviderView } from "$lib/ipc";
+  import { DEFAULT_DAILY_TOKENS, commands, errorText, type Preset, type ProbeReport, type ProviderConfig, type ProviderView } from "$lib/ipc";
   import { kindLabel } from "$lib/format";
   import Button from "$lib/components/Button.svelte";
   import Icon from "$lib/components/Icon.svelte";
@@ -26,6 +26,11 @@
   let model = $state(start?.model ?? "");
   let temperature = $state(start?.temperature != null ? String(start.temperature) : "");
   let apiKey = $state("");
+  const limit0 = start ? (start.daily_tokens ?? null) : DEFAULT_DAILY_TOKENS;
+  let limitOn = $state(limit0 !== null);
+  let limit = $state(String(limit0 ?? DEFAULT_DAILY_TOKENS));
+  const limitValue = $derived(Math.round(Number(limit.replace(/[,_\s]/g, ""))));
+  const limitBad = $derived(limitOn && (!Number.isFinite(limitValue) || limitValue < 1000));
   let removeKey = $state(false);
   const kind = start?.kind ?? p0?.kind ?? "open_ai_compatible";
   const needsKey = p0?.needs_key ?? (start ? start.has_key : false);
@@ -49,6 +54,7 @@
       model: model.trim(),
       local: start?.local ?? null,
       temperature: t != null && !isNaN(t) ? t : null,
+      daily_tokens: limitOn ? limitValue : null,
     };
   }
 
@@ -153,6 +159,28 @@
     <span class="hint">Lower is more predictable. Small models often do best around 0.2–0.4.</span>
   </div>
 
+  <div class="field">
+    <span class="label">Daily token limit</span>
+    <div class="input-row limit">
+      <label class="inline first"><input type="checkbox" bind:checked={limitOn} /> Limit to</label>
+      <input
+        class="input"
+        style="width: 150px"
+        bind:value={limit}
+        inputmode="numeric"
+        disabled={!limitOn}
+        aria-label="Tokens per day"
+        aria-invalid={limitBad}
+      />
+      <span class="muted small">tokens a day</span>
+    </div>
+    <span class="hint">
+      {#if limitBad}At least 1,000 tokens.
+      {:else}Counts what every agent and job sends to and gets from this model, and resets at midnight. When it runs out,
+        each model block waits, stops, or asks you for more, as set in the block. Turn it off for no limit.{/if}
+    </span>
+  </div>
+
   {#if report}
     <div class="results"><ProbeResults {report} /></div>
   {/if}
@@ -166,7 +194,7 @@
     </Button>
     <span class="spacer"></span>
     <Button variant="ghost" onclick={oncancel}>Cancel</Button>
-    <Button variant="primary" onclick={save} disabled={saving || !name.trim() || !model.trim()}>
+    <Button variant="primary" onclick={save} disabled={saving || !name.trim() || !model.trim() || limitBad}>
       {start ? "Save" : "Add model"}
     </Button>
   </div>
@@ -181,6 +209,12 @@
     margin-top: var(--space-5);
     padding-top: var(--space-4);
     border-top: 1px solid var(--border);
+  }
+  .limit {
+    align-items: center;
+  }
+  .inline.first {
+    margin-left: 0;
   }
   .inline {
     display: inline-flex;

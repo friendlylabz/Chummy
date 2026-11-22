@@ -13,27 +13,30 @@
 //! See `docs/loop-format.md` for the file format.
 
 mod blocks;
+mod config;
 mod engine;
 mod exchange;
 mod format;
+pub mod prompted;
 mod templates;
 mod text;
 mod validate;
 
 pub use blocks::{
-    BadCall, BlockInfo, BlockKind, Category, ChoiceOption, OnToolError, ParamKind, ParamSpec,
-    PortSpec, RoleFilter, ToolChoice, ValueKind, catalog,
+    BadCall, BlockInfo, BlockKind, Category, ChoiceOption, FAILED, OnLimit, OnToolError, ParamKind,
+    ParamSpec, PortSpec, RoleFilter, ToolChoice, ToolMode, ValueKind, catalog,
 };
+pub use config::{CONFIG_FORMAT, LoopConfig, Overrides, find_block};
 pub use engine::{
-    Answer, Ask, AskKind, BlockState, ChatTurn, Event, Host, LlmAnswer, LlmCall, MalformedCall,
-    RunInputs, RunLimits, RunOutcome, RunStatus, ToolOutput, Value, run,
+    Answer, Ask, AskKind, BlockState, Budget, ChatTurn, Event, Host, LlmAnswer, LlmCall,
+    MalformedCall, RunInputs, RunLimits, RunOutcome, RunStatus, ToolOutput, Value, run,
 };
 pub use exchange::{ExMessage, Exchange, Role, ToolCall, ToolInfo, check_arguments};
 pub use format::{
-    Block, FORMAT, FunctionDef, FunctionInput, FunctionOutput, Link, LoopFile, PortRef, Position,
-    VERSION,
+    Block, FORMAT, FunctionDef, FunctionInput, FunctionOutput, Link, LoopFile, Note, PortRef,
+    Position, VERSION,
 };
-pub use templates::{Template, templates};
+pub use templates::{ASSISTANT, Template, templates};
 pub use validate::{Analysis, BlockPorts, FunctionPorts, Issue, Severity, analyze};
 
 #[derive(Debug, thiserror::Error)]

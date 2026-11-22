@@ -1,4 +1,4 @@
-# The Chummy loop format (`chummy.loop`, version 1)
+# The Chummy loop format (`chummy.loop`, version 2)
 
 A loop is how an agent thinks: a directed graph of **blocks** that pass text
 (and conversations with the model) to each other along **links**, from the
@@ -11,26 +11,28 @@ file means exactly one thing.
 ```json
 {
   "format": "chummy.loop",
-  "version": 1,
+  "version": 2,
   "name": "Simple chat",
   "description": "Answers each message with the recent conversation as context.",
   "limits": { "max_steps": 200, "max_llm_calls": 20, "max_tool_calls": 20 },
   "blocks": [ … ],
   "links": [ … ],
-  "functions": [ … ]
+  "functions": [ … ],
+  "notes": [ … ]
 }
 ```
 
 | Field         | Type   | Required | Meaning |
 |---------------|--------|----------|---------|
 | `format`      | string | yes      | Always `"chummy.loop"`. |
-| `version`     | number | yes      | Format version. This document describes `1`. Newer versions are refused, never guessed at. |
+| `version`     | number | yes      | Format version. This document describes `2`. Version `1` files (no comments, labels or notes) still load; newer versions are refused, never guessed at. Chummy saves as `2`. |
 | `name`        | string | yes      | Display name. |
 | `description` | string | no       | Defaults to `""`. |
 | `limits`      | object | no       | Safety limits for one run (see below). |
 | `blocks`      | array  | yes      | The blocks. |
 | `links`       | array  | no       | The links. Defaults to `[]`. |
 | `functions`   | array  | no       | Block functions used in this loop (see below). Omitted when empty. |
+| `notes`       | array  | no       | Notes on the canvas (see below). Omitted when empty. |
 
 ### Limits
 
@@ -59,6 +61,7 @@ A run that reaches either limit stops and reports it, so a cycle can't run forev
 | `label`    | string | no       | Display name. |
 | `position` | object | no       | `{ "x": number, "y": number }` on the editor canvas. Doesn't affect running. |
 | `params`   | object | no       | Type-specific parameters. Unknown keys are errors; missing keys take their defaults. |
+| `comment`  | string | no       | A note for people, shown on the block. Never sent to the model. Omitted when empty. |
 
 ### Link
 
@@ -66,9 +69,21 @@ A run that reaches either limit stops and reports it, so a cycle can't run forev
 { "from": { "block": "answer", "port": "out" }, "to": { "block": "reply", "port": "in" } }
 ```
 
+A link may have a `"label"` (a short text shown on the path, for people).
+
 A link carries **every** value an output port produces to one input port. The
 same link can't appear twice. An output can feed any number of inputs, and an
 input can receive from any number of outputs.
+
+### Note
+
+```json
+{ "id": "note-1", "text": "Failures don't stop the run…", "position": { "x": 0, "y": 400 },
+  "width": 260, "height": 90 }
+```
+
+Free-standing text on the canvas, for people. `width` and `height` are
+optional. Notes, comments and labels never change what a loop does.
 
 ## How a loop runs
 
@@ -115,12 +130,26 @@ A model block (`llm`) with tools works like this:
    instead, and Answer stays silent. **Reasoning** carries any thinking the
    model showed (`<think>` sections or the provider's reasoning) in both
    cases, possibly empty. Unconnected outputs are harmless.
-4. Calls are checked first: the tool must be one of the block's, and the
+4. How tools reach the model depends on `tool_mode`:
+   - `native` (default): through the model server's tool calling.
+   - `prompted`: described in the system message, with the calling format
+     (`<tool_call>{"name": …, "arguments": {…}}</tool_call>`). Chummy finds
+     the calls in the model's text, so this works with servers or models
+     that can't call tools. The exchange is sent as plain text.
+   - `off`: the block offers no tools and never fires **Tool call**. The
+     loop handles tools itself: `_TOOLS_` in a prompt lists the block's
+     tools (`- name(arguments): description`), and a **Find tool call**
+     block reads a call out of the answer.
+5. Calls are checked first: the tool must be one of the block's, and the
    arguments must match its parameters. Numbers and true/false written as
    text are fixed quietly; anything else is a bad call, as is not calling a
    tool when `tool_choice` is `required`. `on_bad_call` decides what happens:
    `retry` (tell the model what was wrong and ask again, up to `retries`
    times, then stop), `fail` (stop), or `answer` (use the text as the answer).
+6. A tool may go online only if `network` is on in the block **and**
+   Internet access is on in Permissions, for the tool, and for the agent. A
+   tool is offered only if it is on app-wide, allowed for the agent, and in
+   the block's `tools`.
 
 A **Run tool** block runs the calls at the end of an exchange in the agent's
 sandbox, adds their results as tool messages, and sends the exchange on.
@@ -132,6 +161,34 @@ results:
 text ─▶ Ask the model ─────────────────────── ┘
                     └─ Answer ─▶ Reply
 ```
+
+## Failed outputs
+
+Blocks that can fail have an output called `error` (**Failed** in the
+editor): `llm`, `run_tool`, `ask_user`, `read_file`, `write_file` and
+`list_files`. When one fails and its `error` output is linked (or is a
+function's output), the failure message goes out of it as text and the run
+carries on. When it isn't linked, the failure stops the run, as always. Run
+limits (steps, model calls, tool calls) and the user stopping a run always
+stop it.
+
+## Memory
+
+A **Save to memory** block (`store`) keeps its input under a name for the
+rest of the run (function calls included) and passes it on. Any prompt,
+system message, *Combine* format, *Add to exchange* format or *Ask me*
+question can include it as `{{name}}`; a name with nothing saved yet becomes
+empty text. **Read memory** (`recall`) sends the saved text out when its
+input fires. Names are letters, digits and `_`. Text in memory is the model's
+own working notes, so it is never trusted for anything but text.
+
+## Daily token limits
+
+Each model connection has a daily token limit (set in Settings → Models).
+Before each call a model block checks it. When the day's tokens are used up,
+`on_limit` decides: `ask` (ask the user to allow more today, using the same
+mechanism as *Ask me*; refusing stops the run), `wait` (wait until midnight,
+then carry on) or `stop` (stop the run).
 
 How tools themselves are written, installed and sandboxed is described in
 [tool-format.md](tool-format.md).
@@ -145,12 +202,16 @@ Ports are written `name: kind`.
 | `input` | Message | none | `out: text` | none. Sends the chat message. |
 | `history` | Conversation | none | `out: text` | `max_messages` (10): recent messages, formatted `User: …` / `Assistant: …`. |
 | `fixed` | Fixed text | none | `out: text` | `text` (""). |
-| `llm` | Ask the model | `in: any` | `out: text` (Answer), `tool: exchange` (Tool call, only with tools), `reasoning: text` | `prompt` ("_INPUT_"), `system` (""), `model` (unset = the agent's model; otherwise a model connection id), `temperature` (unset = model default; 0–2), `max_tokens` (1024), `tools` ([]), `tool_choice` ("auto" or "required"), `on_bad_call` ("retry", "fail" or "answer"), `retries` (2; 0–5). Text input: `_INPUT_` in the prompt is replaced by it (or it's added after the prompt). Exchange input: the exchange is continued; a non-empty `system` replaces its system message for this call. `<think>…</think>` sections are moved from the answer to Reasoning. |
-| `run_tool` | Run tool | `in: exchange` | `out: exchange` | `max_result_chars` (4000), `on_error` ("tell_model" or "fail"), `confirm` (false). Runs the pending tool calls at the end of the exchange and adds their results. Longer results are cut. With `confirm`, each call waits for the user to allow it (see *Asking the user*). |
-| `ask_user` | Ask me | `in: any` | `out: text` | `prompt` ("_INPUT_"; `_INPUT_` is replaced by the input, or the input is added after it), `timeout_minutes` (0 = wait as long as it takes; at most 10080), `default_answer` (""). Asks the user and sends the answer on. If the wait times out, `default_answer` is used, or the run stops if it's empty. |
+| `llm` | Ask the model | `in: any` | `out: text` (Answer), `tool: exchange` (Tool call, only with tools and `tool_mode` not `off`), `reasoning: text`, `error: text` | `prompt` ("_INPUT_"), `system` (""), `model` (unset = the agent's model; otherwise a model connection id), `temperature` (unset = model default; 0–2), `max_tokens` (1024), `tools` ([]), `tool_mode` ("native", "prompted" or "off"), `network` (false), `on_limit` ("ask", "wait" or "stop"), `tool_choice` ("auto" or "required"), `on_bad_call` ("retry", "fail" or "answer"), `retries` (2; 0–5). `_TOOLS_` in the prompt or system message lists the block's tools; `{{name}}` includes memory. Text input: `_INPUT_` in the prompt is replaced by it (or it's added after the prompt). Exchange input: the exchange is continued; a non-empty `system` replaces its system message for this call. `<think>…</think>` sections are moved from the answer to Reasoning. |
+| `run_tool` | Run tool | `in: exchange` | `out: exchange`, `error: text` | `max_result_chars` (4000), `on_error` ("tell_model" or "fail"), `confirm` (false). Runs the pending tool calls at the end of the exchange and adds their results. Longer results are cut. With `confirm`, each call waits for the user to allow it (see *Asking the user*). |
+| `ask_user` | Ask me | `in: any` | `out: text`, `error: text` | `prompt` ("_INPUT_"; `_INPUT_` is replaced by the input, or the input is added after it), `timeout_minutes` (0 = wait as long as it takes; at most 10080), `default_answer` (""). Asks the user and sends the answer on. If the wait times out, `default_answer` is used, or the run stops if it's empty. |
 | `exchange` | Start exchange | `in: any` | `out: exchange` | `system` (""), `roles` (["user"]). Text becomes one message with the first role; a list becomes one message per item, with the roles in turn. |
 | `augment` | Add to exchange | `exchange: exchange`, `in: any` | `out: exchange` | `role` ("user"), `format` ("_INPUT_"). Adds the text as a message (`_INPUT_` replaced by it); a list adds one message per item. |
-| `read_exchange` | Read exchange | `in: exchange` | `last: text`, `all: text` | `role` ("assistant"; or "user", "tool", "system", "any"). `last` is the last message from that role, `all` the transcript. |
+| `read_exchange` | Read exchange | `in: exchange` | `last: text`, `all: text`, `calls: text` | `role` ("assistant"; or "user", "tool", "system", "any"). `last` is the last message from that role, `all` the transcript, `calls` the pending tool calls described for people (empty if none). |
+| `decline_calls` | Decline tool calls | `in: exchange`, `reason: text` | `out: exchange` | none. Answers each pending tool call with "Not run" and the reason, without running it. |
+| `find_call` | Find tool call | `exchange: exchange`, `in: text` | `call: exchange`, `none: text` | `tools` ([]), `network` (false). Finds tool calls in the text and adds them to the exchange for *Run tool*. Only tools in `tools` count; text without a usable call goes out of `none`. |
+| `store` | Save to memory | `in: text` | `out: text` | `key` ("notes"), `max_chars` (4000; at least 100; longer text keeps its end). |
+| `recall` | Read memory | `in: any` | `out: text` | `key` ("notes"). |
 | `combine` | Combine | `in1` … `inN: text` | `out: text` | `inputs` (2; 1–10), `format` ("_INPUT1_\n\n_INPUT2_"): `_INPUTi_` is replaced by input *i*. |
 | `split` | Split into chunks | `in: text` | `out: list` | `chunk_size` (2000), `overlap` (0), `deviation` (50): cuts at a newline, period, comma or space within `deviation` characters of the ideal cut. |
 | `join` | Join list | `in: list` | `out: text` | `separator` ("\n"). |
@@ -161,9 +222,9 @@ Ports are written `name: kind`.
 | `remember` | Remember first | `in: any` | `out: any` | none. Keeps the first value and sends it on every later activation. |
 | `for_each` | For each | `in: list` | `out: text` | `limit` (0 = all). Sends each item separately, at most `limit` of them. |
 | `separate` | Pick items | `in: list` | `out1` … `outN: text` | `outputs` (2; 1–10): item *i* goes out of `outi`. |
-| `read_file` | Read file | `path: text` | `out: text` | none. Reads a file in the agent's workspace (up to 1 MB). |
-| `write_file` | Write file | `path: text`, `content: text` | `out: text` (the path) | `append` (false). Creates folders as needed. |
-| `list_files` | List files | `path: text` | `out: list` | none. Folder names end with `/`. Use `.` for the workspace itself. |
+| `read_file` | Read file | `path: text` | `out: text`, `error: text` | none. Reads a file in the agent's workspace (up to 1 MB). |
+| `write_file` | Write file | `path: text`, `content: text` | `out: text` (the path), `error: text` | `append` (false). Creates folders as needed. |
+| `list_files` | List files | `path: text` | `out: list`, `error: text` | none. Folder names end with `/`. Use `.` for the workspace itself. |
 | `output` | Reply | `in: text` | none | none. Adds its input to the agent's reply. |
 | `function` | Function | the function's inputs | the function's outputs | `function`: the id of a function in this loop. See below. |
 
@@ -240,6 +301,31 @@ inputs and outputs become the function's ports, and links from the rest of
 the loop are moved onto the new block. Run events name blocks inside a
 function by path: `<function block id>/<block id>`.
 
+## Agent loop configuration (`chummy.loopconfig`)
+
+An agent can change any block's parameters without changing the loop file.
+The changes are stored in the agent's settings, per loop, and applied when
+the agent runs the loop. They can be exported and imported:
+
+```json
+{
+  "format": "chummy.loopconfig",
+  "version": 1,
+  "loop": "Chummy assistant",
+  "blocks": {
+    "plan/plan_model": { "temperature": 0.2 },
+    "attempt/try": { "tool_mode": "prompted", "on_limit": null }
+  }
+}
+```
+
+Keys are a block id, or `function id/block id` for a block inside a
+function. Each value replaces those parameters; `null` removes one, so the
+block's default applies. Settings for blocks the loop doesn't have are
+skipped. Every change is checked against the block catalog and the whole
+loop is checked again before it's saved, so a configuration can't break a
+loop, add blocks, or turn on anything the app or the agent doesn't allow.
+
 ## Size limits
 
 A loop may have at most 5,000 blocks and 20,000 links (counting those inside
@@ -301,3 +387,30 @@ answer ("Does this answer make sense given the request?") and then answers
 it. Results that fail their check are broken down like a task that's too
 big; plans that fail are made again once, with the reason. It's slower and
 more careful.
+
+## Example: Chummy assistant (the default)
+
+[`assistant.chummy.json`](../crates/flow/templates/assistant.chummy.json)
+grows the verify planner into the loop Chummy recommends. Every part is a
+function with comments, labels and notes, so it reads well in the editor.
+
+- **Clarify the request.** Before anything else the model decides whether
+  the request is clear. If it isn't, an *Ask me* block asks you one
+  question, and your answer joins the request. If you don't answer within
+  the time limit, it carries on with what it has.
+- **Working notes.** The running exchange's system message includes
+  `{{notes}}`, read fresh at every model call. After each result and each
+  plan, *Update the notes* asks the model to rewrite its notes (what's done,
+  what was learned, what's left), saved with *Save to memory*. If that model
+  call fails, the old notes are kept.
+- **Attempt the task.** The model tries each task, with tools. Before a
+  call runs, *Check the tool call* asks the model whether that call is right
+  for the task; a call that fails the check is declined (*Decline tool
+  calls*) with the reason and the model tries again. If the model is stuck
+  it can answer `QUESTION: …`, which asks you and passes your answer back.
+- **Errors don't stop the run.** The *Failed* outputs of the model and tool
+  blocks are linked: a failed tool call goes back to the model as an error
+  message, and a failed model call becomes "I couldn't finish this task: …"
+  so the remaining tasks still run.
+- **Plan and verify.** As in the verify planner, tasks that are too big are
+  broken into 5 or fewer steps, and every result and plan is checked.
