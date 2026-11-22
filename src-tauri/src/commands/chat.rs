@@ -10,6 +10,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use chummy_flow::{ChatTurn, Event, LoopFile, RunInputs, RunOutcome, RunStatus, analyze, run};
+use chummy_log::runs::{RunEnd, RunHeader, RunLog};
+use chummy_log::system::{self as syslog, Level};
 use chummy_sandbox::Jail;
 use chummy_scheduler::{Origin, RunKind};
 use chummy_store::JsonDoc;
@@ -27,6 +29,9 @@ const MAX_CHAT_MESSAGES: usize = 2000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RunSummary {
+    /// The run's log (Logs window, and the step view under the message).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub run_id: String,
     pub status: String,
     pub steps: u32,
     pub llm_calls: u32,
@@ -284,14 +289,9 @@ pub fn send_message(
         job_id: None,
         title: agent.name.clone(),
     };
-    let host = agent_host(
-        &app,
-        &s,
-        Some(&agent),
-        s.agent_model(&agent).cloned(),
-        Some(jail),
-        Some(origin),
-    );
+    let model = s.agent_model(&agent).cloned();
+    let model_name = model.as_ref().map(|m| m.name.clone());
+    let host = agent_host(&app, &s, Some(&agent), model, Some(jail), Some(origin));
     start(
         &app,
         &state,
@@ -301,6 +301,7 @@ pub fn send_message(
         inputs,
         Some(agent),
         "chat",
+        model_name,
     );
     Ok(run_id)
 }
@@ -352,6 +353,7 @@ pub fn test_run(
         job_id: None,
         title: format!("Test: {}", file.name),
     };
+    let model_name = model.as_ref().map(|m| m.name.clone());
     let host = agent_host(&app, &s, agent.as_ref(), model, jail, Some(origin));
     start(
         &app,
@@ -362,27 +364,70 @@ pub fn test_run(
         inputs,
         agent,
         "test",
+        model_name,
     );
     Ok(run_id)
 }
 
-/// Adds a run to the run list and tells every window. The guard takes it
-/// off again however the run ends.
-pub fn track(app: &AppHandle, state: &AppState, info: RunInfo) -> RunGuard {
+/// What a run log says about a run, beyond its [`RunInfo`].
+pub struct RunMeta {
+    pub agent_name: Option<String>,
+    pub loop_name: String,
+    pub model: Option<String>,
+    pub message: String,
+}
+
+/// Adds a run to the run list, starts its log and tells every window. The
+/// guard takes it off again however the run ends.
+pub fn track(app: &AppHandle, state: &AppState, info: RunInfo, meta: RunMeta) -> RunGuard {
     lock(&state.runs).insert(info.run_id.clone(), info.clone());
+    let started_at = chummy_log::now_ms();
+    let log = RunLog::create(
+        &state.run_logs,
+        RunHeader {
+            run_id: info.run_id.clone(),
+            title: info.title.clone(),
+            source: info.source.into(),
+            agent_id: info.agent_id.clone(),
+            agent_name: meta.agent_name,
+            job_id: info.job_id.clone(),
+            loop_name: meta.loop_name.clone(),
+            model: meta.model.clone(),
+            message: meta.message,
+            started_at,
+        },
+    )
+    .map(Arc::new);
+    syslog::log(
+        Level::Info,
+        "runs",
+        format!("Started a {} run: {}", info.source, info.title),
+        &[
+            ("run", &info.run_id),
+            ("loop", &meta.loop_name),
+            ("model", meta.model.as_deref().unwrap_or("none")),
+        ],
+    );
     let guard = RunGuard {
         app: app.clone(),
         run_id: info.run_id.clone(),
+        log,
+        started_at,
+        title: info.title.clone(),
     };
     let _ = app.emit(events::RUN_STARTED, info);
     guard
 }
 
-/// Sends a run's progress to every window.
-pub fn emitter(app: &AppHandle, run_id: &str) -> impl FnMut(Event) + Send + use<> {
+/// Sends a run's progress to every window, and to its log.
+pub fn emitter(app: &AppHandle, guard: &RunGuard) -> impl FnMut(Event) + Send + use<> {
     let app = app.clone();
-    let run_id = run_id.to_string();
+    let run_id = guard.run_id.clone();
+    let log = guard.log.clone();
     move |event| {
+        if let Some(l) = &log {
+            l.event(&event);
+        }
         let _ = app.emit(
             events::RUN_EVENT,
             RunEvent {
@@ -403,6 +448,7 @@ fn start(
     inputs: RunInputs,
     agent: Option<Agent>,
     source: &'static str,
+    model: Option<String>,
 ) {
     let cancel = Arc::new(AtomicBool::new(false));
     let info = RunInfo {
@@ -419,19 +465,25 @@ fn start(
     };
     // However the run ends (even by a panic), it leaves the run list, so
     // the agent never stays "still working".
-    let guard = track(app, state, info);
+    let meta = RunMeta {
+        agent_name: agent.as_ref().map(|a| a.name.clone()),
+        loop_name: file.name.clone(),
+        model,
+        message: inputs.message.clone(),
+    };
+    let guard = track(app, state, info, meta);
     let app = app.clone();
     let id = run_id;
     tauri::async_runtime::spawn(async move {
-        let _guard = guard;
-        let outcome = run(&file, &host, &inputs, &cancel, emitter(&app, &id)).await;
+        let outcome = run(&file, &host, &inputs, &cancel, emitter(&app, &guard)).await;
+        guard.finish(&outcome);
 
         let state = app.state::<AppState>();
         lock(&state.runs).remove(&id);
         if source == "chat"
             && let Some(agent) = &agent
         {
-            for m in messages_for(&outcome) {
+            for m in messages_for(&outcome, &id) {
                 let _ = append(&app, &state, &agent.id, m);
             }
         }
@@ -453,6 +505,55 @@ fn start(
 pub struct RunGuard {
     app: AppHandle,
     run_id: String,
+    log: Option<Arc<RunLog>>,
+    started_at: u64,
+    title: String,
+}
+
+impl RunGuard {
+    /// Records how the run ended, in its log and the system log.
+    pub fn finish(&self, o: &RunOutcome) {
+        let end = RunEnd::from_outcome(o);
+        let secs = format!(
+            "{:.1}",
+            end.ended_at.saturating_sub(self.started_at) as f64 / 1000.0
+        );
+        let level = match end.status.as_str() {
+            "failed" => Level::Warn,
+            _ => Level::Info,
+        };
+        let mut fields = vec![
+            ("run", self.run_id.as_str()),
+            ("status", end.status.as_str()),
+            ("seconds", secs.as_str()),
+        ];
+        if let Some(e) = &end.error {
+            fields.push(("error", e.as_str()));
+        }
+        let steps = end.steps.to_string();
+        let calls = end.llm_calls.to_string();
+        fields.push(("steps", &steps));
+        fields.push(("model calls", &calls));
+        syslog::log(
+            level,
+            "runs",
+            format!(
+                "{} {}",
+                self.title,
+                match end.status.as_str() {
+                    "completed" => "finished",
+                    "stopped" => "was stopped",
+                    "failed" => "failed",
+                    "limit" => "hit a limit",
+                    _ => "ended",
+                }
+            ),
+            &fields,
+        );
+        if let Some(l) = &self.log {
+            l.end(end);
+        }
+    }
 }
 
 impl Drop for RunGuard {
@@ -464,7 +565,7 @@ impl Drop for RunGuard {
 }
 
 /// Chat messages that report a finished run.
-fn messages_for(o: &RunOutcome) -> Vec<ChatMessage> {
+fn messages_for(o: &RunOutcome, run_id: &str) -> Vec<ChatMessage> {
     let (status, notice) = match &o.status {
         RunStatus::Completed if o.replies.is_empty() => (
             "completed",
@@ -479,6 +580,7 @@ fn messages_for(o: &RunOutcome) -> Vec<ChatMessage> {
         RunStatus::Failed { error, .. } => ("failed", Some(error.clone())),
     };
     let summary = RunSummary {
+        run_id: run_id.into(),
         status: status.into(),
         steps: o.steps,
         llm_calls: o.llm_calls,

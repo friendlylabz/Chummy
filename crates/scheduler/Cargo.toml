@@ -17,6 +17,7 @@ jiff = "0.2"
 getrandom = "0.3"
 chummy-flow.workspace = true
 chummy-store.workspace = true
+chummy-log.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -9,12 +9,14 @@ until you say so.
 
 ![Chatting with an agent](docs/screenshot-main.png)
 
-> **Status:** passes 1–6 of the roadmap are done: the app shell, the folder
+> **Status:** passes 1–7 of the roadmap are done: the app shell, the folder
 > jail, settings, model connections (including a basic built-in engine), the
 > loop engine and editor, agents and chat, sandboxed Python tools, exchanges,
 > block functions, the scheduler with tray mode and questions for you, and
 > the default **Chummy assistant** loop with tool modes, working notes,
-> failure outputs, daily token limits and per-agent settings. Next: chummyd,
+> failure outputs, daily token limits and per-agent settings, and logs of
+> every run (each block's inputs and outputs) plus a system log, viewable in
+> the app and under each chat message. Next: chummyd,
 > an optional background service ([plan](docs/chummyd-plan.md)).
 
 ![The 5 step recursive plan answering in chat, using tools](docs/screenshot-plan-chat.png)
@@ -65,6 +67,20 @@ until you say so.
   tokens by default, or off), shown with today's use in Settings → Models.
   When it runs out, each model block waits until midnight, stops the run, or
   asks you for more, as you choose.
+- **Logs.** Every run of a loop (chat, job or test) is logged: each block
+  it executed with its inputs and outputs (functions included, nested),
+  every model call with what was sent, the reasoning and the answer, and
+  every tool call, question, notice and reply. Chummy also keeps a system
+  log of what it did: starts, settings and permission changes, runs, jobs,
+  tools, questions and errors (never message text, files or keys). The
+  **Logs** window (main menu → Logs) finds runs by text, kind, status, agent
+  and date, searches inside logs, and sorts them; within a run you can
+  search, show or hide each kind of entry, pick block types, show only
+  failures, and sort by order or time taken. Logs are kept for 30 days.
+- **What happened, under each reply.** Every reply in chat has a collapsed
+  **What happened** view of that run: the model's reasoning and answers,
+  tool calls and questions, and (one click) every block step, with the same
+  search and filters. It follows a run live while it works.
 - **Exchanges.** A conversation with the model that flows between blocks:
   *Start exchange*, *Add to exchange* and *Read exchange* build and read it,
   and model blocks continue it.
@@ -75,7 +91,9 @@ until you say so.
   is unclear, tries it with tools (the model checks each call before it
   runs), breaks anything too big into steps, checks every result and plan,
   keeps working notes, asks you when it's stuck, and carries on past
-  failures. Onboarding offers it with one click, and a first agent gets it
+  failures. Each result is shown as it's done, and each breakdown shows
+  **the whole plan**, nested by level with finished tasks ticked (a **Plan
+  outline** block keeps it, and the model sees it as `{{plan}}`). Onboarding offers it with one click, and a first agent gets it
   automatically.
 - **Templates.** Chummy assistant, Blank, Simple chat, Draft and self-check, **5 step
   recursive plan** and **5 step recursive plan verify**. The planner tries
@@ -137,6 +155,8 @@ until you say so.
 
 ![Agent Loop Configuration: a block's setting changed for one agent](docs/screenshot-agent-loop-config.png)
 
+![The Logs window: a run's blocks with their inputs and outputs](docs/screenshot-logs.png)
+
 ![A block function open in the editor: the model block and Run tool in a cycle](docs/screenshot-function.png)
 
 <p>
@@ -160,7 +180,9 @@ until you say so.
 It holds `settings.json` (versioned, written atomically, with a `.bak`
 backup), `loops/` (your loops, one JSON file each), `chats/` (chat history,
 one file per agent), `jobs/` (scheduled jobs, their state and run history),
-`usage.json` (tokens used per model per day, kept 31 days), `models/`,
+`usage.json` (tokens used per model per day, kept 31 days), `logs/system/`
+(the system log, one file a day) and `logs/runs/` (one log per run, by day),
+`models/`,
 `runtime/` (the built-in engine), `tools/` (the WebAssembly Python
 and installed tools) and `logs/`.
 Secrets are never stored here; they go to the system keychain (Keychain,
@@ -229,6 +251,7 @@ crates/          Pure Rust libraries, no Tauri dependency, tested on their own
     support/     The in-sandbox runner and the `chummy` helper module
   scheduler/     Jobs, triggers, the run planner, folder watching, history, questions
   runner/        Runs an agent: models, tools, jail, questions; shared with chummyd
+  log/           The system log and run logs (JSON lines), search and retention
 src-tauri/       Thin app shell: state, IPC commands, native dialogs, windows
   capabilities/  One permission file per window
 ui/              Svelte 5 frontend, one Vite page per window
@@ -236,6 +259,7 @@ ui/              Svelte 5 frontend, one Vite page per window
   editor.html    Loop editor (xyflow)
   settings.html  Settings
   scheduler.html Scheduler: jobs, schedules, runs
+  logs.html      Logs: run logs and the system log
   src/lib/ipc.ts The only file that talks to Rust
 ```
 
@@ -289,7 +313,10 @@ OpenAI-compatible endpoint (127.0.0.1, random bearer token, offline).
 6. **Default assistant loop, tool modes, failure outputs, working notes,
    daily token limits, per-agent switches and loop configuration, editor
    comments and notes.** Done.
-7. **chummyd.** An optional, separately installed background service for jobs,
+7. **Logs: run logs with every block's inputs and outputs, the system log,
+   the Logs window, step views in chat, and the whole plan in the
+   assistant's output.** Done.
+8. **chummyd.** An optional, separately installed background service for jobs,
    with an authenticated API, configured from the app. See
    [docs/chummyd-plan.md](docs/chummyd-plan.md).
 

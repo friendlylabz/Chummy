@@ -617,6 +617,7 @@ dependencies = [
  "chummy-flow",
  "chummy-llm",
  "chummy-local",
+ "chummy-log",
  "chummy-runner",
  "chummy-sandbox",
  "chummy-scheduler",
@@ -683,11 +684,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "chummy-log"
+version = "0.1.0"
+dependencies = [
+ "chummy-flow",
+ "jiff 0.2.46",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "chummy-runner"
 version = "0.1.0"
 dependencies = [
  "chummy-flow",
  "chummy-llm",
+ "chummy-log",
  "chummy-sandbox",
  "chummy-scheduler",
  "chummy-store",
@@ -716,6 +729,7 @@ name = "chummy-scheduler"
 version = "0.1.0"
 dependencies = [
  "chummy-flow",
+ "chummy-log",
  "chummy-store",
  "getrandom 0.3.4",
  "jiff 0.2.46",

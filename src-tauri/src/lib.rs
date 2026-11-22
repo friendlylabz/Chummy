@@ -17,7 +17,9 @@ mod windows;
 
 use tauri::{Manager, RunEvent, WindowEvent};
 
-use commands::{agent_setup, agents, asks, chat, general, jobs, local, loops, providers, tools};
+use commands::{
+    agent_setup, agents, asks, chat, general, jobs, local, logs, loops, providers, tools,
+};
 use state::AppState;
 
 pub fn run() {
@@ -52,10 +54,14 @@ pub fn run() {
                 }
                 Err(e) => return Err(e.into()),
             };
-            app.manage(state);
             let handle = app.handle().clone();
+            logs::start(&handle, &state);
+            app.manage(state);
             if let Err(e) = tray::create(&handle) {
-                eprintln!("chummy: no tray icon ({e}); closing the window will quit");
+                chummy_log::system::warn(
+                    "app",
+                    format!("No tray icon ({e}); closing the window will quit"),
+                );
             }
             jobs::start(&handle)?;
             asks::start_forwarding(&handle);
@@ -139,6 +145,11 @@ pub fn run() {
             jobs::export_job,
             asks::list_asks,
             asks::answer_ask,
+            logs::search_runs,
+            logs::read_run_log,
+            logs::system_log_days,
+            logs::read_system_log,
+            logs::reveal_logs,
             tray::close_activity,
             tray::close_choice,
         ])

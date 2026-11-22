@@ -256,9 +256,172 @@ pub fn migrate(mut v: serde_json::Value) -> serde_json::Value {
     v
 }
 
+/// Writes what changed between two versions of the settings to the system
+/// log: permissions, tools, agents and their access, and model connections.
+/// Never secrets (they aren't in settings anyway) or folder contents.
+pub fn log_changes(old: &Settings, new: &Settings) {
+    use chummy_log::system::{Level, log};
+    let on = |b: bool| if b { "on" } else { "off" };
+    let mut changes: Vec<(Level, String)> = Vec::new();
+    let (a, b) = (&old.permissions, &new.permissions);
+    if a.network != b.network {
+        changes.push((
+            Level::Warn,
+            format!("Internet access turned {}", on(b.network)),
+        ));
+    }
+    if a.tools != b.tools {
+        changes.push((Level::Warn, format!("Tools turned {}", on(b.tools))));
+    }
+    if a.confirm_online_tools != b.confirm_online_tools {
+        changes.push((
+            Level::Warn,
+            format!(
+                "Ask before tools go online turned {}",
+                on(b.confirm_online_tools)
+            ),
+        ));
+    }
+    let names: std::collections::BTreeSet<&String> =
+        old.tools.keys().chain(new.tools.keys()).collect();
+    for name in names {
+        let (x, y) = (
+            old.tools.get(name).cloned().unwrap_or_default(),
+            new.tools.get(name).cloned().unwrap_or_default(),
+        );
+        if x.enabled != y.enabled {
+            changes.push((Level::Info, format!("Tool {name} turned {}", on(y.enabled))));
+        }
+        if x.network != y.network {
+            changes.push((
+                Level::Warn,
+                format!("Internet for tool {name} turned {}", on(y.network)),
+            ));
+        }
+        if x.ask != y.ask {
+            changes.push((
+                Level::Info,
+                format!("Ask before each use of {name} turned {}", on(y.ask)),
+            ));
+        }
+    }
+    for agent in &new.agents {
+        match old.agents.iter().find(|a| a.id == agent.id) {
+            None => changes.push((
+                Level::Info,
+                format!(
+                    "Agent {} created, working in {}",
+                    agent.name,
+                    agent.workspace.path.display()
+                ),
+            )),
+            Some(prev) => {
+                if prev.workspace.path != agent.workspace.path {
+                    changes.push((
+                        Level::Warn,
+                        format!(
+                            "Agent {} now works in {}",
+                            agent.name,
+                            agent.workspace.path.display()
+                        ),
+                    ));
+                }
+                if prev.loop_id != agent.loop_id {
+                    changes.push((
+                        Level::Info,
+                        format!("Agent {} now uses loop {}", agent.name, agent.loop_id),
+                    ));
+                }
+                if prev.tools != agent.tools {
+                    let list: Vec<&str> = agent.tools.iter().map(|t| t.as_str()).collect();
+                    changes.push((
+                        Level::Info,
+                        format!(
+                            "Agent {} may use: {}",
+                            agent.name,
+                            if list.is_empty() {
+                                "no tools".into()
+                            } else {
+                                list.join(", ")
+                            }
+                        ),
+                    ));
+                }
+                if prev.network != agent.network {
+                    changes.push((
+                        Level::Warn,
+                        format!(
+                            "Internet for agent {} turned {}",
+                            agent.name,
+                            on(agent.network)
+                        ),
+                    ));
+                }
+                if prev.loop_config != agent.loop_config {
+                    changes.push((
+                        Level::Info,
+                        format!("Agent {}'s loop configuration changed", agent.name),
+                    ));
+                }
+            }
+        }
+    }
+    for agent in &old.agents {
+        if !new.agents.iter().any(|a| a.id == agent.id) {
+            changes.push((Level::Info, format!("Agent {} deleted", agent.name)));
+        }
+    }
+    for p in &new.providers {
+        match old.providers.iter().find(|x| x.id == p.id) {
+            None => changes.push((
+                Level::Info,
+                format!("Model connection {} added ({})", p.name, p.model),
+            )),
+            Some(prev) if prev != p => {
+                changes.push((Level::Info, format!("Model connection {} changed", p.name)))
+            }
+            _ => {}
+        }
+    }
+    for p in &old.providers {
+        if !new.providers.iter().any(|x| x.id == p.id) {
+            changes.push((Level::Info, format!("Model connection {} removed", p.name)));
+        }
+    }
+    for (level, message) in changes {
+        log(level, "settings", message, &[]);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn changes_go_to_the_system_log() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log = chummy_log::system::init(tmp.path());
+        let old = Settings::default();
+        let mut new = old.clone();
+        new.permissions.network = true;
+        new.tools.insert(
+            "calculator".into(),
+            ToolPref {
+                enabled: true,
+                ..Default::default()
+            },
+        );
+        log_changes(&old, &new);
+        let said: Vec<String> = log.recent().into_iter().map(|e| e.message).collect();
+        assert!(
+            said.contains(&"Internet access turned on".to_string()),
+            "{said:?}"
+        );
+        assert!(
+            said.contains(&"Tool calculator turned on".to_string()),
+            "{said:?}"
+        );
+    }
 
     #[test]
     fn empty_and_partial_documents_load_with_defaults() {

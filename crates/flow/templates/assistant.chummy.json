@@ -215,6 +215,19 @@
         "limit": 5
       },
       "comment": "New steps join the back of the queue: breadth-first."
+    },
+    {
+      "id": "start_plan",
+      "type": "outline",
+      "label": "Start the plan outline",
+      "position": {
+        "x": 900,
+        "y": 300
+      },
+      "params": {
+        "action": "start"
+      },
+      "comment": "The request is the first task. Read anywhere as {{plan}}."
     }
   ],
   "links": [
@@ -298,6 +311,16 @@
         "port": "in"
       },
       "label": "the first task: the request itself"
+    },
+    {
+      "from": {
+        "block": "clarify",
+        "port": "request"
+      },
+      "to": {
+        "block": "start_plan",
+        "port": "in"
+      }
     },
     {
       "from": {
@@ -1596,7 +1619,7 @@
             "y": 0
           },
           "params": {
-            "system": "Do the user's latest task now. Use a tool if it helps. If you can do it, give the result in a few sentences. If it is too big to finish in one go, reply with only: TOO BIG\nIf you can't go on without the user's input, reply with only: QUESTION: and your question.\n\nYour working notes:\n{{notes}}",
+            "system": "Do the user's latest task now. Use a tool if it helps. If you can do it, give the result in a few sentences. If it is too big to finish in one go, reply with only: TOO BIG\nIf you can't go on without the user's input, reply with only: QUESTION: and your question.\n\nThe whole plan (✓ done, ○ to do, ▾ broken down):\n{{plan}}\n\nYour working notes:\n{{notes}}",
             "max_tokens": 800,
             "tools": [
               "read_file",
@@ -1849,6 +1872,82 @@
             "y": 150
           },
           "params": {}
+        },
+        {
+          "id": "first_line",
+          "type": "regex",
+          "label": "Task's lines",
+          "position": {
+            "x": 1200,
+            "y": -150
+          },
+          "params": {
+            "pattern": "[^\\n]*\\S[^\\n]*"
+          }
+        },
+        {
+          "id": "task_line",
+          "type": "separate",
+          "label": "First line",
+          "position": {
+            "x": 1350,
+            "y": -150
+          },
+          "params": {
+            "outputs": 1
+          },
+          "comment": "A clarified request has your answer on later lines; the heading shows only the first."
+        },
+        {
+          "id": "passed_task",
+          "type": "branch",
+          "label": "Task passed?",
+          "position": {
+            "x": 1500,
+            "y": -350
+          },
+          "params": {
+            "pattern": "(?i)^\\W*yes"
+          }
+        },
+        {
+          "id": "mark_done",
+          "type": "outline",
+          "label": "Mark done in the plan",
+          "position": {
+            "x": 1800,
+            "y": -350
+          },
+          "params": {
+            "action": "mark",
+            "status": "done"
+          },
+          "comment": "Ticks the task in the plan outline."
+        },
+        {
+          "id": "failed_task",
+          "type": "branch",
+          "label": "Task failed",
+          "position": {
+            "x": 1200,
+            "y": 650
+          },
+          "params": {
+            "pattern": "(?s)."
+          }
+        },
+        {
+          "id": "mark_failed",
+          "type": "outline",
+          "label": "Mark failed in the plan",
+          "position": {
+            "x": 1500,
+            "y": 850
+          },
+          "params": {
+            "action": "mark",
+            "status": "failed"
+          }
         }
       ],
       "links": [
@@ -2094,6 +2193,26 @@
             "port": "last"
           },
           "to": {
+            "block": "first_line",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "first_line",
+            "port": "out"
+          },
+          "to": {
+            "block": "task_line",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "task_line",
+            "port": "out1"
+          },
+          "to": {
             "block": "message",
             "port": "in1"
           }
@@ -2270,6 +2389,68 @@
             "block": "done",
             "port": "in"
           }
+        },
+        {
+          "from": {
+            "block": "which",
+            "port": "last"
+          },
+          "to": {
+            "block": "passed_task",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "verify",
+            "port": "verdict"
+          },
+          "to": {
+            "block": "passed_task",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "passed_task",
+            "port": "yes"
+          },
+          "to": {
+            "block": "mark_done",
+            "port": "task"
+          },
+          "label": "passed"
+        },
+        {
+          "from": {
+            "block": "which",
+            "port": "last"
+          },
+          "to": {
+            "block": "failed_task",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "err_text",
+            "port": "out"
+          },
+          "to": {
+            "block": "failed_task",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "failed_task",
+            "port": "yes"
+          },
+          "to": {
+            "block": "mark_failed",
+            "port": "task"
+          },
+          "label": "couldn't finish"
         }
       ],
       "notes": [
@@ -2417,8 +2598,9 @@
           },
           "params": {
             "inputs": 2,
-            "format": "**Breaking down _INPUT1_**\n\n_INPUT2_"
-          }
+            "format": "**▾ Too big for one go, so I broke it down.** The whole plan now:\n_INPUT2_"
+          },
+          "comment": "Shows the whole plan, indented by level: ✓ done, ✗ failed, ○ to do, ▾ broken down (the task just split). Waits for the task too, so it shows once per plan."
         },
         {
           "id": "after",
@@ -2498,6 +2680,20 @@
           "comment": "Only once, so a plan can't loop."
         },
         {
+          "id": "outline",
+          "type": "outline",
+          "label": "Add to the plan outline",
+          "position": {
+            "x": 1820,
+            "y": 0
+          },
+          "params": {
+            "action": "add_steps",
+            "limit": 5
+          },
+          "comment": "Puts the new steps under this task (at most 5, like Up to 5 steps)."
+        },
+        {
           "id": "fail_text",
           "type": "combine",
           "label": "Explain the failure",
@@ -2561,16 +2757,6 @@
           "to": {
             "block": "parse",
             "port": "in"
-          }
-        },
-        {
-          "from": {
-            "block": "plan",
-            "port": "out"
-          },
-          "to": {
-            "block": "message",
-            "port": "in2"
           }
         },
         {
@@ -2715,6 +2901,37 @@
         },
         {
           "from": {
+            "block": "which",
+            "port": "last"
+          },
+          "to": {
+            "block": "outline",
+            "port": "task"
+          }
+        },
+        {
+          "from": {
+            "block": "parse",
+            "port": "group1"
+          },
+          "to": {
+            "block": "outline",
+            "port": "steps"
+          }
+        },
+        {
+          "from": {
+            "block": "outline",
+            "port": "out"
+          },
+          "to": {
+            "block": "message",
+            "port": "in2"
+          },
+          "label": "the whole plan"
+        },
+        {
+          "from": {
             "block": "sub",
             "port": "error"
           },
@@ -2761,7 +2978,7 @@
   "notes": [
     {
       "id": "n1",
-      "text": "Chummy assistant\n\n1. Clarify: one question to you if the request is unclear.\n2. Attempt: try each task now, with checked tool calls; ask you if stuck.\n3. Plan: tasks that are too big become up to 5 steps, done breadth-first.\n4. Notes: after every result and plan, the model updates its working notes ({{notes}}).\n\nDouble-click a function block to see inside.",
+      "text": "Chummy assistant\n\n1. Clarify: one question to you if the request is unclear.\n2. Attempt: try each task now, with checked tool calls; ask you if stuck.\n3. Plan: tasks that are too big become up to 5 steps, done breadth-first.\n4. Notes: after every result and plan, the model updates its working notes ({{notes}}).\n5. Plan outline: the whole plan, nested and ticked as tasks finish, is shown after every breakdown ({{plan}}).\n\nDouble-click a function block to see inside.",
       "position": {
         "x": 0,
         "y": 500

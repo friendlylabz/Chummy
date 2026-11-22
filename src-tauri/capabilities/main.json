@@ -11,6 +11,8 @@
     "allow-setup-status",
     "allow-open-window",
     "allow-get-settings",
+    "allow-read-run-log",
+    "allow-block-catalog",
     "allow-add-recommended-loop",
     "allow-set-theme",
     "allow-set-active-agent",

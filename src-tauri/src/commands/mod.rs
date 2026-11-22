@@ -10,6 +10,7 @@ pub mod chat;
 pub mod general;
 pub mod jobs;
 pub mod local;
+pub mod logs;
 pub mod loops;
 pub mod providers;
 pub mod tools;

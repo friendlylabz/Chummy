@@ -66,7 +66,7 @@ impl JobRunner for AppJobs {
             Some(jail),
             Some(origin),
         );
-        let _guard = chat::track(
+        let guard = chat::track(
             app,
             &state,
             RunInfo {
@@ -78,10 +78,19 @@ impl JobRunner for AppJobs {
                 started_at: now(),
                 cancel: req.cancel.clone(),
             },
+            chat::RunMeta {
+                agent_name: Some(agent.name.clone()),
+                loop_name: file.name.clone(),
+                model: s.agent_model(&agent).map(|m| m.name.clone()),
+                message: job.message.clone(),
+            },
         );
         let tz = TimeZone::system();
         let (result, outcome) =
-            chummy_runner::run_job(&req, &file, &host, &tz, chat::emitter(app, &req.run_id)).await;
+            chummy_runner::run_job(&req, &file, &host, &tz, chat::emitter(app, &guard)).await;
+        if let Some(outcome) = &outcome {
+            guard.finish(outcome);
+        }
         if let Some(outcome) = outcome {
             let _ = app.emit(
                 events::RUN_FINISHED,
@@ -114,6 +123,24 @@ impl JobRunner for AppJobs {
 
     fn finished(&self, job: &Job, record: &RunRecord) {
         let problem = !matches!(record.status, RecordStatus::Completed);
+        chummy_log::system::log(
+            if problem {
+                chummy_log::system::Level::Warn
+            } else {
+                chummy_log::system::Level::Info
+            },
+            "jobs",
+            format!(
+                "Job “{}” finished: {}",
+                job.name,
+                format!("{:?}", record.status).to_lowercase()
+            ),
+            &[
+                ("job", &job.id),
+                ("run", &record.run_id),
+                ("note", &record.note),
+            ],
+        );
         let show = match job.notify {
             chummy_scheduler::Notify::Always => true,
             chummy_scheduler::Notify::Problems => problem && record.status != RecordStatus::Stopped,

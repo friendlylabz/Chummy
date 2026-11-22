@@ -35,6 +35,7 @@ use crate::blocks::{
 };
 use crate::exchange::{ExMessage, Exchange, Role, ToolCall, ToolInfo, check_arguments};
 use crate::format::{Block, FunctionDef, Link, LoopFile};
+use crate::log::{LOG_VALUE_CHARS, ModelLog, PortLog, StepLog, StepStatus, logged, now_ms};
 use crate::prompted;
 use crate::text::{
     Memory, fill_template, split, strip_thinking, thinking, truncate, valid_memory_key,
@@ -348,6 +349,10 @@ pub enum Event {
     Asked { block: String, text: String },
     /// The wait ended (answered, timed out or stopped).
     Answered { block: String },
+    /// A block finished (or failed): what went in and what came out.
+    Step(Box<StepLog>),
+    /// A model was called: what was sent and what came back.
+    ModelCall(Box<ModelLog>),
 }
 
 /// Longest argument value shown in full when asking to run a tool.
@@ -565,6 +570,8 @@ struct Runner<'a, H: Host> {
     noticed: std::collections::HashSet<String>,
     /// Saved with Save to memory; read as `{{name}}`.
     memory: Memory,
+    /// Plan outlines, by memory name.
+    outlines: HashMap<String, crate::outline::Outline>,
 }
 
 /// Runs `l` to completion (or until stopped or limited).
@@ -606,6 +613,7 @@ pub async fn run<H: Host>(
         tool_calls: 0,
         noticed: Default::default(),
         memory: Memory::new(),
+        outlines: HashMap::new(),
     };
     let mut frame = Frame::new(&l.blocks, &l.links, String::new(), &r.analysis);
     let status = match r.drive(&mut frame, &mut on_event).await {
@@ -694,9 +702,21 @@ impl<'a, H: Host> Runner<'a, H> {
                     label: label.clone(),
                     state: BlockState::Running,
                 });
+                let mut step = self.step_log(frame, &id, &path, &label, &args);
+                let clock = std::time::Instant::now();
                 let outputs = match self.execute(frame, &id, args, on_event).await {
                     Ok(o) => o,
-                    Err(BlockErr::Stop(s)) => return Err(s),
+                    Err(BlockErr::Stop(s)) => {
+                        step.status = StepStatus::Stopped;
+                        step.error = Some(match &s {
+                            Stop::Cancelled => "The run was stopped.".into(),
+                            Stop::Limit(m) => m.clone(),
+                            Stop::Failed { error, .. } => error.clone(),
+                        });
+                        step.ms = clock.elapsed().as_millis() as u64;
+                        on_event(Event::Step(Box::new(step)));
+                        return Err(s);
+                    }
                     Err(e @ (BlockErr::Failed(_) | BlockErr::TimedOut)) => {
                         let e = match e {
                             BlockErr::Failed(e) => e,
@@ -708,7 +728,15 @@ impl<'a, H: Host> Runner<'a, H> {
                         let caught = frame.kinds[&id].can_fail_softly()
                             && (frame.routes.contains_key(&key)
                                 || frame.exposed.contains_key(&key));
+                        step.ms = clock.elapsed().as_millis() as u64;
+                        step.error = Some(e.clone());
                         if caught {
+                            step.status = StepStatus::Caught;
+                            step.outputs.push(PortLog {
+                                port: FAILED.into(),
+                                value: logged(&Value::Text(e.clone()), LOG_VALUE_CHARS),
+                            });
+                            on_event(Event::Step(Box::new(step)));
                             on_event(Event::Notice {
                                 block: path.clone(),
                                 text: format!("Failed, handled by the loop: {e}"),
@@ -735,6 +763,8 @@ impl<'a, H: Host> Runner<'a, H> {
                             }
                             continue;
                         }
+                        step.status = StepStatus::Failed;
+                        on_event(Event::Step(Box::new(step)));
                         on_event(Event::BlockState {
                             block: path.clone(),
                             label: label.clone(),
@@ -751,6 +781,15 @@ impl<'a, H: Host> Runner<'a, H> {
                     label,
                     state: BlockState::Done,
                 });
+                step.ms = clock.elapsed().as_millis() as u64;
+                step.outputs = outputs
+                    .iter()
+                    .map(|(port, v)| PortLog {
+                        port: port.clone(),
+                        value: logged(v, LOG_VALUE_CHARS),
+                    })
+                    .collect();
+                on_event(Event::Step(Box::new(step)));
 
                 for (port, value) in outputs {
                     on_event(Event::BlockOutput {
@@ -779,6 +818,48 @@ impl<'a, H: Host> Runner<'a, H> {
             }
             Ok(())
         })
+    }
+
+    /// The start of a step's log: which block, and what went in.
+    fn step_log(
+        &self,
+        frame: &Frame<'a>,
+        id: &str,
+        path: &str,
+        label: &str,
+        args: &[Value],
+    ) -> StepLog {
+        let kind = &frame.kinds[id];
+        let function = match kind {
+            BlockKind::Function(p) => self
+                .file
+                .functions
+                .iter()
+                .find(|f| f.id == p.function)
+                .map(|f| f.name.clone()),
+            _ => None,
+        };
+        let names = frame.in_ports.get(id).cloned().unwrap_or_default();
+        StepLog {
+            n: self.steps,
+            block: path.to_string(),
+            label: label.to_string(),
+            kind: kind.type_name().to_string(),
+            function,
+            inputs: names
+                .into_iter()
+                .zip(args)
+                .map(|(port, v)| PortLog {
+                    port,
+                    value: logged(v, LOG_VALUE_CHARS),
+                })
+                .collect(),
+            outputs: vec![],
+            status: StepStatus::Done,
+            error: None,
+            started_at: now_ms(),
+            ms: 0,
+        }
     }
 
     async fn execute(
@@ -1039,6 +1120,33 @@ impl<'a, H: Host> Runner<'a, H> {
                     text.clone()
                 };
                 self.memory.insert(key.to_string(), kept);
+                one(Value::Text(text))
+            }
+            BlockKind::Outline(p) => {
+                use crate::blocks::OutlineAction;
+                let key = p.key.trim().to_string();
+                let o = self.outlines.entry(key.clone()).or_default();
+                match p.action {
+                    OutlineAction::Start => o.start(&arg(0).as_text()),
+                    OutlineAction::AddSteps => {
+                        let mut steps = arg(1).as_list();
+                        if p.limit > 0 {
+                            steps.truncate(p.limit as usize);
+                        }
+                        o.add_steps(&arg(0).as_text(), &steps);
+                    }
+                    OutlineAction::Mark => {
+                        if !o.mark(&arg(0).as_text(), p.status) {
+                            on_event(Event::Notice {
+                                block: path.clone(),
+                                text: "That task isn't in the outline (or is already finished)."
+                                    .into(),
+                            });
+                        }
+                    }
+                }
+                let text = o.render();
+                self.memory.insert(key, text.clone());
                 one(Value::Text(text))
             }
             BlockKind::Recall(p) => one(Value::Text(
@@ -1476,6 +1584,16 @@ impl<'a, H: Host> Runner<'a, H> {
                 max_tokens: p.max_tokens,
                 model: model.clone(),
             };
+            let sent = Value::Exchange(Exchange {
+                messages: call.messages.clone(),
+            });
+            let offered_names: Vec<String> = if use_tools {
+                tools.iter().map(|t| t.name.clone()).collect()
+            } else {
+                vec![]
+            };
+            let started_at = now_ms();
+            let clock = std::time::Instant::now();
             let mut answer = self.ask(path, call, on_event).await?;
             if prompted_mode {
                 let (rest, found, bad) = prompted::find_calls(&strip_thinking(&answer.text));
@@ -1512,6 +1630,34 @@ impl<'a, H: Host> Runner<'a, H> {
                 reasoning.push_str(&inline);
             }
             let text = strip_thinking(&answer.text);
+            on_event(Event::ModelCall(Box::new(ModelLog {
+                block: path.to_string(),
+                attempt: attempt + 1,
+                model: model.clone(),
+                tool_mode: match p.tool_mode {
+                    ToolMode::Native => "native",
+                    ToolMode::Prompted => "prompted",
+                    ToolMode::Off => "off",
+                }
+                .into(),
+                tools: offered_names,
+                sent: logged(&sent, LOG_VALUE_CHARS * 2),
+                answer: logged(&Value::Text(text.clone()), LOG_VALUE_CHARS),
+                reasoning: crate::log::cut(&reasoning, LOG_VALUE_CHARS).0,
+                calls: answer
+                    .calls
+                    .iter()
+                    .map(|c| format!("{}({})", c.name, c.arguments))
+                    .chain(
+                        answer
+                            .malformed
+                            .iter()
+                            .map(|m| format!("{} (unreadable: {})", m.name, m.error)),
+                    )
+                    .collect(),
+                started_at,
+                ms: clock.elapsed().as_millis() as u64,
+            })));
 
             if !use_tools {
                 return Ok(vec![
@@ -1697,6 +1843,7 @@ impl<'a, H: Host> Runner<'a, H> {
 mod tests {
     use super::*;
     use crate::format::{Block, Link, PortRef, Position};
+    use crate::log::{StepLog, StepStatus};
     use serde_json::Value as Json;
     use serde_json::json;
     use std::sync::Mutex;
@@ -2438,6 +2585,140 @@ mod tests {
         assert!(
             ev.iter()
                 .any(|e| matches!(e, Event::BlockState { block, .. } if block == "f/a/c"))
+        );
+    }
+
+    #[tokio::test]
+    async fn steps_log_inputs_and_outputs_inside_functions() {
+        let shout = func(
+            "shout",
+            vec![b(
+                "c",
+                "combine",
+                json!({ "inputs": 1, "format": "_INPUT1_!" }),
+            )],
+            vec![],
+            &[("in1", "c", "in1")],
+            &[("out1", "c", "out")],
+        );
+        let mut l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b("f", "function", json!({ "function": "shout" })),
+                b("o", "output", json!({})),
+            ],
+            vec![ln("in", "out", "f", "in1"), ln("f", "out1", "o", "in")],
+        );
+        l.functions = vec![shout];
+        let (o, ev) = go(&l, &Fake::default(), "hey").await;
+        assert_eq!(o.replies, ["hey!"]);
+        let steps: Vec<&StepLog> = ev
+            .iter()
+            .filter_map(|e| match e {
+                Event::Step(s) => Some(s.as_ref()),
+                _ => None,
+            })
+            .collect();
+        // The inner block finishes before its function does, but starts after.
+        let names: Vec<(&str, u32)> = steps.iter().map(|s| (s.block.as_str(), s.n)).collect();
+        assert_eq!(names, [("in", 1), ("f/c", 3), ("f", 2), ("o", 4)]);
+        let f = steps[2];
+        assert_eq!(f.kind, "function");
+        assert_eq!(f.function.as_deref(), Some("shout"));
+        assert_eq!(f.inputs[0].port, "in1");
+        assert_eq!(f.inputs[0].value.text, "hey");
+        assert_eq!(f.outputs[0].port, "out1");
+        assert_eq!(f.outputs[0].value.text, "hey!");
+        assert_eq!(steps[1].outputs[0].value.text, "hey!");
+        assert!(steps.iter().all(|s| s.status == StepStatus::Done));
+    }
+
+    #[tokio::test]
+    async fn failures_and_model_calls_are_logged() {
+        let l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b("m", "llm", json!({ "system": "Be brief." })),
+                b("o", "output", json!({})),
+            ],
+            vec![ln("in", "out", "m", "in"), ln("m", "out", "o", "in")],
+        );
+        let (_, ev) = go(&l, &Fake::with(&["Sure."]), "Hi").await;
+        let call = ev
+            .iter()
+            .find_map(|e| match e {
+                Event::ModelCall(c) => Some(c),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(call.block, "m");
+        assert_eq!(call.answer.text, "Sure.");
+        assert!(call.sent.text.contains("Be brief."), "{}", call.sent.text);
+        assert!(call.sent.text.contains("Hi"));
+
+        // A failure that stops the run is a failed step with the error.
+        let l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b("r", "read_file", json!({})),
+                b("o", "output", json!({})),
+            ],
+            vec![ln("in", "out", "r", "path"), ln("r", "out", "o", "in")],
+        );
+        let (_, ev) = go(&l, &Fake::default(), "missing.txt").await;
+        let step = ev
+            .iter()
+            .find_map(|e| match e {
+                Event::Step(s) if s.block == "r" => Some(s),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(step.status, StepStatus::Failed);
+        assert!(step.error.is_some());
+    }
+
+    #[tokio::test]
+    async fn plan_outline_tracks_the_whole_plan() {
+        let l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b("start", "outline", json!({ "action": "start" })),
+                b("steps", "fixed", json!({ "text": "Guests\nFood" })),
+                b("split", "regex", json!({ "pattern": "\\w+" })),
+                b("add", "outline", json!({ "action": "add_steps" })),
+                b("done", "fixed", json!({ "text": "Task: Guests" })),
+                b(
+                    "gate",
+                    "combine",
+                    json!({ "inputs": 2, "format": "_INPUT1_" }),
+                ),
+                b(
+                    "mark",
+                    "outline",
+                    json!({ "action": "mark", "status": "done" }),
+                ),
+                b("o", "output", json!({})),
+                b("o2", "output", json!({})),
+            ],
+            vec![
+                ln("in", "out", "start", "in"),
+                ln("in", "out", "add", "task"),
+                ln("steps", "out", "split", "in"),
+                ln("split", "out", "add", "steps"),
+                ln("done", "out", "gate", "in1"),
+                ln("add", "out", "gate", "in2"),
+                ln("gate", "out", "mark", "task"),
+                ln("mark", "out", "o", "in"),
+                ln("start", "out", "o2", "in"),
+            ],
+        );
+        let a = analyze(&l);
+        assert!(a.ok, "{:?}", a.issues);
+        let (o, _) = go(&l, &Fake::default(), "Party").await;
+        assert_eq!(o.status, RunStatus::Completed, "{o:?}");
+        assert_eq!(
+            o.replies.last().unwrap(),
+            "▾ 1. Party\n    ✓ 1.1. Guests\n    ○ 1.2. Food"
         );
     }
 

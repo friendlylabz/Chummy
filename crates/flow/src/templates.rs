@@ -244,6 +244,8 @@ mod tests {
         asked: Mutex<Vec<String>>,
         /// Every system message sent, to see the notes.
         systems: Mutex<Vec<String>>,
+        /// The last message of every call.
+        lasts: Mutex<Vec<String>>,
         notes_updates: Mutex<u32>,
     }
 
@@ -254,6 +256,9 @@ mod tests {
             _: &mut (dyn FnMut(&str) + Send),
         ) -> Result<LlmAnswer, String> {
             *self.calls.lock().unwrap() += 1;
+            if let Some(m) = call.messages.last() {
+                self.lasts.lock().unwrap().push(m.text.clone());
+            }
             if let Some(sys) = call.messages.iter().find(|m| m.role == Role::System) {
                 self.systems.lock().unwrap().push(sys.text.clone());
             }
@@ -499,14 +504,32 @@ mod tests {
         let out = plan_run(ASSISTANT, &host, "Write about today").await;
         assert_eq!(out.status, RunStatus::Completed, "{out:?}");
         let r = &out.replies;
-        assert!(
-            r[0].starts_with("**Breaking down Task: Write about today**"),
-            "{r:?}"
+        // Every breakdown shows the whole plan, nested, with finished tasks
+        // ticked.
+        assert_eq!(
+            r[0],
+            "**▾ Too big for one go, so I broke it down.** The whole plan now:\n\
+             ▾ 1. Write about today\n    ○ 1.1. Find today's date\n    ○ 1.2. Pick a topic\n    ○ 1.3. Write a summary"
         );
         assert_eq!(r[1], "**✓ Task: Find today's date**\n\nDone: Monday");
+        let second = r
+            .iter()
+            .find(|m| m.contains("▾ 1.3. Write a summary"))
+            .unwrap();
         assert!(
-            r.iter()
-                .any(|m| m.starts_with("**Breaking down Task: Write a summary**"))
+            second.ends_with(
+                "✓ 1.1. Find today's date\n    ✓ 1.2. Pick a topic\n    ▾ 1.3. Write a summary\n        \
+                 ○ 1.3.1. Gather notes\n        ○ 1.3.2. Write two lines"
+            ),
+            "{second}"
+        );
+        // The model sees the plan too.
+        assert!(
+            host.systems
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|s| s.contains("○ 1.3. Write a summary"))
         );
         // Notes: written after every result and plan, and seen afterwards.
         let updates = *host.notes_updates.lock().unwrap() as usize;
@@ -531,10 +554,18 @@ mod tests {
         let out = plan_run(ASSISTANT, &host, "Write a line about it").await;
         assert_eq!(out.status, RunStatus::Completed, "{out:?}");
         assert_eq!(*host.asked.lock().unwrap(), ["Which topic do you mean?"]);
+        // The heading shows the request's first line; the model sees the
+        // answer too.
+        assert_eq!(
+            out.replies[0],
+            "**✓ Task: Write a line about it**\n\ndid it"
+        );
         assert!(
-            out.replies[0].contains("The user answered: Gardening"),
-            "{:?}",
-            out.replies
+            host.lasts
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|m| m.contains("The user answered: Gardening"))
         );
 
         // Stuck: the model asks a QUESTION mid-task and goes on with the answer.

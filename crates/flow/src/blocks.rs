@@ -246,6 +246,44 @@ pub struct RecallParams {
     pub key: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutlineAction {
+    /// Start the outline with one task (the goal).
+    #[default]
+    Start,
+    /// Add a list of steps under a task.
+    AddSteps,
+    /// Set a task's status.
+    Mark,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutlineParams {
+    /// Memory name the rendered outline is saved under (`{{plan}}`).
+    #[serde(default = "d_outline_key")]
+    pub key: String,
+    #[serde(default)]
+    pub action: OutlineAction,
+    /// For Mark.
+    #[serde(default = "d_outline_status")]
+    pub status: crate::outline::TaskStatus,
+    /// For Add steps: most steps added (0 = all).
+    #[serde(default = "d_outline_limit")]
+    pub limit: u32,
+}
+
+fn d_outline_key() -> String {
+    "plan".into()
+}
+fn d_outline_status() -> crate::outline::TaskStatus {
+    crate::outline::TaskStatus::Done
+}
+fn d_outline_limit() -> u32 {
+    5
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FindCallParams {
@@ -413,6 +451,7 @@ pub enum BlockKind {
     FindCall(FindCallParams),
     Store(StoreParams),
     Recall(RecallParams),
+    Outline(OutlineParams),
     Exchange(StartExchangeParams),
     Augment(AugmentParams),
     ReadExchange(ReadExchangeParams),
@@ -454,6 +493,13 @@ impl BlockKind {
             ],
             Store(_) => vec![port("in", "In", Text)],
             Recall(_) => vec![port("in", "Trigger", Any)],
+            Outline(p) => match p.action {
+                OutlineAction::Start => vec![port("in", "Goal", Text)],
+                OutlineAction::AddSteps => {
+                    vec![port("task", "Task", Text), port("steps", "Steps", List)]
+                }
+                OutlineAction::Mark => vec![port("task", "Task", Text)],
+            },
             RunTool(_) => vec![port("in", "Tool call", ValueKind::Exchange)],
             BlockKind::Exchange(_) => vec![port("in", "In", Any)],
             Augment(_) => vec![
@@ -494,6 +540,7 @@ impl BlockKind {
                 port("none", "No call", Text),
             ],
             Store(_) | Recall(_) => vec![port("out", "Out", Text)],
+            Outline(_) => vec![port("out", "Outline", Text)],
             BlockKind::Exchange(_) | Augment(_) => {
                 vec![port("out", "Exchange", ValueKind::Exchange)]
             }
@@ -558,6 +605,7 @@ impl BlockKind {
             FindCall(_) => "find_call",
             Store(_) => "store",
             Recall(_) => "recall",
+            Outline(_) => "outline",
             Exchange(_) => "exchange",
             Augment(_) => "augment",
             ReadExchange(_) => "read_exchange",
@@ -932,6 +980,48 @@ pub fn catalog() -> Vec<BlockInfo> {
             "When triggered, sends out the text saved under a name (empty if nothing is saved yet).",
             vec![p("key", "Name", K::Text, "")],
             json!({ "key": "notes" }),
+        ),
+        info(
+            "outline",
+            "Plan outline",
+            Memory,
+            "Keeps the whole plan as a numbered, indented outline for the rest of the run: start it with the goal, add steps under a task, and mark tasks done or failed. Sends out the whole outline each time, and saves it to memory ({{plan}}).",
+            vec![
+                p(
+                    "action",
+                    "Action",
+                    choice(&[
+                        ("start", "Start with the goal"),
+                        ("add_steps", "Add steps under a task"),
+                        ("mark", "Mark a task"),
+                    ]),
+                    "Tasks are found by their text (a leading “Task:” is ignored).",
+                ),
+                p(
+                    "status",
+                    "Mark as",
+                    choice(&[
+                        ("done", "Done ✓"),
+                        ("failed", "Failed ✗"),
+                        ("working", "Working ▸"),
+                        ("pending", "To do ○"),
+                    ]),
+                    "For Mark a task.",
+                ),
+                p(
+                    "limit",
+                    "Most steps",
+                    K::Integer { min: 0, max: 100 },
+                    "For Add steps. 0 adds all; match For each's limit.",
+                ),
+                p(
+                    "key",
+                    "Memory name",
+                    K::Text,
+                    "Read anywhere as {{plan}} (or this name).",
+                ),
+            ],
+            json!({ "action": "start", "status": "done", "limit": 5, "key": "plan" }),
         ),
         info(
             "exchange",

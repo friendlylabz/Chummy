@@ -24,6 +24,7 @@ use chummy_flow::{
     RunInputs, RunOutcome, RunStatus, ToolInfo, ToolOutput, run,
 };
 use chummy_llm::{ChatEvent, ChatRequest, Client, Message, ProviderConfig, ProviderKind, ToolSpec};
+use chummy_log::system::{self as syslog, Level};
 use chummy_sandbox::Jail;
 use chummy_scheduler::{AskBroker, Cause, Origin, RecordStatus, RunRequest, RunResult, Snapshot};
 use chummy_tools::{NetPolicy, ToolHost, ToolManifest};
@@ -301,7 +302,15 @@ impl<S: Services> Host for AgentHost<S> {
                 _ => {}
             })
             .await
-            .map_err(|e| format!("{}: {e}", provider.name))?;
+            .map_err(|e| {
+                syslog::log(
+                    Level::Warn,
+                    "models",
+                    format!("A call to {} failed", provider.name),
+                    &[("model", &provider.model), ("error", &e.to_string())],
+                );
+                format!("{}: {e}", provider.name)
+            })?;
         if let Some(ledger) = &self.usage {
             let tokens = match resp.usage {
                 Some(u) => u64::from(u.input_tokens) + u64::from(u.output_tokens),
@@ -317,6 +326,23 @@ impl<S: Services> Host for AgentHost<S> {
                 ),
             };
             ledger.add(&provider.id, tokens);
+            syslog::log(
+                Level::Debug,
+                "models",
+                format!("Called {}", provider.name),
+                &[
+                    ("model", &provider.model),
+                    ("tokens", &tokens.to_string()),
+                    (
+                        "counted",
+                        if resp.usage.is_some() {
+                            "by the server"
+                        } else {
+                            "estimated"
+                        },
+                    ),
+                ],
+            );
         }
         Ok(LlmAnswer {
             text: resp.text,
@@ -362,16 +388,34 @@ impl<S: Services> Host for AgentHost<S> {
             .map(|tz| ("TZ".to_string(), tz.clone()))
             .collect();
         let workspace = self.jail.as_ref().map(|j| j.root().to_path_buf());
+        let policy = self.net_policy(m, online);
+        let internet = if policy.allowed { "allowed" } else { "off" };
         let r = host
-            .run(
-                name,
-                arguments,
-                workspace.as_deref(),
-                self.net_policy(m, online),
-                env,
-            )
+            .run(name, arguments, workspace.as_deref(), policy, env)
             .await
-            .map_err(|e| sentence(e.to_string()))?;
+            .map_err(|e| {
+                let e = sentence(e.to_string());
+                syslog::log(
+                    Level::Warn,
+                    "tools",
+                    format!("Tool {name} couldn't run"),
+                    &[("internet", internet), ("error", &e)],
+                );
+                e
+            })?;
+        syslog::log(
+            if r.is_error { Level::Warn } else { Level::Info },
+            "tools",
+            format!(
+                "Ran tool {name}{}",
+                if r.is_error {
+                    " (it reported an error)"
+                } else {
+                    ""
+                }
+            ),
+            &[("internet", internet)],
+        );
         Ok(ToolOutput {
             text: r.text,
             is_error: r.is_error,
@@ -437,6 +481,12 @@ impl<S: Services> Host for AgentHost<S> {
             return Budget::Ok;
         }
         let limit = p.daily_tokens.unwrap_or(0);
+        syslog::log(
+            Level::Warn,
+            "models",
+            format!("{} has used its daily tokens", p.name),
+            &[("limit", &limit.to_string())],
+        );
         Budget::Exhausted {
             model: p.name.clone(),
             used: ledger.today(&p.id).used,
@@ -449,6 +499,12 @@ impl<S: Services> Host for AgentHost<S> {
     fn grant(&self, model: Option<&str>, tokens: u64) {
         if let (Some(ledger), Some(p)) = (&self.usage, self.provider(model)) {
             ledger.grant(&p.id, tokens);
+            syslog::log(
+                Level::Info,
+                "models",
+                format!("You allowed {} more tokens today for {}", tokens, p.name),
+                &[],
+            );
         }
     }
 }

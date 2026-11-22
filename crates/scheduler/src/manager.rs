@@ -158,6 +158,20 @@ fn join(folder: &str, name: &str) -> String {
 }
 
 fn note_record(note: Note) -> (String, RunRecord) {
+    match &note {
+        Note::Missed { job, .. } => chummy_log::system::log(
+            chummy_log::system::Level::Warn,
+            "jobs",
+            "A scheduled time was missed (Chummy wasn't running)",
+            &[("job", job)],
+        ),
+        Note::Skipped { job, reason, .. } => chummy_log::system::log(
+            chummy_log::system::Level::Info,
+            "jobs",
+            format!("A job run was skipped: {reason}"),
+            &[("job", job)],
+        ),
+    }
     match note {
         Note::Missed { job, due } => (
             job,
@@ -267,7 +281,10 @@ impl<R: JobRunner> Manager<R> {
             if *p.state() != before
                 && let Err(e) = self.inner.store.save_state(p.state(), p.paused())
             {
-                eprintln!("chummy-scheduler: couldn't save job state: {e}");
+                chummy_log::system::error(
+                    "jobs",
+                    format!("Couldn't save the scheduler's state: {e}"),
+                );
             }
         }
         changed |= self.dispatch();
@@ -422,7 +439,10 @@ impl<R: JobRunner> Manager<R> {
                 tool_calls: result.tool_calls,
             };
             if let Err(e) = inner.store.record(&job.id, record.clone()) {
-                eprintln!("chummy-scheduler: couldn't save the run of {}: {e}", job.id);
+                chummy_log::system::error(
+                    "jobs",
+                    format!("Couldn't save the run of job {}: {e}", job.id),
+                );
             }
             // Files the run wrote in watched folders don't start it again.
             for folder in job.watched_folders() {

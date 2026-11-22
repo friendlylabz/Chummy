@@ -88,6 +88,39 @@ pub fn start_forwarding(app: &AppHandle) {
             let state = app.state::<AppState>();
             let _ = app.emit(events::ASKS_CHANGED, state.asks.pending());
             crate::tray::refresh(&app);
+            match &event {
+                Some(AskEvent::Asked { pending }) => {
+                    let what = match &pending.ask.kind {
+                        AskKind::Question => {
+                            format!("{} asked you a question", pending.origin.title)
+                        }
+                        AskKind::ToolApproval { tool, .. } => {
+                            format!("{} asked to run the tool {tool}", pending.origin.title)
+                        }
+                        AskKind::Budget { model, .. } => {
+                            format!(
+                                "{} asked for more daily tokens for {model}",
+                                pending.origin.title
+                            )
+                        }
+                    };
+                    chummy_log::system::log(
+                        chummy_log::system::Level::Info,
+                        "questions",
+                        what,
+                        &[("run", &pending.origin.run_id)],
+                    );
+                }
+                Some(AskEvent::Closed { answered, .. }) => chummy_log::system::info(
+                    "questions",
+                    if *answered {
+                        "A question was answered"
+                    } else {
+                        "A question was withdrawn (its run stopped or it timed out)"
+                    },
+                ),
+                None => {}
+            }
             if let Some(AskEvent::Asked { pending }) = event
                 && !notify::any_window_focused(&app)
             {

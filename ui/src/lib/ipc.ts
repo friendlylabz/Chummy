@@ -13,7 +13,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 // ---------------------------------------------------------------- types
 
 export type Theme = "system" | "dark" | "light";
-export type AppWindow = "editor" | "settings" | "scheduler";
+export type AppWindow = "editor" | "settings" | "scheduler" | "logs";
 export type ProviderKind =
   | "open_ai_compatible"
   | "open_ai"
@@ -391,7 +391,7 @@ export interface ChatMessage {
   at: number;
   /** A job's name, for questions that came from a job. */
   from?: string;
-  run?: { status: string; steps: number; llm_calls: number; tool_calls?: number };
+  run?: { run_id?: string; status: string; steps: number; llm_calls: number; tool_calls?: number };
 }
 export interface RunInfo {
   run_id: string;
@@ -411,7 +411,113 @@ export type FlowEvent =
   | { type: "notice"; block: string; text: string }
   | { type: "reply"; block: string; text: string }
   | { type: "asked"; block: string; text: string }
-  | { type: "answered"; block: string };
+  | { type: "answered"; block: string }
+  | ({ type: "step" } & StepLog)
+  | ({ type: "model_call" } & ModelLog);
+
+// ---------------------------------------------------------------- logs
+
+/** A value as a log shows it (cut to a readable size). */
+export interface LoggedValue {
+  kind: "text" | "list" | "exchange";
+  text: string;
+  /** Characters in the whole value. */
+  chars: number;
+  /** Characters left out of `text`. */
+  cut?: number;
+  /** Items in a list, or messages in an exchange. */
+  items?: number;
+}
+export interface PortLog {
+  port: string;
+  value: LoggedValue;
+}
+export type RunStepStatus = "done" | "caught" | "failed" | "stopped";
+export interface StepLog {
+  n: number;
+  block: string;
+  label: string;
+  kind: string;
+  function?: string;
+  inputs: PortLog[];
+  outputs: PortLog[];
+  status: RunStepStatus;
+  error?: string;
+  started_at: number;
+  ms: number;
+}
+export interface ModelLog {
+  block: string;
+  attempt: number;
+  model?: string;
+  tool_mode: string;
+  tools?: string[];
+  sent: LoggedValue;
+  answer: LoggedValue;
+  reasoning?: string;
+  calls?: string[];
+  started_at: number;
+  ms: number;
+}
+export interface RunHeader {
+  run_id: string;
+  title: string;
+  source: "chat" | "job" | "test";
+  agent_id?: string;
+  agent_name?: string;
+  job_id?: string;
+  loop_name: string;
+  model?: string;
+  message: string;
+  started_at: number;
+}
+export interface RunEnd {
+  ended_at: number;
+  status: string;
+  error?: string;
+  block?: string;
+  steps: number;
+  llm_calls: number;
+  tool_calls: number;
+  replies: number;
+}
+export type LogEntry =
+  | ({ type: "start" } & RunHeader)
+  | ({ type: "step" } & StepLog)
+  | ({ type: "model" } & ModelLog)
+  | { type: "tool_call"; at: number; block: string; tool: string; arguments: string }
+  | { type: "tool_result"; at: number; block: string; tool: string; text: string; is_error: boolean }
+  | { type: "notice"; at: number; block: string; text: string }
+  | { type: "asked"; at: number; block: string; text: string }
+  | { type: "answered"; at: number; block: string }
+  | { type: "reply"; at: number; block: string; text: string }
+  | ({ type: "end" } & RunEnd);
+export interface RunListItem {
+  header: RunHeader;
+  end: RunEnd | null;
+  bytes: number;
+  day: string;
+  /** "completed", "stopped", "failed", "limit", "interrupted" or "running". */
+  status: string;
+}
+export interface RunQuery {
+  text?: string;
+  full_text?: boolean;
+  source?: string;
+  status?: string;
+  agent_id?: string;
+  from_day?: string;
+  to_day?: string;
+  limit?: number;
+}
+export type LogLevel = "debug" | "info" | "warn" | "error";
+export interface SysEntry {
+  at: number;
+  level: LogLevel;
+  source: string;
+  message: string;
+  fields?: Record<string, string>;
+}
 export type RunStatus =
   | { status: "completed" }
   | { status: "stopped" }
@@ -644,6 +750,11 @@ export const commands = {
   testRun: (file: LoopFile, agentId: string | null, message: string, overrides: Record<string, string>) =>
     call<string>("test_run", { file, agentId, message, overrides }),
   stopRun: (runId: string) => call<void>("stop_run", { runId }),
+  searchRuns: (query: RunQuery) => call<RunListItem[]>("search_runs", { query }, () => []),
+  readRunLog: (runId: string) => call<LogEntry[]>("read_run_log", { runId }, () => []),
+  systemLogDays: () => call<string[]>("system_log_days", undefined, () => []),
+  readSystemLog: (day: string) => call<SysEntry[]>("read_system_log", { day }, () => []),
+  revealLogs: () => call<void>("reveal_logs"),
   listRuns: () => call<RunInfo[]>("list_runs", undefined, () => []),
   setPermission: (kind: "network" | "tools" | "confirm_online_tools", enabled: boolean) =>
     call<boolean>("set_permission", { kind, enabled }, () => false),
@@ -736,4 +847,5 @@ export const events = {
   onCloseRequested: (cb: (a: Activity) => void) => on("app:close-requested", cb),
   /** Another window asked this one to show a section. */
   onGoto: (cb: (section: string) => void) => on("window:goto", cb),
+  onSystemLog: (cb: (e: SysEntry) => void) => on("log:system", cb),
 };

@@ -418,6 +418,12 @@ pub async fn start_engine_for(
         .await
         .map_err(|e| {
             let e = e.to_string();
+            chummy_log::system::log(
+                chummy_log::system::Level::Error,
+                "engine",
+                format!("The built-in engine couldn't start {}", provider.name),
+                &[("error", &e)],
+            );
             if e.contains("ModuleNotFoundError") || e.contains("ImportError") {
                 format!("{e}\n\nThe local engine's setup looks incomplete. Use Repair in Settings → Local engine.")
             } else {

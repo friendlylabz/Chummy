@@ -252,6 +252,11 @@
                     {#if r.note}<p class="note">{r.note}</p>{/if}
                     {#if r.reply}<div class="reply">{r.reply}</div>{/if}
                     {#if !r.note && !r.reply}<p class="note">Nothing to show.</p>{/if}
+                    {#if r.status !== "missed" && r.status !== "skipped"}
+                      <button type="button" class="log-link" onclick={() => commands.openWindow("logs", `run:${r.run_id}`)}>
+                        <Icon name="history" size={13} /> See every step in Logs
+                      </button>
+                    {/if}
                   </div>
                 {/if}
               </div>
@@ -276,6 +281,18 @@
 {/if}
 
 <style>
+  .log-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: var(--space-2);
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--accent);
+    font-size: var(--text-xs);
+    cursor: pointer;
+  }
   .layout {
     display: flex;
     height: 100%;

@@ -42,6 +42,10 @@
         { label: "Scheduler", icon: "clock", run: () => commands.openWindow("scheduler") },
       ],
     },
+    {
+      title: "History",
+      items: [{ label: "Logs", icon: "history", run: () => commands.openWindow("logs") }],
+    },
   ]);
 
   function choose(item: Item) {

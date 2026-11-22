@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { commands } from "$lib/ipc";
   import { runs } from "$lib/stores/runs.svelte";
   import { settings } from "$lib/stores/settings.svelte";
@@ -8,8 +9,35 @@
 
   let { open = $bindable(true) }: { open: boolean } = $props();
 
-  const active = $derived(runs.active);
   const agents = $derived(settings.current.agents);
+
+  // Runs change many times a second (each block that starts or ends). The
+  // panel shows a snapshot taken once a second instead, so it doesn't
+  // flicker as blocks race by or as a run finishes.
+  interface Row {
+    id: string;
+    title: string;
+    step: string;
+  }
+  let active = $state<Row[]>([]);
+  let busyAgents = $state<string[]>([]);
+
+  function snapshot() {
+    const next: Row[] = runs.active.map((r) => ({
+      id: r.info.run_id,
+      title: `${r.info.source === "job" ? "Job: " : ""}${r.info.title}`,
+      step: r.waitingForYou ? "Waiting for you" : r.currentLabel || "Working…",
+    }));
+    if (JSON.stringify(next) !== JSON.stringify(active)) active = next;
+    const busy = agents.filter((a) => runs.forAgent(a.id)).map((a) => a.id);
+    if (busy.join() !== busyAgents.join()) busyAgents = busy;
+  }
+
+  onMount(() => {
+    snapshot();
+    const t = setInterval(snapshot, 1000);
+    return () => clearInterval(t);
+  });
 </script>
 
 <aside class="panel" class:open aria-label="Sessions" aria-hidden={!open} inert={!open}>
@@ -50,14 +78,14 @@
 
     <div class="group">
       <div class="group-title">Running</div>
-      {#each active as r (r.info.run_id)}
+      {#each active as r (r.id)}
         <div class="run">
           <span class="pulse"></span>
           <div class="run-text">
-            <div class="run-title">{r.info.source === "job" ? "Job: " : ""}{r.info.title}</div>
-            <div class="run-step">{r.waitingForYou ? "Waiting for you" : r.currentLabel || "Starting…"}</div>
+            <div class="run-title">{r.title}</div>
+            <div class="run-step">{r.step}</div>
           </div>
-          <button class="icon-btn" type="button" aria-label="Stop" title="Stop" onclick={() => commands.stopRun(r.info.run_id)}>
+          <button class="icon-btn" type="button" aria-label="Stop" title="Stop" onclick={() => commands.stopRun(r.id)}>
             <Icon name="stop" size={14} />
           </button>
         </div>
@@ -79,7 +107,7 @@
         >
           <Icon name="bot" size={15} />
           <span>{a.name}</span>
-          {#if runs.forAgent(a.id)}<span class="dot"></span>{/if}
+          {#if busyAgents.includes(a.id)}<span class="dot"></span>{/if}
         </button>
       {:else}
         <EmptyState icon="bot" title="No agents yet" compact />

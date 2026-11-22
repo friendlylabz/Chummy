@@ -157,6 +157,21 @@ without noticing.
   loop already has, and it cannot turn on a tool or the internet that the
   agent or the app doesn't allow.
 
+## Pass 7: logs
+
+- **Run logs hold what the agent saw.** A run's log records every block's
+  inputs and outputs, so it can contain your messages, model answers and
+  text from files the agent read. Logs stay in the Chummy folder (private to
+  you), are never sent anywhere, and are deleted after 30 days (or sooner
+  past 1 GB). Values are cut to 6,000 characters each.
+- **The system log holds no content.** It records what Chummy did (starts,
+  settings and permission changes, runs and how they ended, jobs, tools run
+  and whether they could go online, questions asked, errors) but never
+  message text, file contents, tool arguments or keys.
+- **Read only.** The Logs window can read and search logs but not change
+  them. Run ids are checked before they're used as file names, so a log
+  can't be read from outside the logs folder.
+
 ## Known risks and what to do next
 
 In rough order of importance:
@@ -189,9 +204,10 @@ In rough order of importance:
    many runs a day a schedule makes. Token counts are what the server
    reports, or an estimate when it reports nothing. *Next:* limits in money
    for providers with known prices.
-7. **No record of what tools sent.** *Next:* an activity log of every web
-   request a tool made, per run, viewable in the app.
-8. **History is plain text.** Chats and job histories are stored unencrypted
+7. **No record of exactly what tools sent.** Run logs show every tool
+   call's arguments and result, and the system log every tool run, but not
+   each web request a tool made. *Next:* log each request's address.
+8. **History is plain text.** Chats, job histories and run logs are stored unencrypted
    in the Chummy folder, protected only by OS permissions. Full-disk
    encryption is recommended.
 

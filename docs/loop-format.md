@@ -182,6 +182,40 @@ empty text. **Read memory** (`recall`) sends the saved text out when its
 input fires. Names are letters, digits and `_`. Text in memory is the model's
 own working notes, so it is never trusted for anything but text.
 
+### Plan outline
+
+A **Plan outline** block (`outline`) keeps a whole plan as a tree of tasks
+for the rest of the run, by memory name (`key`, default `plan`), and sends it
+out as numbered, indented text each time it runs (also saved to memory, so a
+prompt can include `{{plan}}`):
+
+```text
+▾ 1. Get ready for the trip
+    ✓ 1.1. Book the flights
+    ▾ 1.2. Pack
+        ○ 1.2.1. Clothes
+        ○ 1.2.2. Documents
+    ✗ 1.3. Find a pet sitter
+```
+
+`action` picks what it does: `start` (input `in`: the goal; starts over),
+`add_steps` (inputs `task` and `steps`, a list: adds up to `limit` steps
+under the task and marks it broken down ▾) or `mark` (input `task`: sets it
+to `status`, `done` ✓, `failed` ✗, `working` ▸ or `pending` ○). Tasks are
+found by their text, ignoring a leading `Task:`, `**` and case; with the same
+text twice, the first unfinished one in working order (breadth-first) is
+used. A task that isn't in the outline is added at the top level. It's text
+handling only: nothing runs.
+
+## Run logs
+
+Every run writes a log (see the Logs window): each block step with the
+values on its inputs and outputs, each model call (the conversation sent,
+reasoning, answer and tool calls), tool calls and results, questions,
+notices and replies. Values longer than 6,000 characters are cut in the
+middle (the log says how much was left out). Steps inside a function are
+named by path and come between the function's start and end.
+
 ## Daily token limits
 
 Each model connection has a daily token limit (set in Settings → Models).
@@ -210,6 +244,7 @@ Ports are written `name: kind`.
 | `read_exchange` | Read exchange | `in: exchange` | `last: text`, `all: text`, `calls: text` | `role` ("assistant"; or "user", "tool", "system", "any"). `last` is the last message from that role, `all` the transcript, `calls` the pending tool calls described for people (empty if none). |
 | `decline_calls` | Decline tool calls | `in: exchange`, `reason: text` | `out: exchange` | none. Answers each pending tool call with "Not run" and the reason, without running it. |
 | `find_call` | Find tool call | `exchange: exchange`, `in: text` | `call: exchange`, `none: text` | `tools` ([]), `network` (false). Finds tool calls in the text and adds them to the exchange for *Run tool*. Only tools in `tools` count; text without a usable call goes out of `none`. |
+| `outline` | Plan outline | `in: text` (start), `task: text` and `steps: list` (add steps), or `task: text` (mark) | `out: text` | `action` ("start", "add_steps" or "mark"), `status` ("done"), `limit` (5; 0 = all), `key` ("plan"). See *Plan outline*. |
 | `store` | Save to memory | `in: text` | `out: text` | `key` ("notes"), `max_chars` (4000; at least 100; longer text keeps its end). |
 | `recall` | Read memory | `in: any` | `out: text` | `key` ("notes"). |
 | `combine` | Combine | `in1` … `inN: text` | `out: text` | `inputs` (2; 1–10), `format` ("_INPUT1_\n\n_INPUT2_"): `_INPUTi_` is replaced by input *i*. |
@@ -412,5 +447,9 @@ function with comments, labels and notes, so it reads well in the editor.
   blocks are linked: a failed tool call goes back to the model as an error
   message, and a failed model call becomes "I couldn't finish this task: …"
   so the remaining tasks still run.
+- **Output.** Each result is shown as it's done (`✓ Task: …` with the
+  result). Each breakdown shows the **whole plan** from a *Plan outline*:
+  every task so far, nested by level, with finished ones ticked. The model
+  sees the plan too, as `{{plan}}` in its attempt prompt.
 - **Plan and verify.** As in the verify planner, tasks that are too big are
   broken into 5 or fewer steps, and every result and plan is checked.

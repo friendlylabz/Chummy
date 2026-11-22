@@ -17,6 +17,8 @@ mod config;
 mod engine;
 mod exchange;
 mod format;
+pub mod log;
+pub mod outline;
 pub mod prompted;
 mod templates;
 mod text;
@@ -36,6 +38,7 @@ pub use format::{
     Block, FORMAT, FunctionDef, FunctionInput, FunctionOutput, Link, LoopFile, Note, PortRef,
     Position, VERSION,
 };
+pub use log::{LoggedValue, ModelLog, PortLog, StepLog, StepStatus};
 pub use templates::{ASSISTANT, Template, templates};
 pub use validate::{Analysis, BlockPorts, FunctionPorts, Issue, Severity, analyze};
 

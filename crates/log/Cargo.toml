@@ -1,0 +1,21 @@
+[package]
+name = "chummy-log"
+description = "Chummy's logs: a structured system log, and a log of every block a run executes with its inputs and outputs. Shared with the future chummyd."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+jiff = "0.2"
+chummy-flow.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

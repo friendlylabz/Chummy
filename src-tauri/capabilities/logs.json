@@ -1,0 +1,23 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "logs",
+  "description": "Logs window: the system log and every run's log, read only.",
+  "windows": [
+    "logs"
+  ],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-get-settings",
+    "allow-open-window",
+    "allow-setup-status",
+    "allow-block-catalog",
+    "allow-search-runs",
+    "allow-read-run-log",
+    "allow-system-log-days",
+    "allow-read-system-log",
+    "allow-reveal-logs",
+    "allow-list-runs",
+    "allow-stop-run"
+  ]
+}

@@ -2,7 +2,8 @@
  * Loop runs in progress, shared by the chat window and the editor. Rust
  * streams `run:*` events; this keeps per-run block states and live text.
  */
-import { commands, events, type BlockState, type RunInfo, type RunOutcome } from "$lib/ipc";
+import { commands, events, type BlockState, type LogEntry, type RunInfo, type RunOutcome } from "$lib/ipc";
+import { entryOf } from "$lib/logs";
 
 export interface RunView {
   info: RunInfo;
@@ -22,6 +23,8 @@ export interface RunView {
   outcome: RunOutcome | null;
   /** A block is waiting for the user. */
   waitingForYou: boolean;
+  /** What the run's log has recorded so far (steps, model calls, tools…). */
+  entries: LogEntry[];
 }
 
 class RunsStore {
@@ -36,6 +39,8 @@ class RunsStore {
     await events.onRunEvent(({ run_id, event }) => {
       const r = this.runs[run_id];
       if (!r) return;
+      const entry = entryOf(event);
+      if (entry) r.entries.push(entry);
       switch (event.type) {
         case "block_state":
           r.blocks[event.block] = event.state;
@@ -96,6 +101,7 @@ class RunsStore {
       activity: [],
       outcome: null,
       waitingForYou: false,
+      entries: [],
     };
   }
 

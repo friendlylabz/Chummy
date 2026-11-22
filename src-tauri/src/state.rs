@@ -70,6 +70,8 @@ pub struct AppState {
     pub asks: AskBroker,
     /// Tokens used per model connection per day, for daily limits.
     pub usage: Arc<chummy_runner::usage::UsageLedger>,
+    /// `logs/runs`: one log per run of a loop.
+    pub run_logs: PathBuf,
     /// The job scheduler, started once the app is up.
     pub jobs: OnceLock<Manager<AppJobs>>,
     /// Set once the user chose to quit, so closing windows really quits.
@@ -160,6 +162,7 @@ impl AppState {
             usage: Arc::new(chummy_runner::usage::UsageLedger::open(
                 &dirs.root.join("usage.json"),
             )),
+            run_logs: dirs.logs.join("runs"),
             jobs: OnceLock::new(),
             quitting: AtomicBool::new(false),
             tray_ready: AtomicBool::new(false),
@@ -183,6 +186,7 @@ impl AppState {
             let mut next = guard.clone();
             let r = f(&mut next);
             self.doc.save(&next).map_err(|e| e.to_string())?;
+            crate::settings::log_changes(&guard, &next);
             *guard = next.clone();
             (r, next)
         };

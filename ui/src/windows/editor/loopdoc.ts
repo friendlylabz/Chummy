@@ -7,7 +7,7 @@
  * - each note is a node of type "note" whose id is `note:` + the note id.
  */
 import type { Edge, Node } from "@xyflow/svelte";
-import type { Block, BlockInfo, BlockPorts, Category, FunctionDef, Link, LoopFile, Note, PortSpec } from "$lib/ipc";
+import type { Block, BlockInfo, BlockPorts, FunctionDef, Link, LoopFile, Note, PortSpec } from "$lib/ipc";
 
 /** The output a block uses for a failure it can recover from. */
 export const FAILED = "error";
@@ -313,30 +313,7 @@ export function newBlock(info: BlockInfo, id: string, x: number, y: number): Blo
   };
 }
 
-export const categoryLabel: Record<Category, string> = {
-  start: "Start",
-  think: "Think",
-  you: "You",
-  exchange: "Exchange",
-  text: "Text",
-  flow: "Flow",
-  workspace: "Workspace",
-  memory: "Memory",
-  finish: "Finish",
-};
-
-/** One hue per category, used for the dot on each block. */
-export const categoryColor: Record<Category, string> = {
-  start: "#6fb3f2",
-  think: "var(--accent)",
-  you: "#5ec8c8",
-  exchange: "#f4a261",
-  text: "#a78bfa",
-  flow: "#e8c16d",
-  workspace: "#7fd1a4",
-  memory: "#c9a0dc",
-  finish: "#ef8fa8",
-};
+export { categoryColor, categoryLabel } from "$lib/blocks";
 
 /** One-line summary shown on a block. */
 export function summary(b: Block): string {
@@ -388,6 +365,12 @@ export function summary(b: Block): string {
       return `Keeps {{${s(p.key)}}}`;
     case "recall":
       return `Reads {{${s(p.key)}}}`;
+    case "outline":
+      return p.action === "add_steps"
+        ? `Adds steps to {{${s(p.key) || "plan"}}}`
+        : p.action === "mark"
+          ? `Marks a task ${s(p.status) || "done"}`
+          : `Starts {{${s(p.key) || "plan"}}}`;
     case "find_call": {
       const n = Array.isArray(p.tools) ? p.tools.length : 0;
       return n ? `${n} tool${n === 1 ? "" : "s"}` : "No tools ticked";

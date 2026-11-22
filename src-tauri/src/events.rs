@@ -29,5 +29,7 @@ pub const TOOLS_PROGRESS: &str = "tools:progress";
 pub const JOBS_CHANGED: &str = "jobs:changed";
 /// Payload: `Vec<chummy_scheduler::Pending>`.
 pub const ASKS_CHANGED: &str = "asks:changed";
+/// Payload: `chummy_log::system::SysEntry`.
+pub const SYSTEM_LOG: &str = "log:system";
 /// Sent to the main window only. Payload: `tray::Activity`.
 pub const CLOSE_REQUESTED: &str = "app:close-requested";

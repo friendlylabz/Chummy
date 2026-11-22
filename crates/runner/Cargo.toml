@@ -19,6 +19,7 @@ chummy-tools.workspace = true
 chummy-sandbox.workspace = true
 chummy-scheduler.workspace = true
 chummy-store.workspace = true
+chummy-log.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

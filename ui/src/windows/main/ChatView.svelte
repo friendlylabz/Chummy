@@ -8,6 +8,8 @@
   import Icon from "$lib/components/Icon.svelte";
   import Button from "$lib/components/Button.svelte";
   import AskCard from "$lib/components/AskCard.svelte";
+  import MessageSteps from "./MessageSteps.svelte";
+  import type { ChatMessage } from "$lib/ipc";
 
   let { agent }: { agent: Agent } = $props();
 
@@ -19,6 +21,19 @@
   const composerAsk = $derived(
     run ? waiting.find((p) => p.origin.run_id === run.info.run_id && p.ask.kind === "question") : undefined,
   );
+
+  /** Each run's step view goes under its last message. */
+  const lastOfRun = $derived.by(() => {
+    const last = new Map<string, string>();
+    for (const m of chat.messages) if (m.run?.run_id) last.set(m.run.run_id, m.id);
+    return new Set(last.values());
+  });
+  function counts(r: NonNullable<ChatMessage["run"]>): string {
+    const n = (x: number, one: string) => `${x} ${one}${x === 1 ? "" : "s"}`;
+    return [n(r.llm_calls, "model call"), r.tool_calls ? n(r.tool_calls, "tool call") : "", n(r.steps, "step")]
+      .filter(Boolean)
+      .join(" · ");
+  }
 
   // Keep the newest message in view.
   $effect(() => {
@@ -48,7 +63,9 @@
           <div class="avatar"><Icon name="bot" size={15} /></div>
           <div class="body">
             <div class="text" data-selectable>{@html richText(m.text)}</div>
-            {#if m.run}<div class="meta">{m.run.llm_calls} model call{m.run.llm_calls === 1 ? "" : "s"}{m.run.tool_calls ? ` · ${m.run.tool_calls} tool call${m.run.tool_calls === 1 ? "" : "s"}` : ""} · {m.run.steps} steps</div>{/if}
+            {#if m.run?.run_id && lastOfRun.has(m.id)}
+              <MessageSteps runId={m.run.run_id} summary={counts(m.run)} />
+            {:else if m.run}<div class="meta">{counts(m.run)}</div>{/if}
           </div>
         </div>
       {:else if m.role === "question"}
@@ -62,9 +79,14 @@
       {:else if m.role === "answer"}
         <div class="msg user"><div class="bubble answer" data-selectable>{m.text}</div></div>
       {:else}
-        <div class="msg notice">
-          <Icon name={m.run?.status === "stopped" ? "stop" : "alert"} size={14} />
-          <span data-selectable>{m.text}</span>
+        <div class="notice-wrap">
+          <div class="msg notice">
+            <Icon name={m.run?.status === "stopped" ? "stop" : "alert"} size={14} />
+            <span data-selectable>{m.text}</span>
+          </div>
+          {#if m.run?.run_id && lastOfRun.has(m.id)}
+            <MessageSteps runId={m.run.run_id} summary={counts(m.run)} />
+          {/if}
         </div>
       {/if}
     {/each}
@@ -80,6 +102,7 @@
             <Button variant="ghost" icon="stop" onclick={() => commands.stopRun(run.info.run_id)}>Stop</Button>
           </div>
           {#if run.streaming && !run.waitingForYou}<div class="stream">{run.streaming.slice(-600)}</div>{/if}
+          <MessageSteps runId={run.info.run_id} live={run.entries} />
         </div>
       </div>
     {/if}

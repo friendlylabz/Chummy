@@ -11,6 +11,7 @@ const pages = {
   editor: resolve(ui, "editor.html"),
   settings: resolve(ui, "settings.html"),
   scheduler: resolve(ui, "scheduler.html"),
+  logs: resolve(ui, "logs.html"),
 };
 
 export default defineConfig({

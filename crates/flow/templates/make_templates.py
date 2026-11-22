@@ -307,6 +307,7 @@ A_ATTEMPT = (
     "Do the user's latest task now. Use a tool if it helps. If you can do it, give the result in a few "
     "sentences. If it is too big to finish in one go, reply with only: TOO BIG\\n"
     "If you can't go on without the user's input, reply with only: QUESTION: and your question.\n\n"
+    "The whole plan (✓ done, ○ to do, ▾ broken down):\n{{plan}}\n\n"
     "Your working notes:\n{{notes}}"
 ).replace("\\n", "\n")
 CLARIFY = (
@@ -487,6 +488,14 @@ def a_attempt_fn():
             "If the model call fails, say so and move on."),
         b("err_add", "augment", "Add the failure", 1500, 650, {"role": "assistant", "format": "_INPUT_"}),
         b("done", "forward", "Exchange with result", 1800, 150),
+        b("first_line", "regex", "Task's lines", 1200, -150, {"pattern": r"[^\n]*\S[^\n]*"}),
+        b("task_line", "separate", "First line", 1350, -150, {"outputs": 1},
+          "A clarified request has your answer on later lines; the heading shows only the first."),
+        b("passed_task", "branch", "Task passed?", 1500, -350, {"pattern": YES}),
+        b("mark_done", "outline", "Mark done in the plan", 1800, -350, {"action": "mark", "status": "done"},
+          "Ticks the task in the plan outline."),
+        b("failed_task", "branch", "Task failed", 1200, 650, {"pattern": ANY}),
+        b("mark_failed", "outline", "Mark failed in the plan", 1500, 850, {"action": "mark", "status": "failed"}),
     ]
     links = [
         l("entry", "out", "work", "in"), l("entry", "out", "which", "in"), l("entry", "out", "keep", "in"),
@@ -502,7 +511,8 @@ def a_attempt_fn():
         l("asks", "no", "big_answer", "value"), l("asks", "no", "big_answer", "test"),
         l("entry", "out", "big_exchange", "value"), l("asks", "no", "big_exchange", "test"),
         l("big_exchange", "yes", "to_plan", "in", "too big"),
-        l("which", "last", "message", "in1"),
+        l("which", "last", "first_line", "in"), l("first_line", "out", "task_line", "in"),
+        l("task_line", "out1", "message", "in1"),
         l("which", "last", "verify", "request"), l("big_answer", "no", "verify", "answer", "a result"),
         l("big_exchange", "no", "checked", "value"), l("verify", "verdict", "checked", "test"),
         l("checked", "yes", "add_result", "exchange"), l("verify", "passed", "add_result", "in"),
@@ -513,6 +523,10 @@ def a_attempt_fn():
         l("err_text", "out", "message", "in2"), l("keep", "out", "err_add", "exchange"),
         l("err_text", "out", "err_add", "in"),
         l("add_result", "out", "done", "in"), l("err_add", "out", "done", "in"),
+        l("which", "last", "passed_task", "value"), l("verify", "verdict", "passed_task", "test"),
+        l("passed_task", "yes", "mark_done", "task", "passed"),
+        l("which", "last", "failed_task", "value"), l("err_text", "out", "failed_task", "test"),
+        l("failed_task", "yes", "mark_failed", "task", "couldn't finish"),
     ]
     return fn(
         "attempt", "Attempt the task",
@@ -538,6 +552,21 @@ def a_attempt_fn():
 
 def a_plan_fn():
     f = plan_fn(True)
+    # The plan message shows the whole plan, not just the new steps.
+    f["links"] = [x for x in f["links"] if not (x["from"]["block"] == "plan" and x["to"]["block"] == "message")]
+    for blk in f["blocks"]:
+        if blk["id"] == "message":
+            blk["params"]["format"] = "**▾ Too big for one go, so I broke it down.** The whole plan now:\n_INPUT2_"
+            blk["comment"] = ("Shows the whole plan, indented by level: ✓ done, ✗ failed, ○ to do, ▾ broken down "
+                              "(the task just split). Waits for the task too, so it shows once per plan.")
+    f["blocks"] += [
+        b("outline", "outline", "Add to the plan outline", 1820, 0, {"action": "add_steps", "limit": 5},
+          "Puts the new steps under this task (at most 5, like Up to 5 steps)."),
+    ]
+    f["links"] += [
+        l("which", "last", "outline", "task"), l("parse", "group1", "outline", "steps"),
+        l("outline", "out", "message", "in2", "the whole plan"),
+    ]
     f["blocks"] += [
         b("fail_text", "combine", "Explain the failure", 1040, 700, {
             "inputs": 1, "format": "(I couldn't break this task down: _INPUT1_)"},
@@ -581,6 +610,8 @@ def assistant():
         b("notes_plan", "function", "Update the notes", 2100, 0, {"function": "update_notes"}),
         b("more", "for_each", "Up to 5 steps", 2100, 400, {"limit": 5},
           "New steps join the back of the queue: breadth-first."),
+        b("start_plan", "outline", "Start the plan outline", 900, 300, {"action": "start"},
+          "The request is the first task. Read anywhere as {{plan}}."),
     ]
     links = [
         l("history", "out", "context", "in1"), l("message", "out", "context", "in2"),
@@ -588,6 +619,7 @@ def assistant():
         l("blank_notes", "out", "start_notes", "in"),
         l("history", "out", "goal_text", "in1"), l("clarify", "request", "goal_text", "in2"),
         l("clarify", "request", "queue", "in", "the first task: the request itself"),
+        l("clarify", "request", "start_plan", "in"),
         l("goal_text", "out", "start", "in"), l("start", "out", "pair", "exchange"),
         l("queue", "out", "pair", "in"), l("pair", "out", "attempt", "exchange"),
         l("attempt", "message", "show_result", "in"), l("attempt", "message", "notes_result", "what"),
@@ -613,7 +645,9 @@ def assistant():
                  "Chummy assistant\n\n1. Clarify: one question to you if the request is unclear.\n"
                  "2. Attempt: try each task now, with checked tool calls; ask you if stuck.\n"
                  "3. Plan: tasks that are too big become up to 5 steps, done breadth-first.\n"
-                 "4. Notes: after every result and plan, the model updates its working notes ({{notes}}).\n\n"
+                 "4. Notes: after every result and plan, the model updates its working notes ({{notes}}).\n"
+                 "5. Plan outline: the whole plan, nested and ticked as tasks finish, is shown after every "
+                 "breakdown ({{plan}}).\n\n"
                  "Double-click a function block to see inside.", 440, 230),
             note("n2", 1200, -450, "Each task pairs with the running exchange at Next task, so the model always "
                                    "sees the goal and everything done so far.", 380),
