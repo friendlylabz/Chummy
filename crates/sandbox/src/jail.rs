@@ -81,6 +81,16 @@ impl Jail {
 
     pub fn read_bytes(&self, path: &str, limit: u64) -> Result<Vec<u8>, JailError> {
         let rel = RelPath::parse(path)?;
+        // Only regular files: opening a named pipe or device would block.
+        let meta = self.dir.metadata(rel.for_cap()).map_err(Self::io(&rel))?;
+        if !meta.is_file() {
+            let kind = if meta.is_dir() {
+                std::io::ErrorKind::IsADirectory
+            } else {
+                std::io::ErrorKind::InvalidInput
+            };
+            return Err(Self::io(&rel)(kind.into()));
+        }
         let file = self.dir.open(rel.for_cap()).map_err(Self::io(&rel))?;
         let len = file.metadata().map_err(Self::io(&rel))?.len();
         if len > limit {
@@ -194,6 +204,20 @@ mod tests {
         std::fs::write(ws.join("hello.txt"), "hi").unwrap();
         let jail = Jail::open(&ws, &Protected::none()).unwrap();
         (tmp, jail)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn named_pipes_are_not_read() {
+        let (_tmp, jail) = setup();
+        let fifo = jail.root().join("pipe");
+        let ok = std::process::Command::new("mkfifo").arg(&fifo).status();
+        if !ok.is_ok_and(|s| s.success()) {
+            return; // no mkfifo here
+        }
+        // Without the check this would block forever.
+        assert!(jail.read_text("pipe", LIMIT).is_err());
+        assert!(jail.read_text(".", LIMIT).is_err());
     }
 
     #[test]

@@ -77,7 +77,10 @@ impl Client {
             kind: cfg.kind,
             base_url: base,
             model: cfg.model.trim().to_string(),
-            api_key: api_key.filter(|k| !k.trim().is_empty()),
+            // Pasted keys often carry a newline, which makes the header invalid.
+            api_key: api_key
+                .map(|k| k.trim().to_string())
+                .filter(|k| !k.is_empty()),
             default_temperature: cfg.temperature,
             http,
         })
@@ -123,7 +126,7 @@ impl Client {
             ProviderKind::Gemini => format!(
                 "{}/v1beta/models/{}:streamGenerateContent?alt=sse",
                 self.root("/v1beta"),
-                self.model
+                self.model.strip_prefix("models/").unwrap_or(&self.model)
             ),
             _ => format!("{}/chat/completions", self.base_url),
         }

@@ -90,6 +90,33 @@ class SplitterTests(unittest.TestCase):
         self.assertEqual(j["text"], "")
         self.assertEqual(args(calls[0]), {"a": 1})
 
+    def test_json_answer_that_is_not_a_call_is_kept(self):
+        # Llama treats a leading "{" as a possible call; if it isn't one,
+        # the text must still reach the user.
+        j, calls = self.run_pieces("llama3_json", '{"total": 3, "unit": "apples"}')
+        self.assertEqual(calls, [])
+        self.assertEqual(j["text"], '{"total": 3, "unit": "apples"}')
+
+    def test_prompt_opened_think(self):
+        # The backend sends "<think>" first when the prompt opened it.
+        sp = ce.StreamSplitter(ce.PARSERS["hermes"])
+        out = sp.feed("<think>") + sp.feed("plan</th") + sp.feed("ink>\nAnswer")
+        tail, _ = sp.finish()
+        joined = {"text": "", "reasoning": ""}
+        for k, v in out + tail:
+            joined[k] += v
+        self.assertEqual(joined, {"reasoning": "plan", "text": "Answer"})
+
+    def test_fake_backend_stops_when_asked(self):
+        import threading
+        stop = threading.Event()
+        gen = ce.FakeBackend(ce.PARSERS["hermes"]).generate(
+            [{"role": "user", "content": "x" * 300}], [], 100, None, stop)
+        first = next(gen)
+        stop.set()
+        self.assertTrue(first)
+        self.assertEqual(list(gen), [])
+
 
 def free_port():
     s = socket.socket()
@@ -139,6 +166,26 @@ class ServerTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as e:
             self.req("/health", token="wrong-token-wrong-token")
         self.assertEqual(e.exception.code, 401)
+
+    def test_rejects_bad_requests(self):
+        for body, code in [([1, 2], 400), ({"messages": [], "max_tokens": "lots"}, 400)]:
+            with self.assertRaises(urllib.error.HTTPError) as e:
+                self.req("/v1/chat/completions", body)
+            self.assertEqual(e.exception.code, code)
+        # The server still works afterwards.
+        self.assertEqual(self.get("/health")["status"], "ready")
+
+    def test_hanging_up_mid_stream_frees_the_engine(self):
+        body = {"messages": [{"role": "user", "content": "x" * 2000}], "stream": True}
+        r = self.req("/v1/chat/completions", body)
+        r.read(10)
+        r.close()  # hang up
+        # The next request must not wait for the abandoned one.
+        t = time.time()
+        body = {"messages": [{"role": "user", "content": "Reply with the single word: ready"}]}
+        out = json.loads(self.req("/v1/chat/completions", body).read())
+        self.assertEqual(out["choices"][0]["message"]["content"], "ready")
+        self.assertLess(time.time() - t, 3)
 
     def test_non_streamed_tool_call(self):
         body = {"messages": [{"role": "user", "content": "weather in Paris?"}],

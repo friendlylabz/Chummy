@@ -58,6 +58,7 @@ you agree to is known before anything is installed.
 | `timeout` | Seconds a call may run (default 30, at most 300). |
 
 Unknown keys in `[tool.chummy]` are errors. Other tools' tables are ignored.
+The names of built-in tools are reserved.
 
 ### The function
 
@@ -73,7 +74,14 @@ The function returns text (or anything JSON can hold). Raise
 `chummy.ToolError("…")` with a short message when something's wrong ("File
 not found: notes.md"); the model sees it as the result and can correct
 itself. Other exceptions are reported as `TypeName: message`, without the
-traceback. What the tool prints goes to its log, not to the model.
+traceback. What the tool prints goes to its log (the first 64 KB are kept),
+not to the model. Tool functions must be ordinary functions, not `async`,
+and must return rather than call `sys.exit()`.
+
+The model's arguments are checked against the parameters before the call:
+numbers and true/false written as text are converted, `null` for an
+optional parameter means its default, and anything else that doesn't fit is
+explained to the model so it can try again.
 
 ### The `chummy` module
 
@@ -108,7 +116,8 @@ to the app, which makes it only if **all** of these hold:
 4. the address is `http`/`https` and doesn't point to this computer or the
    local network (loopback, private, link-local, carrier-grade NAT and
    similar ranges are refused, after resolving the name, and again at every
-   redirect).
+   redirect). The connection then goes to the addresses that were checked,
+   so a second DNS answer can't point it somewhere else.
 
 Responses are cut at 2 MB. Each call has a time limit (the header's
 `timeout`) and a 512 MB memory limit.
@@ -126,7 +135,9 @@ Installing a tool (built-in tools are installed this way):
 4. Download each wheel, check its SHA-256 against the lock, and unpack it.
    Only pure-Python wheels (`…-none-any.whl`) are accepted, and files with
    compiled code are refused even in a mislabelled wheel. Nothing from a
-   package runs while installing.
+   package runs while installing. A lock with environment markers, or for
+   another Python version, is refused: locks for the sandbox are resolved
+   for exactly one platform.
 5. Load the tool once **inside the sandbox** to read its description and
    parameters.
 6. Write `manifest.json`. The new version replaces the old one only when
@@ -135,7 +146,8 @@ Installing a tool (built-in tools are installed this way):
 Installed tools live in the Chummy folder under `tools/installed/<name>/`
 (`tool.py`, `pylock.toml`, `site-packages/`, `manifest.json`). Before every
 call Chummy checks `tool.py` still matches the checksum recorded when it was
-installed.
+installed, and that it was installed for the current Python (after a Python
+update, tools are reinstalled). Installs run one at a time.
 
 ## Built-in tools
 

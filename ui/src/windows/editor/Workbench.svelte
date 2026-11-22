@@ -362,12 +362,21 @@
     void JSON.stringify(states);
     void JSON.stringify(outputs);
     untrack(() => {
-      // Inside a function, blocks are named "<function block>/<block>".
+      // Inside a function, blocks are named "<function block>/<block>". Only
+      // count blocks whose parent is a block of the function that's open.
+      let callers = new Set<string>();
+      if (scope !== null) {
+        const f = file();
+        for (const b of [...f.blocks, ...(f.functions ?? []).flatMap((x) => x.blocks)]) {
+          if (b.type === "function" && b.params.function === scope) callers.add(b.id);
+        }
+      }
       const pick = <T,>(m: Record<string, T>, id: string): T | undefined => {
         if (scope === null) return m[id];
         let found: T | undefined;
         for (const [k, v] of Object.entries(m)) {
-          if (k.includes("/") && k.slice(k.lastIndexOf("/") + 1) === id) {
+          const parts = k.split("/");
+          if (parts.length > 1 && parts[parts.length - 1] === id && callers.has(parts[parts.length - 2])) {
             found = v;
             if (v === "running") break;
           }

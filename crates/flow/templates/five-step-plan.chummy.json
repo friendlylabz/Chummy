@@ -2,9 +2,9 @@
   "format": "chummy.loop",
   "version": 1,
   "name": "5 step recursive plan",
-  "description": "Treats your message as a goal and plans it in 5 steps or fewer. For each step it asks the model whether the step can be done now, by writing or with a tool. If so, it does it and shows the result; if not, it breaks the step into smaller steps and shows the new plan. Steps are worked through breadth-first, and every result is added to one running exchange.",
+  "description": "Treats your message as a goal and tries to do it straight away, by writing or with tools. Anything too big is broken into 5 or fewer smaller steps, and each step is tried the same way, breadth-first. Every result and plan is shown, and added to one running exchange.",
   "limits": {
-    "max_steps": 600,
+    "max_steps": 800,
     "max_llm_calls": 60,
     "max_tool_calls": 30
   },
@@ -24,8 +24,8 @@
       "type": "combine",
       "label": "Goal text",
       "position": {
-        "x": 280,
-        "y": -160
+        "x": 260,
+        "y": -180
       },
       "params": {
         "inputs": 1,
@@ -37,271 +37,94 @@
       "type": "exchange",
       "label": "Running exchange",
       "position": {
-        "x": 560,
-        "y": -160
+        "x": 520,
+        "y": -180
       },
       "params": {
-        "system": "You are working toward the user's goal one step at a time. Keep every answer short and concrete.",
+        "system": "You are working toward the user's goal one task at a time. Keep every answer short and concrete.",
         "roles": [
           "user"
         ]
       }
     },
     {
-      "id": "plan",
-      "type": "llm",
-      "label": "Make a plan",
-      "position": {
-        "x": 280,
-        "y": 120
-      },
-      "params": {
-        "prompt": "Goal: _INPUT_\n\nWrite a plan to reach this goal in 5 steps or fewer. Make each step as broad or as narrow as it needs to be. Write only the steps, one per line, numbered like:\n1. First step\n2. Second step",
-        "system": "You plan how to reach goals. Be concrete and brief.",
-        "temperature": 0.3,
-        "max_tokens": 400
-      }
-    },
-    {
-      "id": "steps",
-      "type": "capture",
-      "label": "Steps",
-      "position": {
-        "x": 560,
-        "y": 120
-      },
-      "params": {
-        "pattern": "(?m)^\\s*\\d+[.)]\\s*(.+?)\\s*$"
-      }
-    },
-    {
-      "id": "show_plan",
-      "type": "combine",
-      "label": "Plan message",
-      "position": {
-        "x": 560,
-        "y": 300
-      },
-      "params": {
-        "inputs": 1,
-        "format": "**Plan**\n\n_INPUT1_"
-      }
-    },
-    {
-      "id": "reply_plan",
-      "type": "output",
-      "label": "Show plan",
-      "position": {
-        "x": 840,
-        "y": 300
-      },
-      "params": {}
-    },
-    {
-      "id": "first",
-      "type": "for_each",
-      "label": "Up to 5 steps",
-      "position": {
-        "x": 840,
-        "y": 120
-      },
-      "params": {
-        "limit": 5
-      }
-    },
-    {
       "id": "queue",
       "type": "forward",
-      "label": "Steps to do",
+      "label": "Tasks to do",
       "position": {
-        "x": 1120,
-        "y": 120
+        "x": 520,
+        "y": 80
       },
       "params": {}
     },
     {
       "id": "pair",
       "type": "augment",
-      "label": "Next step",
+      "label": "Next task",
       "position": {
-        "x": 1400,
-        "y": -60
+        "x": 780,
+        "y": 0
       },
       "params": {
         "role": "user",
-        "format": "Step: _INPUT_"
+        "format": "Task: _INPUT_"
       }
     },
     {
-      "id": "ask_can",
-      "type": "augment",
-      "label": "Ask: doable now?",
-      "position": {
-        "x": 1680,
-        "y": 120
-      },
-      "params": {
-        "role": "user",
-        "format": "Can you complete this step right now, either by writing the result yourself or with your tools (reading, writing, listing and searching files in the workspace, fetching a web page, calculating, or checking the date and time)?\n\nStep: _INPUT_\n\nAnswer YES or NO."
-      }
-    },
-    {
-      "id": "can",
-      "type": "llm",
-      "label": "Doable now?",
-      "position": {
-        "x": 1960,
-        "y": 120
-      },
-      "params": {
-        "system": "Answer with only YES or NO.",
-        "temperature": 0.0,
-        "max_tokens": 16
-      }
-    },
-    {
-      "id": "decide",
-      "type": "branch",
-      "label": "Doable?",
-      "position": {
-        "x": 2240,
-        "y": -60
-      },
-      "params": {
-        "pattern": "(?i)^\\W*yes"
-      }
-    },
-    {
-      "id": "do",
+      "id": "attempt",
       "type": "function",
-      "label": "Do the step",
+      "label": "Attempt the task",
       "position": {
-        "x": 2540,
-        "y": -260
+        "x": 1040,
+        "y": 0
       },
       "params": {
-        "function": "do_step"
-      }
-    },
-    {
-      "id": "step_name",
-      "type": "read_exchange",
-      "label": "Step name",
-      "position": {
-        "x": 2540,
-        "y": -460
-      },
-      "params": {
-        "role": "user"
-      }
-    },
-    {
-      "id": "record",
-      "type": "augment",
-      "label": "Add result",
-      "position": {
-        "x": 2840,
-        "y": -420
-      },
-      "params": {
-        "role": "assistant",
-        "format": "_INPUT_"
+        "function": "attempt"
       }
     },
     {
       "id": "show_result",
-      "type": "combine",
-      "label": "Result message",
-      "position": {
-        "x": 2840,
-        "y": -240
-      },
-      "params": {
-        "inputs": 2,
-        "format": "**✓ _INPUT1_**\n\n_INPUT2_"
-      }
-    },
-    {
-      "id": "reply_result",
       "type": "output",
       "label": "Show result",
       "position": {
-        "x": 3120,
-        "y": -240
+        "x": 1300,
+        "y": -180
       },
       "params": {}
     },
     {
-      "id": "split",
+      "id": "plan",
       "type": "function",
-      "label": "Break it down",
+      "label": "Plan smaller steps",
       "position": {
-        "x": 2540,
-        "y": 160
+        "x": 1300,
+        "y": 120
       },
       "params": {
         "function": "break_down"
       }
     },
     {
-      "id": "split_name",
-      "type": "read_exchange",
-      "label": "Step name",
+      "id": "show_plan",
+      "type": "output",
+      "label": "Show plan",
       "position": {
-        "x": 2540,
-        "y": 380
+        "x": 1560,
+        "y": 120
       },
-      "params": {
-        "role": "user"
-      }
-    },
-    {
-      "id": "record_split",
-      "type": "augment",
-      "label": "Add new plan",
-      "position": {
-        "x": 2840,
-        "y": 100
-      },
-      "params": {
-        "role": "assistant",
-        "format": "I broke this step into smaller steps:\n_INPUT_"
-      }
+      "params": {}
     },
     {
       "id": "more",
       "type": "for_each",
-      "label": "Up to 5 sub-steps",
+      "label": "Up to 5 steps",
       "position": {
-        "x": 2840,
-        "y": 280
+        "x": 1560,
+        "y": 320
       },
       "params": {
         "limit": 5
       }
-    },
-    {
-      "id": "show_split",
-      "type": "combine",
-      "label": "New plan message",
-      "position": {
-        "x": 3120,
-        "y": 400
-      },
-      "params": {
-        "inputs": 2,
-        "format": "**Breaking down _INPUT1_**\n\n_INPUT2_"
-      }
-    },
-    {
-      "id": "reply_split",
-      "type": "output",
-      "label": "Show new plan",
-      "position": {
-        "x": 3400,
-        "y": 400
-      },
-      "params": {}
     }
   ],
   "links": [
@@ -321,7 +144,7 @@
         "port": "out"
       },
       "to": {
-        "block": "plan",
+        "block": "queue",
         "port": "in"
       }
     },
@@ -347,188 +170,68 @@
     },
     {
       "from": {
-        "block": "plan",
+        "block": "queue",
         "port": "out"
       },
       "to": {
-        "block": "steps",
+        "block": "pair",
         "port": "in"
       }
     },
     {
       "from": {
-        "block": "plan",
+        "block": "pair",
         "port": "out"
+      },
+      "to": {
+        "block": "attempt",
+        "port": "exchange"
+      }
+    },
+    {
+      "from": {
+        "block": "attempt",
+        "port": "message"
+      },
+      "to": {
+        "block": "show_result",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "block": "attempt",
+        "port": "done"
+      },
+      "to": {
+        "block": "pair",
+        "port": "exchange"
+      }
+    },
+    {
+      "from": {
+        "block": "attempt",
+        "port": "breakdown"
+      },
+      "to": {
+        "block": "plan",
+        "port": "exchange"
+      }
+    },
+    {
+      "from": {
+        "block": "plan",
+        "port": "message"
       },
       "to": {
         "block": "show_plan",
-        "port": "in1"
-      }
-    },
-    {
-      "from": {
-        "block": "show_plan",
-        "port": "out"
-      },
-      "to": {
-        "block": "reply_plan",
         "port": "in"
       }
     },
     {
       "from": {
-        "block": "steps",
-        "port": "group1"
-      },
-      "to": {
-        "block": "first",
-        "port": "in"
-      }
-    },
-    {
-      "from": {
-        "block": "first",
-        "port": "out"
-      },
-      "to": {
-        "block": "queue",
-        "port": "in"
-      }
-    },
-    {
-      "from": {
-        "block": "queue",
-        "port": "out"
-      },
-      "to": {
-        "block": "pair",
-        "port": "in"
-      }
-    },
-    {
-      "from": {
-        "block": "queue",
-        "port": "out"
-      },
-      "to": {
-        "block": "ask_can",
-        "port": "in"
-      }
-    },
-    {
-      "from": {
-        "block": "pair",
-        "port": "out"
-      },
-      "to": {
-        "block": "ask_can",
-        "port": "exchange"
-      }
-    },
-    {
-      "from": {
-        "block": "pair",
-        "port": "out"
-      },
-      "to": {
-        "block": "decide",
-        "port": "value"
-      }
-    },
-    {
-      "from": {
-        "block": "ask_can",
-        "port": "out"
-      },
-      "to": {
-        "block": "can",
-        "port": "in"
-      }
-    },
-    {
-      "from": {
-        "block": "can",
-        "port": "out"
-      },
-      "to": {
-        "block": "decide",
-        "port": "test"
-      }
-    },
-    {
-      "from": {
-        "block": "decide",
-        "port": "yes"
-      },
-      "to": {
-        "block": "do",
-        "port": "exchange"
-      }
-    },
-    {
-      "from": {
-        "block": "decide",
-        "port": "yes"
-      },
-      "to": {
-        "block": "record",
-        "port": "exchange"
-      }
-    },
-    {
-      "from": {
-        "block": "decide",
-        "port": "yes"
-      },
-      "to": {
-        "block": "step_name",
-        "port": "in"
-      }
-    },
-    {
-      "from": {
-        "block": "do",
-        "port": "result"
-      },
-      "to": {
-        "block": "record",
-        "port": "in"
-      }
-    },
-    {
-      "from": {
-        "block": "do",
-        "port": "result"
-      },
-      "to": {
-        "block": "show_result",
-        "port": "in2"
-      }
-    },
-    {
-      "from": {
-        "block": "step_name",
-        "port": "last"
-      },
-      "to": {
-        "block": "show_result",
-        "port": "in1"
-      }
-    },
-    {
-      "from": {
-        "block": "show_result",
-        "port": "out"
-      },
-      "to": {
-        "block": "reply_result",
-        "port": "in"
-      }
-    },
-    {
-      "from": {
-        "block": "record",
-        "port": "out"
+        "block": "plan",
+        "port": "after"
       },
       "to": {
         "block": "pair",
@@ -537,57 +240,7 @@
     },
     {
       "from": {
-        "block": "decide",
-        "port": "no"
-      },
-      "to": {
-        "block": "split",
-        "port": "exchange"
-      }
-    },
-    {
-      "from": {
-        "block": "decide",
-        "port": "no"
-      },
-      "to": {
-        "block": "record_split",
-        "port": "exchange"
-      }
-    },
-    {
-      "from": {
-        "block": "decide",
-        "port": "no"
-      },
-      "to": {
-        "block": "split_name",
-        "port": "in"
-      }
-    },
-    {
-      "from": {
-        "block": "split",
-        "port": "plan"
-      },
-      "to": {
-        "block": "record_split",
-        "port": "in"
-      }
-    },
-    {
-      "from": {
-        "block": "split",
-        "port": "plan"
-      },
-      "to": {
-        "block": "show_split",
-        "port": "in2"
-      }
-    },
-    {
-      "from": {
-        "block": "split",
+        "block": "plan",
         "port": "steps"
       },
       "to": {
@@ -604,74 +257,70 @@
         "block": "queue",
         "port": "in"
       }
-    },
-    {
-      "from": {
-        "block": "record_split",
-        "port": "out"
-      },
-      "to": {
-        "block": "pair",
-        "port": "exchange"
-      }
-    },
-    {
-      "from": {
-        "block": "split_name",
-        "port": "last"
-      },
-      "to": {
-        "block": "show_split",
-        "port": "in1"
-      }
-    },
-    {
-      "from": {
-        "block": "show_split",
-        "port": "out"
-      },
-      "to": {
-        "block": "reply_split",
-        "port": "in"
-      }
     }
   ],
   "functions": [
     {
-      "id": "do_step",
-      "name": "Do the step",
-      "description": "The model does one step, calling tools as often as it needs, and gives the result.",
+      "id": "attempt",
+      "name": "Attempt the task",
+      "description": "The model tries the task, calling tools as often as it needs. If it says the task is too big, the exchange goes out of Breakdown instead.",
       "inputs": [
         {
           "name": "exchange",
           "label": "Exchange",
           "to": {
-            "block": "work",
+            "block": "entry",
             "port": "in"
           }
         }
       ],
       "outputs": [
         {
-          "name": "result",
-          "label": "Result",
+          "name": "message",
+          "label": "Result message",
           "from": {
-            "block": "work",
+            "block": "message",
+            "port": "out"
+          }
+        },
+        {
+          "name": "done",
+          "label": "Exchange with result",
+          "from": {
+            "block": "add_result",
+            "port": "out"
+          }
+        },
+        {
+          "name": "breakdown",
+          "label": "Breakdown",
+          "from": {
+            "block": "to_plan",
             "port": "out"
           }
         }
       ],
       "blocks": [
         {
-          "id": "work",
-          "type": "llm",
-          "label": "Work on the step",
+          "id": "entry",
+          "type": "forward",
+          "label": "Exchange",
           "position": {
             "x": 0,
             "y": 0
           },
+          "params": {}
+        },
+        {
+          "id": "work",
+          "type": "llm",
+          "label": "Try the task",
+          "position": {
+            "x": 260,
+            "y": 0
+          },
           "params": {
-            "system": "Do the user's latest step now. Use a tool if it helps; otherwise just write the result. Keep the result short.",
+            "system": "Do the user's latest task now. Use a tool if it helps. If you can do it, give the result in a few sentences. If it is too big to finish in one go, reply with only: TOO BIG",
             "max_tokens": 800,
             "tools": [
               "read_file",
@@ -690,15 +339,97 @@
           "type": "run_tool",
           "label": "Run tool",
           "position": {
-            "x": 320,
-            "y": 180
+            "x": 520,
+            "y": 200
           },
           "params": {
             "max_result_chars": 4000
           }
+        },
+        {
+          "id": "which",
+          "type": "read_exchange",
+          "label": "Which task",
+          "position": {
+            "x": 260,
+            "y": -200
+          },
+          "params": {
+            "role": "user"
+          }
+        },
+        {
+          "id": "big_answer",
+          "type": "branch",
+          "label": "Too big? (answer)",
+          "position": {
+            "x": 780,
+            "y": 0
+          },
+          "params": {
+            "pattern": "(?i)^\\W*too\\s*big"
+          }
+        },
+        {
+          "id": "big_exchange",
+          "type": "branch",
+          "label": "Too big? (exchange)",
+          "position": {
+            "x": 780,
+            "y": 200
+          },
+          "params": {
+            "pattern": "(?i)^\\W*too\\s*big"
+          }
+        },
+        {
+          "id": "add_result",
+          "type": "augment",
+          "label": "Add result",
+          "position": {
+            "x": 1300,
+            "y": 100
+          },
+          "params": {
+            "role": "assistant",
+            "format": "_INPUT_"
+          }
+        },
+        {
+          "id": "message",
+          "type": "combine",
+          "label": "Result message",
+          "position": {
+            "x": 1300,
+            "y": -150
+          },
+          "params": {
+            "inputs": 2,
+            "format": "**✓ _INPUT1_**\n\n_INPUT2_"
+          }
+        },
+        {
+          "id": "to_plan",
+          "type": "forward",
+          "label": "Needs a plan",
+          "position": {
+            "x": 1300,
+            "y": 350
+          },
+          "params": {}
         }
       ],
       "links": [
+        {
+          "from": {
+            "block": "entry",
+            "port": "out"
+          },
+          "to": {
+            "block": "work",
+            "port": "in"
+          }
+        },
         {
           "from": {
             "block": "work",
@@ -718,13 +449,113 @@
             "block": "work",
             "port": "in"
           }
+        },
+        {
+          "from": {
+            "block": "entry",
+            "port": "out"
+          },
+          "to": {
+            "block": "which",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "work",
+            "port": "out"
+          },
+          "to": {
+            "block": "big_answer",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "work",
+            "port": "out"
+          },
+          "to": {
+            "block": "big_answer",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "entry",
+            "port": "out"
+          },
+          "to": {
+            "block": "big_exchange",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "work",
+            "port": "out"
+          },
+          "to": {
+            "block": "big_exchange",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "big_exchange",
+            "port": "yes"
+          },
+          "to": {
+            "block": "to_plan",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "which",
+            "port": "last"
+          },
+          "to": {
+            "block": "message",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "big_answer",
+            "port": "no"
+          },
+          "to": {
+            "block": "add_result",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "big_exchange",
+            "port": "no"
+          },
+          "to": {
+            "block": "add_result",
+            "port": "exchange"
+          }
+        },
+        {
+          "from": {
+            "block": "big_answer",
+            "port": "no"
+          },
+          "to": {
+            "block": "message",
+            "port": "in2"
+          }
         }
       ]
     },
     {
       "id": "break_down",
-      "name": "Break it down",
-      "description": "Plans 5 or fewer smaller steps for a step that's too big.",
+      "name": "Plan smaller steps",
+      "description": "Plans 5 or fewer smaller steps for a task that's too big.",
       "inputs": [
         {
           "name": "exchange",
@@ -737,10 +568,18 @@
       ],
       "outputs": [
         {
-          "name": "plan",
-          "label": "New plan",
+          "name": "message",
+          "label": "Plan message",
           "from": {
-            "block": "sub",
+            "block": "message",
+            "port": "out"
+          }
+        },
+        {
+          "name": "after",
+          "label": "Exchange with plan",
+          "from": {
+            "block": "after",
             "port": "out"
           }
         },
@@ -767,10 +606,10 @@
         {
           "id": "which",
           "type": "read_exchange",
-          "label": "Which step",
+          "label": "Which task",
           "position": {
-            "x": 280,
-            "y": 160
+            "x": 260,
+            "y": 200
           },
           "params": {
             "role": "user"
@@ -781,12 +620,12 @@
           "type": "augment",
           "label": "Ask for smaller steps",
           "position": {
-            "x": 560,
+            "x": 520,
             "y": 0
           },
           "params": {
             "role": "user",
-            "format": "_INPUT_\n\nThis step is too big to do in one go. Break it into 5 or fewer smaller steps, as broad or as narrow as each needs to be. Write only the steps, one per line, numbered like:\n1. First smaller step\n2. Second smaller step"
+            "format": "_INPUT_\n\nThis is too big to do in one go. Break it into 5 or fewer smaller steps, as broad or as narrow as each needs to be. Write only the steps, one per line, numbered like:\n1. First step\n2. Second step"
           }
         },
         {
@@ -794,7 +633,7 @@
           "type": "llm",
           "label": "Plan smaller steps",
           "position": {
-            "x": 840,
+            "x": 780,
             "y": 0
           },
           "params": {
@@ -803,15 +642,51 @@
           }
         },
         {
+          "id": "plan",
+          "type": "forward",
+          "label": "The plan",
+          "position": {
+            "x": 1300,
+            "y": 0
+          },
+          "params": {}
+        },
+        {
           "id": "parse",
           "type": "capture",
           "label": "Steps",
           "position": {
-            "x": 1120,
+            "x": 1560,
             "y": 0
           },
           "params": {
             "pattern": "(?m)^\\s*\\d+[.)]\\s*(.+?)\\s*$"
+          }
+        },
+        {
+          "id": "message",
+          "type": "combine",
+          "label": "Plan message",
+          "position": {
+            "x": 1560,
+            "y": 200
+          },
+          "params": {
+            "inputs": 2,
+            "format": "**Breaking down _INPUT1_**\n\n_INPUT2_"
+          }
+        },
+        {
+          "id": "after",
+          "type": "augment",
+          "label": "Add the plan",
+          "position": {
+            "x": 1560,
+            "y": -200
+          },
+          "params": {
+            "role": "assistant",
+            "format": "I broke this task into smaller steps:\n_INPUT_"
           }
         }
       ],
@@ -858,11 +733,61 @@
         },
         {
           "from": {
-            "block": "sub",
+            "block": "plan",
             "port": "out"
           },
           "to": {
             "block": "parse",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "plan",
+            "port": "out"
+          },
+          "to": {
+            "block": "message",
+            "port": "in2"
+          }
+        },
+        {
+          "from": {
+            "block": "plan",
+            "port": "out"
+          },
+          "to": {
+            "block": "after",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "which",
+            "port": "last"
+          },
+          "to": {
+            "block": "message",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "entry",
+            "port": "out"
+          },
+          "to": {
+            "block": "after",
+            "port": "exchange"
+          }
+        },
+        {
+          "from": {
+            "block": "sub",
+            "port": "out"
+          },
+          "to": {
+            "block": "plan",
             "port": "in"
           }
         }

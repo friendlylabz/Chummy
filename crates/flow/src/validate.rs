@@ -51,6 +51,12 @@ pub struct Analysis {
     pub ok: bool,
 }
 
+/// Most blocks in one loop, counting those inside functions.
+pub const MAX_BLOCKS: usize = 5_000;
+/// Most links in one loop, counting those inside functions.
+pub const MAX_LINKS: usize = 20_000;
+pub const MAX_FUNCTIONS: usize = 500;
+
 pub(crate) fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
@@ -119,6 +125,19 @@ pub fn analyze(l: &LoopFile) -> Analysis {
         }
         if !(1..=1_000).contains(&l.limits.max_tool_calls) {
             top.err(None, "Max tool calls must be between 1 and 1,000.".into());
+        }
+        // Sizes a person could build, with room to spare; anything bigger is
+        // almost certainly a broken or hostile file.
+        let blocks = l.blocks.len() + l.functions.iter().map(|f| f.blocks.len()).sum::<usize>();
+        let links = l.links.len() + l.functions.iter().map(|f| f.links.len()).sum::<usize>();
+        if blocks > MAX_BLOCKS || links > MAX_LINKS || l.functions.len() > MAX_FUNCTIONS {
+            top.err(
+                None,
+                format!(
+                    "This loop is too large ({blocks} blocks, {links} links, {} functions; the limits are {MAX_BLOCKS}, {MAX_LINKS} and {MAX_FUNCTIONS}).",
+                    l.functions.len()
+                ),
+            );
         }
     }
 
@@ -561,8 +580,8 @@ fn param_problems(k: &BlockKind) -> Vec<String> {
             if p.temperature.is_some_and(|t| !(0.0..=2.0).contains(&t)) {
                 v.push("temperature must be between 0 and 2".into());
             }
-            if p.max_tokens == 0 {
-                v.push("max answer length must be at least 1".into());
+            if !(1..=32_768).contains(&p.max_tokens) {
+                v.push("max answer length must be 1–32,768 tokens".into());
             }
             if p.retries > 5 {
                 v.push("times to ask again must be 0–5".into());

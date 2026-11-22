@@ -214,6 +214,11 @@ inputs and outputs become the function's ports, and links from the rest of
 the loop are moved onto the new block. Run events name blocks inside a
 function by path: `<function block id>/<block id>`.
 
+## Size limits
+
+A loop may have at most 5,000 blocks and 20,000 links (counting those inside
+functions) and 500 functions. Imported files are limited in size too.
+
 ## Validation
 
 Chummy checks a loop when it's opened, edited, imported or run.
@@ -246,14 +251,27 @@ Export it from the loop editor to see the full file.
 ## Example: 5 step recursive plan
 
 This template is an ordinary loop file:
-[`crates/flow/templates/five-step-plan.chummy.json`](../crates/flow/templates/five-step-plan.chummy.json).
-It treats the message as a goal and asks for a plan of 5 steps or fewer.
-Each step joins one queue (*Steps to do*), and a running exchange holding
-the goal and every result so far circulates like a token, so steps are
-handled one at a time, in order. For each step it asks the model whether the
-step can be done now (by writing, or with a tool). If YES, the *Do the step*
-function lets the model work on it, calling tools in a loop, and the result
-is shown and added to the exchange. If NO, the *Break it down* function plans
-5 or fewer smaller steps, which are shown and join the **back** of the queue,
-so the work proceeds breadth-first. When the queue is empty the run ends,
-with the running exchange left waiting, which is expected.
+[`crates/flow/templates/five-step-plan.chummy.json`](../crates/flow/templates/five-step-plan.chummy.json)
+(written by `make_templates.py` next to it). It treats the message as a goal.
+
+- Every task, starting with the goal itself, waits in one queue (*Tasks to
+  do*). A running exchange (the goal, then each task and its result)
+  circulates like a token, so tasks are handled one at a time, in order.
+- Each task is **tried first**: the *Attempt the task* function lets the
+  model do it, by writing or with tools (calling them as often as it needs).
+  A task it can do is never planned; a goal it can do in one go is answered
+  straight away.
+- If the model replies `TOO BIG`, the *Plan smaller steps* function breaks
+  the task into 5 or fewer steps, shows the plan, and the steps join the
+  **back** of the queue, so the work goes breadth-first.
+- Every result is shown and added to the running exchange. When the queue
+  is empty the run ends, with the running exchange left waiting, which is
+  expected.
+
+**5 step recursive plan verify**
+([`five-step-plan-verify.chummy.json`](../crates/flow/templates/five-step-plan-verify.chummy.json))
+adds a *Verify* function: the model writes a yes/no check question for an
+answer ("Does this answer make sense given the request?") and then answers
+it. Results that fail their check are broken down like a task that's too
+big; plans that fail are made again once, with the reason. It's slower and
+more careful.

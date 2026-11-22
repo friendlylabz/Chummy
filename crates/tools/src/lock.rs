@@ -30,6 +30,8 @@ const MAX_WHEEL: u64 = 64 * 1024 * 1024;
 pub struct PyLock {
     #[serde(rename = "lock-version")]
     pub lock_version: String,
+    #[serde(rename = "requires-python")]
+    pub requires_python: Option<String>,
     #[serde(default)]
     pub packages: Vec<LockPackage>,
 }
@@ -38,6 +40,10 @@ pub struct PyLock {
 pub struct LockPackage {
     pub name: String,
     pub version: Option<String>,
+    /// Environment markers. Locks for the sandbox are resolved for one
+    /// platform and shouldn't need any, so a lock with one is refused rather
+    /// than guessed at.
+    pub marker: Option<String>,
     #[serde(default)]
     pub wheels: Vec<LockWheel>,
 }
@@ -63,6 +69,19 @@ impl PyLock {
         let lock: PyLock = toml::from_str(text).map_err(|e| {
             ToolError::Dependencies(format!("the lock file isn't valid: {}", e.message()))
         })?;
+        if let Some(req) = &lock.requires_python
+            && !crate::meta::python_satisfies(req, PYTHON_VERSION).unwrap_or(false)
+        {
+            return Err(ToolError::Dependencies(format!(
+                "the lock is for Python {req}, and tools run on Python {PYTHON_VERSION}"
+            )));
+        }
+        if let Some(p) = lock.packages.iter().find(|p| p.marker.is_some()) {
+            return Err(ToolError::Dependencies(format!(
+                "the lock has an environment marker for {} (locks for the sandbox can't have markers)",
+                p.name
+            )));
+        }
         if !lock.lock_version.starts_with("1.") {
             return Err(ToolError::Dependencies(format!(
                 "lock version {} isn't supported",
@@ -355,6 +374,13 @@ name = "x"
 wheels = [{ url = "https://h.test/x-1-cp314-cp314-win_amd64.whl", hashes = { sha256 = "ab" } }]"#;
         assert!(plan(&PyLock::parse(compiled).unwrap()).is_err());
         assert!(PyLock::parse("lock-version = \"2.0\"").is_err());
+        let marker = r#"lock-version = "1.0"
+[[packages]]
+name = "colorama"
+marker = "sys_platform == 'win32'"
+wheels = []"#;
+        assert!(PyLock::parse(marker).is_err());
+        assert!(PyLock::parse("lock-version = \"1.0\"\nrequires-python = \">=3.15\"").is_err());
     }
 
     fn wheel(files: &[(&str, &str)]) -> Vec<u8> {

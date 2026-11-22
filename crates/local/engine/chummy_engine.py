@@ -23,6 +23,7 @@ This file is part of Chummy (MIT license).
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
 import os
 import re
@@ -213,6 +214,7 @@ class StreamSplitter:
         self.in_think = False
         self.in_tools = False
         self.seen_visible = False
+        self.held = ""  # the tool-call section, shown as text if it holds no call
 
     def _markers(self):
         ms = list(self.parser.markers)
@@ -241,6 +243,7 @@ class StreamSplitter:
                 continue
             if self.in_tools:
                 self.full += self.pending
+                self.held += self.pending
                 self.pending = ""
                 break
             if not self.seen_visible and self.pending.lstrip().startswith(self.THINK_OPEN):
@@ -255,6 +258,7 @@ class StreamSplitter:
                 if before.strip() or (before and self.seen_visible):
                     out.append(("text", before))
                 self.full += self.pending
+                self.held = self.pending[i:]
                 self.pending = ""
                 self.in_tools = True
                 break
@@ -279,6 +283,10 @@ class StreamSplitter:
         if not self.in_tools:
             return out, []
         _, calls = self.parser.parse(self.full)
+        if not calls and self.held.strip():
+            # It looked like a tool call (a Llama answer that starts with "{"),
+            # but wasn't one: it's the answer.
+            out.append(("text", self.held))
         return out, calls
 
 
@@ -310,7 +318,7 @@ class FakeBackend:
     def load(self):
         time.sleep(0.05)
 
-    def generate(self, messages, tools, max_tokens, temperature) -> Iterator[str]:
+    def generate(self, messages, tools, max_tokens, temperature, stop=None) -> Iterator[str]:
         last = next((m.get("content") or "" for m in reversed(messages) if m["role"] == "user"), "")
         low = last.lower()
         names = [t["function"]["name"] for t in (tools or [])]
@@ -324,12 +332,16 @@ class FakeBackend:
             text = call("current_time", {})
         elif "calculator" in names and ("work out" in low or "calculate" in low):
             text = call("calculator", {"expression": "365 - 326"})
+        elif "write one yes-or-no question" in low:
+            text = "Does this answer make sense given the request?"
         elif "yes or no" in low:
-            text = "NO" if "write a short summary" in low else "YES"
-        elif "numbered" in low and "too big" in low:
+            text = "NO, it needs more." if "write a short summary" in low else "YES, it fits."
+        elif "better plan" in low or ("too big" in low and "numbered" in low and "get ready" not in low):
             text = "1. Gather what is needed\n2. Finish the smaller part"
         elif "numbered" in low:
             text = "1. Find out today's date\n2. Work out how many days are left in the year\n3. Write a short summary"
+        elif names and ("get ready" in low or "write a short summary" in low):
+            text = "TOO BIG"
         elif tools and "weather" in low:
             name = tools[0]["function"]["name"]
             text = 'Let me check.\n<tool_call>\n{"name": "%s", "arguments": {"city": "Paris"}}\n</tool_call>' % name
@@ -344,6 +356,8 @@ class FakeBackend:
             said = low.split("the user now says:")[-1].split("write the assistant")[0].strip() or last.strip()
             text = "(fake model) You said: " + said[:200]
         for i in range(0, len(text), 3):
+            if stop is not None and stop.is_set():
+                return
             yield text[i:i + 3]
 
     def count(self, text: str) -> int:
@@ -414,9 +428,16 @@ class TransformersBackend:
     def _keep_tokens(self, parser: Parser) -> set[str]:
         return set(parser.markers) | {"<think>", "</think>", "<|/tool_call|>", "[ARGS]", "</tool_call>"}
 
-    def generate(self, messages, tools, max_tokens, temperature, parser: Parser) -> Iterator[str]:
+    def generate(self, messages, tools, max_tokens, temperature, parser: Parser,
+                 stop: threading.Event | None = None) -> Iterator[str]:
         import torch
-        from transformers import TextIteratorStreamer
+        from transformers import StoppingCriteria, StoppingCriteriaList, TextIteratorStreamer
+
+        stop = stop or threading.Event()
+
+        class StopWhenAsked(StoppingCriteria):
+            def __call__(self, input_ids, scores, **kwargs):
+                return stop.is_set()
 
         with self.lock:
             enc = self.tok.apply_chat_template(
@@ -428,7 +449,12 @@ class TransformersBackend:
             )
             enc = {k: v.to(self.model.device) for k, v in enc.items()}
             streamer = TextIteratorStreamer(self.tok, skip_prompt=True, skip_special_tokens=False)
-            gen = dict(enc, streamer=streamer, max_new_tokens=max_tokens)
+            gen = dict(enc, streamer=streamer, max_new_tokens=max_tokens,
+                       stopping_criteria=StoppingCriteriaList([StopWhenAsked()]))
+            # Some templates (DeepSeek-R1 distills) open <think> in the prompt,
+            # so the answer starts inside it. Say so, so it's routed as reasoning.
+            tail = self.tok.decode(enc["input_ids"][0][-8:], skip_special_tokens=False)
+            prompt_opens_think = tail.rstrip().endswith("<think>")
             if temperature and temperature > 0:
                 gen.update(do_sample=True, temperature=float(temperature))
             else:
@@ -449,13 +475,20 @@ class TransformersBackend:
 
             th = threading.Thread(target=run, daemon=True)
             th.start()
-            for piece in streamer:
-                for t in drop:
-                    if t:
-                        piece = piece.replace(t, "")
-                if piece:
-                    yield piece
-            th.join()
+            try:
+                if prompt_opens_think:
+                    yield "<think>"
+                for piece in streamer:
+                    for t in drop:
+                        if t:
+                            piece = piece.replace(t, "")
+                    if piece:
+                        yield piece
+            finally:
+                # The client went away or the stream ended: stop generating
+                # now, rather than holding the model until max_tokens.
+                stop.set()
+                th.join()
             if err:
                 raise err[0]
 
@@ -500,6 +533,9 @@ def to_hf_messages(messages: list[dict]) -> list[dict]:
 # --------------------------------------------------------------------------
 
 
+MAX_REQUEST_BYTES = 32 * 1024 * 1024
+
+
 class State:
     def __init__(self, backend, parser: Parser, token: str):
         self.backend = backend
@@ -518,7 +554,8 @@ def make_handler(state: State):
             pass
 
         def _auth(self) -> bool:
-            if self.headers.get("Authorization", "") == f"Bearer {state.token}":
+            given = self.headers.get("Authorization", "").encode()
+            if hmac.compare_digest(given, f"Bearer {state.token}".encode()):
                 return True
             self._json(401, {"error": {"message": "missing or wrong token"}})
             return False
@@ -552,17 +589,29 @@ def make_handler(state: State):
                 return self._json(503, {"error": {"message": f"model is {state.status}: {state.error or ''}"}})
             try:
                 n = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                n = -1
+            if not 0 <= n <= MAX_REQUEST_BYTES:
+                return self._json(413, {"error": {"message": "request too large"}})
+            try:
                 req = json.loads(self.rfile.read(n) or b"{}")
+                if not isinstance(req, dict):
+                    raise ValueError("not an object")
             except ValueError:
                 return self._json(400, {"error": {"message": "invalid JSON"}})
             with state.gen_lock:  # one answer at a time
                 self._complete(req)
 
         def _complete(self, req: dict):
-            messages = to_hf_messages(req.get("messages", []))
-            tools = req.get("tools") or []
-            max_tokens = int(req.get("max_tokens") or req.get("max_completion_tokens") or 2048)
-            temperature = req.get("temperature")
+            try:
+                messages = to_hf_messages(req.get("messages") or [])
+                tools = req.get("tools") or []
+                max_tokens = int(req.get("max_tokens") or req.get("max_completion_tokens") or 2048)
+                max_tokens = max(1, min(max_tokens, 131072))
+                temperature = req.get("temperature")
+                temperature = float(temperature) if temperature is not None else None
+            except (TypeError, ValueError, AttributeError) as e:
+                return self._json(400, {"error": {"message": f"bad request: {e}"}})
             stream = bool(req.get("stream"))
             cid = "chatcmpl-" + uuid.uuid4().hex[:24]
             created = int(time.time())
@@ -579,11 +628,14 @@ def make_handler(state: State):
             splitter = StreamSplitter(state.parser)
             text_parts, reasoning_parts, produced = [], [], []
 
+            stop = threading.Event()
+
             def pieces():
                 if isinstance(state.backend, FakeBackend):
-                    yield from state.backend.generate(messages, tools, max_tokens, temperature)
+                    yield from state.backend.generate(messages, tools, max_tokens, temperature, stop)
                 else:
-                    yield from state.backend.generate(messages, tools, max_tokens, temperature, state.parser)
+                    yield from state.backend.generate(messages, tools, max_tokens, temperature, state.parser,
+                                                      stop)
 
             if stream:
                 self.send_response(200)
@@ -596,8 +648,9 @@ def make_handler(state: State):
                 self.wfile.write(b"data: " + json.dumps(obj, ensure_ascii=False).encode() + b"\n\n")
                 self.wfile.flush()
 
+            gen = pieces()
             try:
-                for piece in pieces():
+                for piece in gen:
                     produced.append(piece)
                     for kind, s in splitter.feed(piece):
                         if kind == "text":
@@ -613,11 +666,20 @@ def make_handler(state: State):
                     (text_parts if kind == "text" else reasoning_parts).append(s)
                     if stream:
                         send(chunk({"content": s} if kind == "text" else {"reasoning_content": s}))
+            except (BrokenPipeError, ConnectionResetError):
+                # Chummy stopped the run and hung up.
+                return
             except Exception as e:  # noqa: BLE001
-                if stream:
-                    send({"error": {"message": f"generation failed: {e}"}})
+                try:
+                    if stream:
+                        send({"error": {"message": f"generation failed: {e}"}})
+                        return
+                    return self._json(500, {"error": {"message": f"generation failed: {e}"}})
+                except OSError:
                     return
-                return self._json(500, {"error": {"message": f"generation failed: {e}"}})
+            finally:
+                stop.set()
+                gen.close()
 
             tool_calls = [{"index": i, "id": "call_" + uuid.uuid4().hex[:16], "type": "function",
                            "function": {"name": c["name"], "arguments": c["arguments"]}}

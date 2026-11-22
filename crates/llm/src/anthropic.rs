@@ -22,6 +22,7 @@ pub(crate) fn body(model: &str, req: &ChatRequest) -> Value {
     let mut turns: Vec<(String, Vec<Value>)> = Vec::new();
     for m in req.messages.iter().filter(|m| m.role != Role::System) {
         let (role, blocks) = match m.role {
+            Role::User if m.content.trim().is_empty() => ("user", vec![]),
             Role::User => ("user", vec![json!({ "type": "text", "text": m.content })]),
             Role::Tool => (
                 "user",
@@ -33,7 +34,7 @@ pub(crate) fn body(model: &str, req: &ChatRequest) -> Value {
             ),
             Role::Assistant => {
                 let mut b = Vec::new();
-                if !m.content.is_empty() {
+                if !m.content.trim().is_empty() {
                     b.push(json!({ "type": "text", "text": m.content }));
                 }
                 for c in &m.tool_calls {
@@ -47,6 +48,23 @@ pub(crate) fn body(model: &str, req: &ChatRequest) -> Value {
             Some((r, existing)) if r == role => existing.extend(blocks),
             _ => turns.push((role.to_string(), blocks)),
         }
+    }
+
+    // The API refuses empty turns and a conversation that doesn't start with
+    // the user, both of which a loop can produce.
+    for (_, blocks) in turns.iter_mut() {
+        if blocks.is_empty() {
+            blocks.push(json!({ "type": "text", "text": "(empty)" }));
+        }
+    }
+    if turns.first().is_none_or(|(r, _)| r != "user") {
+        turns.insert(
+            0,
+            (
+                "user".into(),
+                vec![json!({ "type": "text", "text": "(start)" })],
+            ),
+        );
     }
 
     let mut b = json!({
@@ -194,6 +212,27 @@ pub(crate) fn parse_models(v: &Value) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn never_sends_empty_turns_or_starts_with_the_model() {
+        let req = ChatRequest {
+            messages: vec![
+                Message::system("s"),
+                Message::assistant("hello first"),
+                Message::user(""),
+                Message::assistant(""),
+            ],
+            ..Default::default()
+        };
+        let b = body("m", &req);
+        let turns = b["messages"].as_array().unwrap();
+        assert_eq!(turns[0]["role"], "user");
+        for t in turns {
+            let parts = t["content"].as_array().unwrap();
+            assert!(!parts.is_empty(), "{b}");
+            assert!(parts.iter().all(|p| p["text"] != ""), "{b}");
+        }
+    }
     use crate::types::{Message, ToolCall};
 
     #[test]

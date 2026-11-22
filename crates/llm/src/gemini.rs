@@ -17,6 +17,7 @@ pub(crate) fn body(req: &ChatRequest) -> Value {
     let mut contents: Vec<(String, Vec<Value>)> = Vec::new();
     for m in req.messages.iter().filter(|m| m.role != Role::System) {
         let (role, parts) = match m.role {
+            Role::User if m.content.trim().is_empty() => ("user", vec![]),
             Role::User => ("user", vec![json!({ "text": m.content })]),
             Role::Tool => (
                 "user",
@@ -27,7 +28,7 @@ pub(crate) fn body(req: &ChatRequest) -> Value {
             ),
             Role::Assistant => {
                 let mut p = Vec::new();
-                if !m.content.is_empty() {
+                if !m.content.trim().is_empty() {
                     p.push(json!({ "text": m.content }));
                 }
                 for c in &m.tool_calls {
@@ -41,6 +42,16 @@ pub(crate) fn body(req: &ChatRequest) -> Value {
             Some((r, existing)) if r == role => existing.extend(parts),
             _ => contents.push((role.to_string(), parts)),
         }
+    }
+
+    // Empty parts and a conversation starting with the model are refused.
+    for (_, parts) in contents.iter_mut() {
+        if parts.is_empty() {
+            parts.push(json!({ "text": "(empty)" }));
+        }
+    }
+    if contents.first().is_none_or(|(r, _)| r != "user") {
+        contents.insert(0, ("user".into(), vec![json!({ "text": "(start)" })]));
     }
 
     let mut b = json!({
@@ -179,6 +190,27 @@ pub(crate) fn parse_models(v: &Value) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn never_sends_empty_turns_or_starts_with_the_model() {
+        let req = ChatRequest {
+            messages: vec![
+                Message::system("s"),
+                Message::assistant("hello first"),
+                Message::user(""),
+                Message::assistant(""),
+            ],
+            ..Default::default()
+        };
+        let b = body(&req);
+        let turns = b["contents"].as_array().unwrap();
+        assert_eq!(turns[0]["role"], "user");
+        for t in turns {
+            let parts = t["parts"].as_array().unwrap();
+            assert!(!parts.is_empty(), "{b}");
+            assert!(parts.iter().all(|p| p["text"] != ""), "{b}");
+        }
+    }
     use crate::types::{Message, ToolCall, ToolSpec};
 
     #[test]

@@ -92,8 +92,13 @@ fn proxy_configured() -> bool {
     .any(|k| std::env::var_os(k).is_some_and(|v| !v.is_empty()))
 }
 
-/// Checks a URL's scheme and where its host points.
-async fn check_url(url: &reqwest::Url, policy: &NetPolicy) -> Result<(), String> {
+/// Checks a URL's scheme and where its host points. Returns the addresses
+/// it checked, so the connection can be pinned to them (otherwise a second
+/// lookup could answer differently: DNS rebinding).
+async fn check_url(
+    url: &reqwest::Url,
+    policy: &NetPolicy,
+) -> Result<Vec<std::net::SocketAddr>, String> {
     if !matches!(url.scheme(), "http" | "https") {
         return Err(format!(
             "only http and https addresses work, not {}:",
@@ -102,14 +107,14 @@ async fn check_url(url: &reqwest::Url, policy: &NetPolicy) -> Result<(), String>
     }
     let host = url.host_str().ok_or("the address has no host")?;
     if policy.allow_local {
-        return Ok(());
+        return Ok(vec![]);
     }
     let bare = host.trim_start_matches('[').trim_end_matches(']');
     if let Ok(ip) = bare.parse::<IpAddr>() {
         return if is_local(ip) {
             Err("addresses on this computer or the local network can't be reached".into())
         } else {
-            Ok(())
+            Ok(vec![])
         };
     }
     if bare.eq_ignore_ascii_case("localhost")
@@ -130,11 +135,11 @@ async fn check_url(url: &reqwest::Url, policy: &NetPolicy) -> Result<(), String>
                     "{host} points to this computer or the local network, which can't be reached"
                 ));
             }
-            Ok(())
+            Ok(addrs)
         }
         // Behind a proxy the computer may not resolve names itself; the
         // proxy does, and it's outside the local network.
-        Err(_) if proxy_configured() => Ok(()),
+        Err(_) if proxy_configured() => Ok(vec![]),
         Err(_) => Err(format!("couldn't find {host}")),
     }
 }
@@ -190,7 +195,22 @@ pub async fn http_request(
     let mut method = method;
     let mut body = Some(body);
     for _ in 0..=MAX_REDIRECTS {
-        check_url(&url, policy).await?;
+        let addrs = check_url(&url, policy).await?;
+        // Connect only to the addresses that were checked. (Behind a proxy
+        // the proxy connects, so there's nothing to pin.)
+        let pinned;
+        let client = if !addrs.is_empty() && !proxy_configured() {
+            pinned = reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .connect_timeout(Duration::from_secs(15))
+                .user_agent(concat!("Chummy/", env!("CARGO_PKG_VERSION"), " (tool)"))
+                .resolve_to_addrs(url.host_str().unwrap_or_default(), &addrs)
+                .build()
+                .map_err(|e| e.to_string())?;
+            &pinned
+        } else {
+            client
+        };
         let mut req = client
             .request(method.clone(), url.clone())
             .headers(headers.clone())

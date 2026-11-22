@@ -51,10 +51,14 @@ until you say so.
 - **Block functions.** Select some blocks and choose **Make function**: they
   become one block whose ports are exactly the inputs and outputs you left
   open. Double-click to edit inside. Functions are saved in the loop file.
-- **Templates.** Blank, Simple chat, Draft and self-check, and **5 step
-  recursive plan**: it plans your goal in 5 steps or fewer, does each step it
-  can (with tools), and breaks down the rest into smaller steps, breadth-first,
-  showing you the plan as it goes.
+- **Templates.** Blank, Simple chat, Draft and self-check, **5 step
+  recursive plan** and **5 step recursive plan verify**. The planner tries
+  your goal straight away (by writing or with tools); anything too big is
+  broken into 5 or fewer steps, and each step is tried the same way,
+  breadth-first, with every result and plan shown as it goes. The verify
+  version also has the model write a yes/no check question for each result
+  and plan and answer it, breaking down results that fail and re-planning
+  plans that fail.
 - **Agents.** An agent is a loop, a model, and **its own workspace folder**.
   Each folder belongs to exactly one agent, and no agent's folder can be inside
   another's. Chat with an agent from the main window; its loop runs inside its

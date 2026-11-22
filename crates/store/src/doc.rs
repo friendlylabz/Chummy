@@ -30,7 +30,7 @@ pub enum StoreError {
         #[source]
         source: io::Error,
     },
-    #[error("could not encode settings: {0}")]
+    #[error("could not encode the file: {0}")]
     Encode(#[from] serde_json::Error),
 }
 
@@ -110,12 +110,12 @@ impl<T: Serialize + DeserializeOwned + Default> JsonDoc<T> {
                     quarantined,
                 });
             }
-            Ok(None) => "settings file was missing".to_string(),
+            Ok(None) => "the file was missing".to_string(),
             Err(e) => {
                 let dest = self.sibling(&format!(".corrupt-{}", unix_now()));
                 fs::rename(&self.path, &dest).map_err(io_err(&self.path))?;
                 quarantined = Some(dest);
-                format!("settings file was unreadable ({e})")
+                format!("the file was unreadable ({e})")
             }
         };
 

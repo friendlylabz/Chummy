@@ -168,8 +168,13 @@ pub fn templates() -> Vec<Template> {
         l("improve", "out", "check", "in"),
     ];
 
+    // Written by templates/make_templates.py.
     let plan = LoopFile::from_json(include_str!("../templates/five-step-plan.chummy.json"))
         .expect("the built-in plan template is a valid loop file");
+    let plan_verify = LoopFile::from_json(include_str!(
+        "../templates/five-step-plan-verify.chummy.json"
+    ))
+    .expect("the built-in plan verify template is a valid loop file");
 
     vec![
         Template {
@@ -193,8 +198,14 @@ pub fn templates() -> Vec<Template> {
         Template {
             id: "five_step_plan",
             name: "5 step recursive plan",
-            description: "Plans your goal in 5 steps or fewer, does each step it can (with tools), and breaks down the rest, breadth-first.",
+            description: "Tries your goal straight away (with tools); anything too big is broken into 5 or fewer steps, each tried the same way, breadth-first.",
             file: plan,
+        },
+        Template {
+            id: "five_step_plan_verify",
+            name: "5 step recursive plan verify",
+            description: "The 5 step recursive plan, plus a check of every result and plan: the model writes a yes/no question and answers it. Slower, more careful.",
+            file: plan_verify,
         },
     ]
 }
@@ -210,10 +221,15 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::AtomicBool;
 
-    /// Answers like a model that can do everything but writing a summary.
+    /// A scripted model. It can find the date (with a tool) and pick a topic;
+    /// the goal and "write a summary" are too big. With `strict`, its checks
+    /// reject the topic it picked and the first plan for the summary.
     #[derive(Default)]
     struct Planner {
+        strict: bool,
         tools_run: Mutex<Vec<String>>,
+        plan_checks_failed: Mutex<u32>,
+        calls: Mutex<u32>,
     }
 
     impl Host for Planner {
@@ -222,6 +238,7 @@ mod tests {
             call: LlmCall,
             _: &mut (dyn FnMut(&str) + Send),
         ) -> Result<LlmAnswer, String> {
+            *self.calls.lock().unwrap() += 1;
             let last = call.messages.last().unwrap();
             let user = call
                 .messages
@@ -239,28 +256,52 @@ mod tests {
             if last.role == Role::Tool {
                 return text(&format!("Done: {}", last.text));
             }
-            if !call.tools.is_empty() && user.contains("date") {
-                return Ok(LlmAnswer {
-                    calls: vec![ToolCall {
-                        id: "t1".into(),
-                        name: "current_time".into(),
-                        arguments: json!({}),
-                    }],
-                    ..Default::default()
-                });
-            }
-            if user.contains("yes or no") {
-                return text(if user.contains("summary") {
-                    "NO"
+            if !call.tools.is_empty() {
+                // An attempt at "Task: …".
+                return if user.contains("date") {
+                    Ok(LlmAnswer {
+                        calls: vec![ToolCall {
+                            id: "t1".into(),
+                            name: "current_time".into(),
+                            arguments: json!({}),
+                        }],
+                        ..Default::default()
+                    })
+                } else if user.contains("write about today") || user.contains("summary") {
+                    text("TOO BIG")
                 } else {
-                    "YES"
-                });
+                    text("did it")
+                };
             }
-            if user.contains("too big") {
+            if user.contains("write one yes-or-no question") {
+                return text("Does this answer make sense given the request?");
+            }
+            if user.contains("start with yes or no") {
+                let request = user.lines().next().unwrap_or_default().to_string();
+                let is_plan = user.contains("answer: 1.");
+                if self.strict && request.contains("pick a topic") && !is_plan {
+                    return text("NO, no topic was picked.");
+                }
+                if self.strict && request.contains("summary") && is_plan {
+                    let mut n = self.plan_checks_failed.lock().unwrap();
+                    *n += 1;
+                    return text(if *n == 1 {
+                        "NO, too vague."
+                    } else {
+                        "YES, fine."
+                    });
+                }
+                return text("YES, it fits.");
+            }
+            if user.contains("better plan") {
                 return text("1. Gather notes\n2. Write two lines");
             }
-            if user.contains("numbered") {
-                return text("1. Find today's date\n2. Pick a topic\n3. Write a summary");
+            if user.contains("too big to do in one go") {
+                return text(if user.contains("write about today") {
+                    "1. Find today's date\n2. Pick a topic\n3. Write a summary"
+                } else {
+                    "1. Gather notes\n2. Write two lines"
+                });
             }
             text("did it")
         }
@@ -289,33 +330,81 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn the_plan_template_works_breadth_first() {
-        let t = templates()
-            .into_iter()
-            .find(|t| t.id == "five_step_plan")
-            .unwrap();
-        let host = Planner::default();
+    async fn plan_run(id: &str, host: &Planner, message: &str) -> crate::engine::RunOutcome {
+        let t = templates().into_iter().find(|t| t.id == id).unwrap();
         let inputs = RunInputs {
-            message: "Write about today".into(),
+            message: message.into(),
             ..Default::default()
         };
-        let out = run(&t.file, &host, &inputs, &AtomicBool::new(false), |_| {}).await;
+        run(&t.file, host, &inputs, &AtomicBool::new(false), |_| {}).await
+    }
+
+    #[tokio::test]
+    async fn the_plan_template_tries_first_then_plans_breadth_first() {
+        let host = Planner::default();
+        let out = plan_run("five_step_plan", &host, "Write about today").await;
         assert_eq!(out.status, RunStatus::Completed, "{out:?}");
         let r = &out.replies;
-        assert!(r[0].starts_with("**Plan**"), "{r:?}");
-        assert_eq!(r[1], "**✓ Step: Find today's date**\n\nDone: Monday");
-        assert_eq!(r[2], "**✓ Step: Pick a topic**\n\ndid it");
+        // The goal was tried first, found too big, then planned.
+        assert_eq!(
+            r[0],
+            "**Breaking down Task: Write about today**\n\n1. Find today's date\n2. Pick a topic\n3. Write a summary"
+        );
+        assert_eq!(r[1], "**✓ Task: Find today's date**\n\nDone: Monday");
+        assert_eq!(r[2], "**✓ Task: Pick a topic**\n\ndid it");
         assert!(
-            r[3].starts_with("**Breaking down Step: Write a summary**"),
+            r[3].starts_with("**Breaking down Task: Write a summary**"),
             "{r:?}"
         );
         // The sub-steps come after the top-level steps: breadth-first.
-        assert_eq!(r[4], "**✓ Step: Gather notes**\n\ndid it");
-        assert_eq!(r[5], "**✓ Step: Write two lines**\n\ndid it");
+        assert_eq!(r[4], "**✓ Task: Gather notes**\n\ndid it");
+        assert_eq!(r[5], "**✓ Task: Write two lines**\n\ndid it");
         assert_eq!(r.len(), 6);
         assert_eq!(*host.tools_run.lock().unwrap(), vec!["current_time"]);
-        // Only the start exchange waits at the end, holding the running exchange.
+        // Only the running exchange waits at the end.
+        assert_eq!(out.waiting, vec!["pair"]);
+    }
+
+    #[tokio::test]
+    async fn the_plan_template_one_shots_what_it_can() {
+        let host = Planner::default();
+        let out = plan_run("five_step_plan", &host, "What's the date?").await;
+        assert_eq!(
+            out.replies,
+            vec!["**✓ Task: What's the date?**\n\nDone: Monday"]
+        );
+        // One call to use the tool, one to answer: nothing was planned.
+        assert_eq!(*host.calls.lock().unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn the_verify_template_checks_results_and_plans() {
+        let host = Planner {
+            strict: true,
+            ..Default::default()
+        };
+        let out = plan_run("five_step_plan_verify", &host, "Write about today").await;
+        assert_eq!(out.status, RunStatus::Completed, "{out:?}");
+        let r = &out.replies;
+        assert!(
+            r[0].starts_with("**Breaking down Task: Write about today**"),
+            "{r:?}"
+        );
+        assert_eq!(r[1], "**✓ Task: Find today's date**\n\nDone: Monday");
+        // "Pick a topic" was done, but failed its check, so it was broken down.
+        assert_eq!(
+            r[2],
+            "**Breaking down Task: Pick a topic**\n\n1. Gather notes\n2. Write two lines"
+        );
+        // The summary's first plan failed its check and was made again.
+        assert_eq!(
+            r[3],
+            "**Breaking down Task: Write a summary**\n\n1. Gather notes\n2. Write two lines"
+        );
+        // The second plan is used as it is (one retry, so it can't loop).
+        assert_eq!(*host.plan_checks_failed.lock().unwrap(), 1);
+        assert_eq!(r.len(), 8, "{r:?}");
+        assert!(r[4..].iter().all(|m| m.starts_with("**✓ Task:")), "{r:?}");
         assert_eq!(out.waiting, vec!["pair"]);
     }
 

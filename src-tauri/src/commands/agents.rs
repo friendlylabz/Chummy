@@ -229,7 +229,9 @@ pub async fn delete_agent(
         return Ok(false);
     }
     crate::commands::chat::stop_agent_runs(&state, &id);
-    let _ = std::fs::remove_file(crate::commands::chat::chat_path(&state, &id)?);
+    let chat = crate::commands::chat::chat_path(&state, &id)?;
+    let _ = std::fs::remove_file(&chat);
+    let _ = std::fs::remove_file(chat.with_extension("json.bak"));
     state.update(&app, |s| {
         s.agents.retain(|a| a.id != id);
         if s.active_agent.as_deref() == Some(id.as_str()) {

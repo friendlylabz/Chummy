@@ -69,7 +69,7 @@ impl RelPath {
                 "" | "." => {}
                 ".." => return Err(RelPathError::ParentDir(input.into())),
                 name => {
-                    if cfg!(windows) && name.contains(':') {
+                    if cfg!(windows) && !windows_safe_name(name) {
                         return Err(RelPathError::BadChar(input.into()));
                     }
                     out.push(name);
@@ -102,6 +102,28 @@ impl RelPath {
     }
 }
 
+/// Names Windows handles specially: `:` (alternate data streams), device
+/// names like `CON` or `com1.txt`, and trailing dots or spaces (which Windows
+/// drops, so the name would mean a different file).
+pub(crate) fn windows_safe_name(name: &str) -> bool {
+    if name.contains(':') || name.ends_with('.') || name.ends_with(' ') {
+        return false;
+    }
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end()
+        .to_ascii_uppercase();
+    let device = matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || ((stem.starts_with("COM") || stem.starts_with("LPT"))
+        && stem.len() == 4
+        && stem.as_bytes()[3].is_ascii_digit());
+    !device
+}
+
 impl fmt::Display for RelPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = self.0.to_string_lossy().replace('\\', "/");
@@ -117,6 +139,25 @@ fn looks_like_drive(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_names() {
+        for bad in [
+            "CON",
+            "nul",
+            "nul.txt",
+            "COM1",
+            "lpt9.log",
+            "a:b",
+            "trailing.",
+            "space ",
+        ] {
+            assert!(!windows_safe_name(bad), "{bad}");
+        }
+        for ok in ["console", "com10", "notes.txt", "nul-ish", "COM", ".hidden"] {
+            assert!(windows_safe_name(ok), "{ok}");
+        }
+    }
 
     #[test]
     fn accepts_plain_relative_paths() {

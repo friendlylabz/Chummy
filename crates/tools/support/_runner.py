@@ -156,9 +156,13 @@ def call(chummy, fn, args):
         result = fn(*bound.args, **bound.kwargs)
     except chummy.ToolError as e:
         return done_err(str(e) or "The tool failed.", "tool")
+    except SystemExit:
+        return done_err("The tool tried to exit instead of returning a result.", "crash")
     except Exception as e:
         traceback.print_exc()
         return done_err(f"{type(e).__name__}: {e}", "crash")
+    if inspect.isawaitable(result):
+        return done_err("Tool functions can't be async.", "definition")
     if result is None:
         result = "Done."
     try:

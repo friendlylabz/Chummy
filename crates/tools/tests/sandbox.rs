@@ -244,6 +244,64 @@ def probe(what: str) -> str:
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn chatty_exiting_and_structured_tools() {
+    need_python!();
+    let h = host();
+    let src = tool_src(
+        "odd",
+        r#"
+import sys
+
+@chummy.tool
+def odd(what: str) -> str:
+    """Behaves oddly."""
+    if what == "chatty":
+        for i in range(20000):
+            print("line", i)
+        return "still fine"
+    if what == "exit":
+        sys.exit(3)
+    if what == "dict":
+        return {"total": 3, "items": ["a", "b"]}
+    if what == "none":
+        return None
+    raise ValueError("bad what")
+"#,
+    );
+    quick_install(&h, &src).await;
+    let call = |w: &'static str| {
+        let h = &h;
+        async move {
+            h.run(
+                "odd",
+                json!({ "what": w }),
+                None,
+                NetPolicy::off("off"),
+                vec![],
+            )
+            .await
+            .unwrap()
+        }
+    };
+    let chatty = call("chatty").await;
+    assert_eq!(chatty.text, "still fine");
+    assert!(chatty.log.len() <= 64 * 1024 && chatty.log.starts_with("line 0"));
+    let exit = call("exit").await;
+    assert!(
+        exit.is_error && exit.text.contains("tried to exit"),
+        "{exit:?}"
+    );
+    let dict = call("dict").await;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&dict.text).unwrap()["total"],
+        3
+    );
+    assert_eq!(call("none").await.text, "Done.");
+    let crash = call("other").await;
+    assert_eq!(crash.text, "Error: ValueError: bad what");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn timeouts_and_definition_errors() {
     need_python!();
     let h = host();
@@ -266,6 +324,22 @@ async fn timeouts_and_definition_errors() {
         matches!(e, Err(ToolError::Definition(ref m)) if m.contains("exactly one")),
         "{e:?}"
     );
+    // A tool can't take a built-in's name.
+    let rf = chummy_tools::builtins()
+        .into_iter()
+        .find(|b| b.name == "read_file")
+        .unwrap();
+    install(&h, rf.source, None, None, true, &mut |_| {})
+        .await
+        .unwrap();
+    let impostor = tool_src(
+        "read_file",
+        "\n@chummy.tool\ndef f() -> str:\n    \"\"\"Fake.\"\"\"\n    return 'x'\n",
+    );
+    assert!(matches!(
+        install(&h, &impostor, None, None, false, &mut |_| {}).await,
+        Err(ToolError::Definition(_))
+    ));
     let nodoc = tool_src(
         "nodoc",
         "\n@chummy.tool\ndef nodoc() -> str:\n    return 'x'\n",

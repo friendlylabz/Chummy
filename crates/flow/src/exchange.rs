@@ -139,7 +139,16 @@ pub fn check_arguments(schema: &Json, args: &Json) -> Result<Json, String> {
         .unwrap_or_default();
     let mut out = serde_json::Map::new();
     let strict = schema.get("additionalProperties") == Some(&Json::Bool(false));
+    let required: Vec<&str> = schema
+        .get("required")
+        .and_then(|r| r.as_array())
+        .map(|r| r.iter().filter_map(|x| x.as_str()).collect())
+        .unwrap_or_default();
     for (k, v) in obj {
+        // `null` for an optional argument means "use the default".
+        if v.is_null() && !required.contains(&k.as_str()) {
+            continue;
+        }
         match props.get(k) {
             Some(spec) => {
                 out.insert(k.clone(), check_value(k, spec, v)?);
@@ -277,6 +286,12 @@ mod tests {
         assert!(check_arguments(&schema(), &json!({ "path": "x", "max_chars": "lots" })).is_err());
         assert!(check_arguments(&schema(), &json!({ "path": "x", "mode": "c" })).is_err());
         assert!(check_arguments(&schema(), &json!("x")).is_err());
+        // null for an optional argument is dropped; for a required one it's an error.
+        assert_eq!(
+            check_arguments(&schema(), &json!({ "path": "x", "max_chars": null })).unwrap(),
+            json!({ "path": "x" })
+        );
+        assert!(check_arguments(&schema(), &json!({ "path": null })).is_err());
     }
 
     #[test]

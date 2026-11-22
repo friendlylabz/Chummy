@@ -176,7 +176,10 @@ impl LoopFile {
                 ));
             }
         }
-        let version = raw.get("version").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        let version = match raw.get("version").and_then(|v| v.as_u64()) {
+            Some(v) => u32::try_from(v).map_err(|_| FlowError::UnsupportedVersion(u32::MAX))?,
+            None => 0,
+        };
         if version > VERSION {
             return Err(FlowError::UnsupportedVersion(version));
         }
@@ -231,6 +234,17 @@ mod tests {
             LoopFile::from_json(r#"{"format":"chummy.loop","version":9,"name":"x","blocks":[]}"#),
             Err(FlowError::UnsupportedVersion(9))
         ));
+        // A huge version must not wrap around to 1.
+        assert!(
+            LoopFile::from_json(
+                r#"{"format":"chummy.loop","version":4294967297,"name":"x","blocks":[]}"#
+            )
+            .is_err()
+        );
+        assert!(
+            LoopFile::from_json(r#"{"format":"chummy.loop","version":1.5,"name":"x","blocks":[]}"#)
+                .is_err()
+        );
         // Unknown fields are errors, not silently dropped.
         let extra = r#"{"format":"chummy.loop","version":1,"name":"x","blocks":[],"nodes":[]}"#;
         assert!(LoopFile::from_json(extra).is_err());

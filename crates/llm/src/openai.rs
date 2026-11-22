@@ -111,12 +111,14 @@ impl Decoder {
         };
         let delta = &choice["delta"];
 
-        for key in ["reasoning_content", "reasoning"] {
-            if let Some(r) = delta[key].as_str().filter(|s| !s.is_empty()) {
-                out.push(ChatEvent::Reasoning {
-                    text: r.to_string(),
-                });
-            }
+        // Servers name this differently; some send both with the same text.
+        if let Some(r) = ["reasoning_content", "reasoning"]
+            .iter()
+            .find_map(|k| delta[*k].as_str().filter(|s| !s.is_empty()))
+        {
+            out.push(ChatEvent::Reasoning {
+                text: r.to_string(),
+            });
         }
         if let Some(t) = delta["content"].as_str().filter(|s| !s.is_empty()) {
             out.push(ChatEvent::Text {
@@ -125,13 +127,29 @@ impl Decoder {
         }
         if let Some(calls) = delta["tool_calls"].as_array() {
             for (i, c) in calls.iter().enumerate() {
-                let idx = c["index"].as_u64().unwrap_or(i as u64);
+                let id = c["id"].as_str().filter(|s| !s.is_empty());
+                let idx = match c["index"].as_u64() {
+                    Some(n) => n,
+                    // Without an index, a new id means a new call.
+                    None => {
+                        let i = i as u64;
+                        match (id, self.calls.get(&i)) {
+                            (Some(id), Some(e)) if !e.id.is_empty() && e.id != id => {
+                                self.calls.keys().max().map_or(0, |k| k + 1)
+                            }
+                            _ => i,
+                        }
+                    }
+                };
                 let entry = self.calls.entry(idx).or_default();
-                if let Some(id) = c["id"].as_str() {
+                if let Some(id) = id {
                     entry.id = id.to_string();
                 }
                 if let Some(n) = c["function"]["name"].as_str() {
-                    entry.name.push_str(n);
+                    // Some servers repeat the whole name in every chunk.
+                    if entry.name != n {
+                        entry.name.push_str(n);
+                    }
                 }
                 if let Some(a) = c["function"]["arguments"].as_str() {
                     entry.args.push_str(a);
@@ -206,6 +224,36 @@ mod tests {
         }
         out.extend(d.finish());
         out
+    }
+
+    #[test]
+    fn tolerates_server_quirks() {
+        // Reasoning under both names, a name repeated in every chunk, and
+        // two calls without an index.
+        let ev = run(&[
+            r#"{"choices":[{"delta":{"reasoning_content":"think","reasoning":"think"}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"read_file","arguments":"{\"pa"}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"read_file","arguments":"th\":\"x\"}"}}]}}]}"#,
+        ]);
+        let reasoning = ev
+            .iter()
+            .filter(|e| matches!(e, ChatEvent::Reasoning { .. }))
+            .count();
+        assert_eq!(reasoning, 1);
+        assert!(ev.iter().any(|e| matches!(e, ChatEvent::ToolCall { call } if call.name == "read_file" && call.arguments["path"] == "x")), "{ev:?}");
+
+        let ev = run(&[
+            r#"{"choices":[{"delta":{"tool_calls":[{"id":"a","function":{"name":"one","arguments":"{}"}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"id":"b","function":{"name":"two","arguments":"{}"}}]}}]}"#,
+        ]);
+        let names: Vec<String> = ev
+            .iter()
+            .filter_map(|e| match e {
+                ChatEvent::ToolCall { call } => Some(call.name.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, vec!["one", "two"]);
     }
 
     #[test]

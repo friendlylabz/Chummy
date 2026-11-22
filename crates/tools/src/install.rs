@@ -123,6 +123,12 @@ pub fn installed(paths: &ToolPaths) -> Vec<ToolManifest> {
 
 /// Checks that an installed tool's file is the one that was installed.
 pub fn verify(paths: &ToolPaths, m: &ToolManifest) -> Result<(), ToolError> {
+    if m.python != PYTHON_VERSION {
+        return Err(ToolError::Runtime(format!(
+            "{} was installed for Python {}, and tools now run on Python {PYTHON_VERSION}; reinstall it",
+            m.name, m.python
+        )));
+    }
     let src = std::fs::read_to_string(paths.tool_dir(&m.name).join("tool.py"))
         .map_err(|_| ToolError::NotInstalled(m.name.clone()))?;
     if sha(&src) != m.source_sha256 {
@@ -158,13 +164,35 @@ pub async fn install(
     builtin: bool,
     on: &mut (dyn FnMut(&str) + Send),
 ) -> Result<ToolManifest, ToolError> {
+    // One install at a time, so two installs of one tool can't swap folders
+    // under each other.
+    static INSTALLING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _one = INSTALLING.lock().await;
     let paths = host.paths().clone();
+    // With the lock held, any staging folder is left over from an install
+    // that was interrupted.
+    for e in std::fs::read_dir(&paths.installed)
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') && (name.contains(".installing-") || name.ends_with(".old")) {
+            let _ = std::fs::remove_dir_all(e.path());
+        }
+    }
     let meta: ToolMeta = parse_meta(source)?;
     if let Some(req) = &meta.requires_python
         && !python_satisfies(req, PYTHON_VERSION)?
     {
         return Err(ToolError::Definition(format!(
             "it needs Python {req}, and tools run on Python {PYTHON_VERSION}"
+        )));
+    }
+    if !builtin && manifest(&paths, &meta.name).is_some_and(|m| m.builtin) {
+        return Err(ToolError::Definition(format!(
+            "“{}” is the name of a built-in tool; give this tool its own name",
+            meta.name
         )));
     }
     std::fs::create_dir_all(&paths.installed)

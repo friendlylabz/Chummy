@@ -102,7 +102,13 @@ impl Library {
     pub fn save(&self, id: &str, file: &LoopFile) -> Result<(), String> {
         let path = self.path(id)?;
         let tmp = self.dir.join(format!("{id}.json.tmp"));
-        std::fs::write(&tmp, file.to_json()).map_err(|e| e.to_string())?;
+        {
+            use std::io::Write;
+            let mut f = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
+            f.write_all(file.to_json().as_bytes())
+                .and_then(|_| f.sync_all())
+                .map_err(|e| e.to_string())?;
+        }
         std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
     }
 

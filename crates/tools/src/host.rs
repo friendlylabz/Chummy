@@ -31,7 +31,6 @@ use wasmtime::{
 };
 use wasmtime_wasi::cli::{IsTerminal, StdinStream, StdoutStream};
 use wasmtime_wasi::p1::WasiP1Ctx;
-use wasmtime_wasi::p2::pipe::MemoryOutputPipe;
 use wasmtime_wasi::{FsPerms, WasiCtxBuilder};
 
 use crate::ToolError;
@@ -170,7 +169,7 @@ impl ToolHost {
         let (to_guest, guest_in) = mpsc::unbounded_channel::<Vec<u8>>();
         let (guest_out, mut from_guest) = mpsc::unbounded_channel::<Vec<u8>>();
         let _ = to_guest.send((request.to_string() + "\n").into_bytes());
-        let log = MemoryOutputPipe::new(LOG_LIMIT);
+        let log = LogOut::default();
 
         let mut b = WasiCtxBuilder::new();
         b.args(&["python", "-S", "-E", "-B", "-u", "/chummy/_runner.py"])
@@ -261,7 +260,7 @@ impl ToolHost {
         // Dropping the store closes stdout, which ends the bridge.
         drop(store);
         let done = bridge.await.ok().flatten();
-        let log = String::from_utf8_lossy(&log.contents()).trim().to_string();
+        let log = log.text();
 
         if let Err(e) = result {
             // A normal exit(0) is reported as an error by WASI; check for it.
@@ -370,6 +369,49 @@ impl IsTerminal for ChannelIn {
 
 impl StdinStream for ChannelIn {
     fn async_stream(&self) -> Box<dyn AsyncRead + Send + Sync> {
+        Box::new(self.clone())
+    }
+}
+
+/// Guest stderr (the tool's log): keeps the first [`LOG_LIMIT`] bytes and
+/// quietly drops the rest, so a chatty tool never fails on `print`.
+#[derive(Clone, Default)]
+struct LogOut(Arc<Mutex<Vec<u8>>>);
+
+impl LogOut {
+    fn text(&self) -> String {
+        let b = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        String::from_utf8_lossy(&b).trim().to_string()
+    }
+}
+
+impl AsyncWrite for LogOut {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let mut b = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let room = LOG_LIMIT.saturating_sub(b.len());
+        b.extend_from_slice(&buf[..buf.len().min(room)]);
+        Poll::Ready(Ok(buf.len()))
+    }
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl IsTerminal for LogOut {
+    fn is_terminal(&self) -> bool {
+        false
+    }
+}
+
+impl StdoutStream for LogOut {
+    fn async_stream(&self) -> Box<dyn AsyncWrite + Send + Sync> {
         Box::new(self.clone())
     }
 }

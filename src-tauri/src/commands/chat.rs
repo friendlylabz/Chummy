@@ -28,6 +28,8 @@ use crate::state::{AppState, RunInfo, lock};
 
 /// Largest file a Read file block will read.
 const READ_LIMIT: u64 = 1024 * 1024;
+/// Chat history kept per agent; older messages are dropped.
+const MAX_CHAT_MESSAGES: usize = 2000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RunSummary {
@@ -100,6 +102,10 @@ fn append(
     let mut log = doc.load(|v| v).map_err(err)?.value;
     log.version = 1;
     log.messages.push(message.clone());
+    if log.messages.len() > MAX_CHAT_MESSAGES {
+        let extra = log.messages.len() - MAX_CHAT_MESSAGES;
+        log.messages.drain(..extra);
+    }
     doc.save(&log).map_err(err)?;
     let _ = app.emit(
         events::CHAT_MESSAGE,
@@ -309,6 +315,12 @@ fn start(
     let app = app.clone();
     let id = run_id.clone();
     tauri::async_runtime::spawn(async move {
+        // However the run ends (even by a panic), it leaves the run list, so
+        // the agent never stays "still working".
+        let _guard = RunGuard {
+            app: app.clone(),
+            run_id: id.clone(),
+        };
         let emitter = app.clone();
         let rid = id.clone();
         let outcome = run(&file, &host, &inputs, &cancel, move |event| {
@@ -341,6 +353,18 @@ fn start(
         );
     });
     run_id
+}
+
+struct RunGuard {
+    app: AppHandle,
+    run_id: String,
+}
+
+impl Drop for RunGuard {
+    fn drop(&mut self) {
+        let state = self.app.state::<AppState>();
+        lock(&state.runs).remove(&self.run_id);
+    }
 }
 
 fn to_llm_message(m: &ExMessage) -> Message {

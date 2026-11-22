@@ -171,6 +171,15 @@ impl ChatResponse {
 /// Parses accumulated tool-call argument text into an event. Empty arguments
 /// mean "no arguments".
 pub(crate) fn finish_tool_call(id: String, name: String, raw: &str) -> ChatEvent {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return ChatEvent::MalformedToolCall {
+            id,
+            name,
+            raw: raw.into(),
+            error: "the call has no tool name".into(),
+        };
+    }
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return ChatEvent::ToolCall {
@@ -189,6 +198,18 @@ pub(crate) fn finish_tool_call(id: String, name: String, raw: &str) -> ChatEvent
                 arguments: v,
             },
         },
+        // Some models encode the arguments twice: a JSON string of JSON.
+        Ok(serde_json::Value::String(inner))
+            if serde_json::from_str::<serde_json::Value>(&inner).is_ok_and(|v| v.is_object()) =>
+        {
+            ChatEvent::ToolCall {
+                call: ToolCall {
+                    id,
+                    name,
+                    arguments: serde_json::from_str(&inner).unwrap_or_default(),
+                },
+            }
+        }
         Ok(_) => ChatEvent::MalformedToolCall {
             id,
             name,
@@ -211,4 +232,28 @@ pub(crate) fn make_call_id(n: usize) -> String {
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
     format!("call_{t:08x}{n}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_call_arguments() {
+        let ok = |raw: &str| match finish_tool_call("1".into(), "t".into(), raw) {
+            ChatEvent::ToolCall { call } => Some(call.arguments),
+            _ => None,
+        };
+        assert_eq!(ok("").unwrap(), serde_json::json!({}));
+        assert_eq!(ok(r#"{"a":1}"#).unwrap(), serde_json::json!({ "a": 1 }));
+        // Double-encoded arguments are unwrapped.
+        assert_eq!(ok(r#""{\"a\":1}""#).unwrap(), serde_json::json!({ "a": 1 }));
+        assert!(ok("[1]").is_none());
+        assert!(ok(r#""just text""#).is_none());
+        assert!(ok("{broken").is_none());
+        assert!(matches!(
+            finish_tool_call("1".into(), "  ".into(), "{}"),
+            ChatEvent::MalformedToolCall { .. }
+        ));
+    }
 }

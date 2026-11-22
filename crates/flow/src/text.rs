@@ -43,8 +43,21 @@ fn find_break(chars: &[char], center: usize, radius: usize) -> usize {
     center
 }
 
-/// Removes `<think>…</think>` sections some models put in their answer.
+/// Splits off a leading reasoning section that has a closing tag but no
+/// opening one. Many reasoning models' chat templates open `<think>` in the
+/// prompt, so the answer starts inside it: `reasoning…</think>answer`.
+fn bare_close(s: &str) -> Option<(&str, &str)> {
+    let close = s.find("</think>")?;
+    match s.find("<think>") {
+        Some(open) if open < close => None,
+        _ => Some((&s[..close], &s[close + "</think>".len()..])),
+    }
+}
+
+/// Removes `<think>…</think>` sections some models put in their answer
+/// (including a leading one whose opening tag was in the prompt).
 pub fn strip_thinking(s: &str) -> String {
+    let s = bare_close(s).map_or(s, |(_, rest)| rest);
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     while let Some(i) = rest.find("<think>") {
@@ -65,6 +78,10 @@ pub fn strip_thinking(s: &str) -> String {
 pub fn thinking(s: &str) -> String {
     let mut out = Vec::new();
     let mut rest = s;
+    if let Some((before, after)) = bare_close(s) {
+        out.push(before.trim().to_string());
+        rest = after;
+    }
     while let Some(i) = rest.find("<think>") {
         let after = &rest[i + "<think>".len()..];
         match after.find("</think>") {
@@ -105,6 +122,31 @@ pub fn fill_prompt(prompt: &str, input: &str) -> String {
     }
 }
 
+/// Replaces `_INPUT1_`, `_INPUT2_`, … with `values`, in one pass, so text
+/// that arrives on one input is never rewritten by another.
+pub fn fill_numbered(format: &str, values: &[String]) -> String {
+    let mut out = String::with_capacity(format.len());
+    let mut rest = format;
+    while let Some(i) = rest.find("_INPUT") {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + "_INPUT".len()..];
+        let digits = after.chars().take_while(|c| c.is_ascii_digit()).count();
+        let n: Option<usize> = after[..digits].parse().ok();
+        match n {
+            Some(n) if after[digits..].starts_with('_') && n >= 1 && n <= values.len() => {
+                out.push_str(&values[n - 1]);
+                rest = &after[digits + 1..];
+            }
+            _ => {
+                out.push_str("_INPUT");
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,6 +177,37 @@ mod tests {
         assert_eq!(strip_thinking("<think>never closed"), "");
         assert_eq!(thinking("<think> a </think>B<think>c</think>"), "a\n\nc");
         assert_eq!(truncate("abcdef", 3), "abc\n[… cut at 3 characters]");
+        // The opening tag was in the prompt (Qwen3, DeepSeek-R1 templates).
+        assert_eq!(
+            strip_thinking("plan it first</think>\n\nThe answer"),
+            "The answer"
+        );
+        assert_eq!(thinking("plan it first</think>The answer"), "plan it first");
+        assert_eq!(
+            strip_thinking("a <think>b</think> c </think> d"),
+            "a  c </think> d"
+        );
+        assert_eq!(truncate("ab", 2), "ab");
+    }
+
+    #[test]
+    fn fills_numbered_inputs_in_one_pass() {
+        let v = |xs: &[&str]| xs.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            fill_numbered("_INPUT1_ and _INPUT2_", &v(&["a", "b"])),
+            "a and b"
+        );
+        // Text from input 2 that looks like a placeholder stays as it is.
+        assert_eq!(
+            fill_numbered("_INPUT1_|_INPUT2_", &v(&["x", "_INPUT1_"])),
+            "x|_INPUT1_"
+        );
+        let ten: Vec<String> = (1..=10).map(|i| i.to_string()).collect();
+        assert_eq!(fill_numbered("_INPUT10_-_INPUT1_", &ten), "10-1");
+        assert_eq!(
+            fill_numbered("_INPUT3_ _INPUT_ _INPUTx_ _INPUT", &v(&["a"])),
+            "_INPUT3_ _INPUT_ _INPUTx_ _INPUT"
+        );
     }
 
     #[test]

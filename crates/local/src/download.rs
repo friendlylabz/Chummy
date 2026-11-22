@@ -162,12 +162,27 @@ async fn fetch_file(
     }
 
     // Hash what we already have so the final checksum covers the whole file.
+    // (In chunks: a partial shard can be several gigabytes.)
     let mut hasher = Sha256::new();
     if have > 0 && f.sha256.is_some() {
-        let existing = tokio::fs::read(&part)
+        use tokio::io::AsyncReadExt;
+        let mut existing = tokio::fs::File::open(&part)
             .await
             .map_err(LocalError::io("reading a partial download"))?;
-        hasher.update(&existing);
+        let mut buf = vec![0u8; 1 << 20];
+        let mut left = have;
+        while left > 0 {
+            let n = existing
+                .read(&mut buf)
+                .await
+                .map_err(LocalError::io("reading a partial download"))?;
+            if n == 0 {
+                break;
+            }
+            let n = n.min(left as usize);
+            hasher.update(&buf[..n]);
+            left -= n as u64;
+        }
     }
 
     let url = hub.file_url(req.repo, req.revision, &f.path);
@@ -180,6 +195,24 @@ async fn fetch_file(
         .await
         .map_err(|_| LocalError::Network(hub.base().into()))?;
     let status = resp.status().as_u16();
+    // A 206 must continue exactly where the partial file ends.
+    if status == 206 {
+        let starts_right = resp
+            .headers()
+            .get(reqwest::header::CONTENT_RANGE)
+            .and_then(|v| v.to_str().ok())
+            .is_none_or(|v| {
+                v.trim_start_matches("bytes ")
+                    .starts_with(&format!("{have}-"))
+            });
+        if !starts_right {
+            let _ = std::fs::remove_file(&part);
+            return Err(LocalError::Check(format!(
+                "{} couldn't be resumed (the server sent a different part); try again",
+                f.path
+            )));
+        }
+    }
     let mut file = match status {
         206 => tokio::fs::OpenOptions::new().append(true).open(&part).await,
         200 => {
@@ -207,6 +240,14 @@ async fn fetch_file(
                 .await
                 .map_err(LocalError::io("writing the model file"))?;
             have += chunk.len() as u64;
+            if have > f.size {
+                drop(file);
+                let _ = std::fs::remove_file(&part);
+                return Err(LocalError::Check(format!(
+                    "{} is larger than expected, so it was discarded",
+                    f.path
+                )));
+            }
             on_bytes(have);
         }
     }

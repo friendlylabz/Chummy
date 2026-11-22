@@ -778,11 +778,8 @@ impl<'a, H: Host> Runner<'a, H> {
                     .await
             }
             BlockKind::Combine(p) => {
-                let mut out = p.format.clone();
-                for i in (1..=args.len()).rev() {
-                    out = out.replace(&format!("_INPUT{i}_"), &args[i - 1].as_text());
-                }
-                one(Value::Text(out))
+                let values: Vec<String> = args.iter().map(Value::as_text).collect();
+                one(Value::Text(crate::text::fill_numbered(&p.format, &values)))
             }
             BlockKind::Forward(_) => one(arg(0)),
             BlockKind::Remember(_) => {
@@ -1040,10 +1037,29 @@ impl<'a, H: Host> Runner<'a, H> {
                             .join(", ")
                     )),
                     Some(t) => match check_arguments(&t.parameters, &c.arguments) {
-                        Ok(args) => good.push(ToolCall {
-                            arguments: args,
-                            ..c.clone()
-                        }),
+                        Ok(args) => {
+                            // Ids must be unique within the exchange; some
+                            // servers send empty or repeated ones.
+                            let taken = |id: &str| {
+                                id.is_empty()
+                                    || good.iter().any(|g: &ToolCall| g.id == id)
+                                    || base
+                                        .messages
+                                        .iter()
+                                        .any(|m| m.calls.iter().any(|x| x.id == id))
+                            };
+                            let mut id = c.id.clone();
+                            let mut n = good.len() + 1;
+                            while taken(&id) {
+                                id = format!("call_{}_{n}", self.tool_calls + self.llm_calls);
+                                n += 1;
+                            }
+                            good.push(ToolCall {
+                                id,
+                                arguments: args,
+                                ..c.clone()
+                            })
+                        }
                         Err(e) => problems.push(format!("in the call to {}, {e}", c.name)),
                     },
                 }
@@ -1907,5 +1923,114 @@ mod tests {
         l.blocks[1].params = json!({ "function": "bad" });
         let a = analyze(&l);
         assert!(a.issues.iter().any(|i| i.function.as_deref() == Some("bad") && i.message.contains("missing port")), "{:?}", a.issues);
+    }
+
+    #[tokio::test]
+    async fn tool_call_ids_are_made_unique() {
+        // Two calls with empty ids, then the same id again on the next turn.
+        let twin = |id: &str| ToolCall {
+            id: id.into(),
+            name: "echo".into(),
+            arguments: json!({ "text": "a" }),
+        };
+        let host = Fake::script(vec![
+            LlmAnswer {
+                calls: vec![twin(""), twin("")],
+                ..Default::default()
+            },
+            LlmAnswer {
+                calls: vec![twin("same")],
+                ..Default::default()
+            },
+            LlmAnswer {
+                calls: vec![twin("same")],
+                ..Default::default()
+            },
+            text("done"),
+        ]);
+        let (o, _) = go(&tool_loop(), &host, "x").await;
+        assert_eq!(o.replies, vec!["done"], "{o:?}");
+        assert_eq!(o.tool_calls, 4);
+        let last = host.calls.lock().unwrap().last().unwrap().clone();
+        let ids: Vec<String> = last
+            .messages
+            .iter()
+            .flat_map(|m| m.calls.iter().map(|c| c.id.clone()))
+            .collect();
+        let unique: std::collections::HashSet<&String> = ids.iter().collect();
+        assert_eq!(ids.len(), 4);
+        assert_eq!(unique.len(), 4, "{ids:?}");
+        assert!(ids.iter().all(|i| !i.is_empty()));
+        // Every tool result answers one of them.
+        let answered: Vec<String> = last
+            .messages
+            .iter()
+            .filter_map(|m| m.call_id.clone())
+            .collect();
+        assert_eq!(answered.len(), 4);
+        assert!(answered.iter().all(|a| ids.contains(a)));
+    }
+
+    #[tokio::test]
+    async fn reasoning_opened_in_the_prompt_is_split_off() {
+        let l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b("m", "llm", json!({})),
+                b("o", "output", json!({})),
+                b("r", "output", json!({})),
+            ],
+            vec![
+                ln("in", "out", "m", "in"),
+                ln("m", "out", "o", "in"),
+                ln("m", "reasoning", "r", "in"),
+            ],
+        );
+        let host = Fake::with(&["first I think</think>\n\nThe answer."]);
+        let (o, _) = go(&l, &host, "x").await;
+        assert_eq!(o.replies, vec!["The answer.", "first I think"]);
+    }
+
+    #[tokio::test]
+    async fn a_function_output_can_fire_many_times_and_runs_stop_inside() {
+        let each = func(
+            "each",
+            vec![
+                b("rx", "regex", json!({ "pattern": "\\w+" })),
+                b("fe", "for_each", json!({})),
+            ],
+            vec![ln("rx", "out", "fe", "in")],
+            &[("in1", "rx", "in")],
+            &[("out1", "fe", "out")],
+        );
+        let mut l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b("f", "function", json!({ "function": "each" })),
+                b("o", "output", json!({})),
+            ],
+            vec![ln("in", "out", "f", "in1"), ln("f", "out1", "o", "in")],
+        );
+        l.functions = vec![each];
+        let (o, _) = go(&l, &Fake::default(), "one two three").await;
+        assert_eq!(o.replies, vec!["one", "two", "three"]);
+
+        // Stopping inside a function stops the whole run.
+        let cancel = AtomicBool::new(true);
+        let inputs = RunInputs {
+            message: "a b".into(),
+            ..Default::default()
+        };
+        let o = run(&l, &Fake::default(), &inputs, &cancel, |_| {}).await;
+        assert_eq!(o.status, RunStatus::Stopped);
+    }
+
+    #[test]
+    fn huge_loops_are_refused() {
+        let blocks: Vec<Block> = (0..crate::validate::MAX_BLOCKS + 1)
+            .map(|i| b(&format!("b{i}"), "fixed", json!({ "text": "x" })))
+            .collect();
+        let a = analyze(&lp(blocks, vec![]));
+        assert!(a.issues.iter().any(|i| i.message.contains("too large")));
     }
 }
