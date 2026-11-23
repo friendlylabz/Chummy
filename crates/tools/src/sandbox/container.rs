@@ -323,8 +323,8 @@ impl SandboxBackend for ContainerSandbox {
 
     fn call<'a>(&'a self, call: SandboxCall<'a>) -> BoxFut<'a, Result<CallOutcome, ToolError>> {
         Box::pin(async move {
-            let program = self.program().map_err(ToolError::Runtime)?;
             let id = self.image_id().map_err(ToolError::Runtime)?;
+            let program = self.program().map_err(ToolError::Runtime)?;
             let name = call_name();
             let ws = call.jail.map(|j| j.root().to_path_buf());
             let mut cmd = clean_command(&program);

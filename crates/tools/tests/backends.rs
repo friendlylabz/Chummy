@@ -383,7 +383,10 @@ async fn openshell_copies_the_workspace_in_and_out() {
         eprintln!("skipping: needs python3 on a Unix system");
         return;
     };
-    let state = fake_dir.path().join("state");
+    // Resolved (macOS temp folders are behind a /var → /private/var link).
+    let state = std::fs::canonicalize(fake_dir.path())
+        .unwrap()
+        .join("state");
     // The fake reads this from its environment, which Chummy cleans; pass
     // it through a file next to the script instead.
     std::fs::write(
