@@ -99,7 +99,26 @@
     const strip = (bs: Block[]) => bs.map((b) => ({ ...b, position: null }));
     return JSON.stringify({ ...g, name: "", description: "", blocks: strip(g.blocks), functions: (g.functions ?? []).map((x) => ({ ...x, blocks: strip(x.blocks) })) });
   }
-  const currentKey = $derived(JSON.stringify(file()));
+  /**
+   * A form of the file that only changes when its content does: keys sorted,
+   * and empty strings, lists and unset values left out (opening a function
+   * fills some of these in without changing anything).
+   */
+  function canon(v: unknown): unknown {
+    if (Array.isArray(v)) return v.map(canon);
+    if (v && typeof v === "object") {
+      const out: Record<string, unknown> = {};
+      for (const k of Object.keys(v).sort()) {
+        const x = (v as Record<string, unknown>)[k];
+        if (x === undefined || x === null || x === "" || (Array.isArray(x) && !x.length)) continue;
+        out[k] = canon(x);
+      }
+      return out;
+    }
+    return v;
+  }
+  const fileKey = (f: LoopFile) => JSON.stringify(canon(f));
+  const currentKey = $derived(fileKey(file()));
   const scopeDef = $derived(scope ? (meta.functions ?? []).find((f) => f.id === scope) ?? null : null);
   const scopePorts = $derived(scope ? analysis.functions[scope]?.blocks ?? {} : analysis.ports);
   const scopeIssues = $derived(analysis.issues.filter((i) => (i.function ?? null) === scope));
@@ -157,7 +176,7 @@
     runId = null;
     lastAnalyzed = "";
     view = "edit";
-    savedKey = id ? JSON.stringify(file()) : "";
+    savedKey = id ? fileKey(file()) : "";
     fitPending = true;
   }
   /** Fit the view once blocks have their real sizes (after the first analysis). */

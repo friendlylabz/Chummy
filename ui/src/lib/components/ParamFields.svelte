@@ -75,7 +75,7 @@
     if (s === "on") {
       return { on: true, text: agentTools && !agentTools.includes(t.name) ? "on here, though off for the agent" : "on here" };
     }
-    if (!agentTools) return { on: true, text: "if the agent allows it" };
+    if (!agentTools) return { on: true, text: "if the agent allows" };
     return agentTools.includes(t.name) ? { on: true, text: "on for the agent" } : { on: false, text: "off for the agent" };
   }
 </script>
@@ -172,8 +172,10 @@
                   {@const own = toolSwitches().each[t.name]}
                   <div class="tool" title={t.description}>
                     <span class="dot" class:on={v.on}></span>
-                    <span class="tname">{t.title}</span>
-                    <span class="off">{v.text}</span>
+                    <span class="tmain">
+                      <span class="tname">{t.title}</span>
+                      <span class="off">{v.text}</span>
+                    </span>
                     <select
                       class="input tiny"
                       aria-label="{t.title} in this block"
@@ -190,7 +192,7 @@
                 {/each}
                 {#each Object.keys(toolSwitches().each).filter((n) => !tools.installed.some((t) => t.name === n)) as missing (missing)}
                   <div class="tool">
-                    <span class="dot"></span><span class="tname mono">{missing}</span><span class="off">not installed</span>
+                    <span class="dot"></span><span class="tmain"><span class="tname mono">{missing}</span><span class="off">not installed</span></span>
                     <button type="button" class="mini" aria-label="Forget {missing}" onclick={() => setTool(missing, null)}><Icon name="minus" size={13} /></button>
                   </div>
                 {/each}
@@ -308,11 +310,21 @@
   .tname {
     flex: 1;
   }
+  .tools {
+    margin-top: var(--space-1);
+  }
   .tool {
     display: flex;
     align-items: center;
     gap: var(--space-2);
+    padding: 3px 0;
     font-size: var(--text-sm);
+  }
+  .tmain {
+    display: grid;
+    flex: 1;
+    min-width: 0;
+    line-height: 1.3;
   }
   .input.tiny {
     width: auto;

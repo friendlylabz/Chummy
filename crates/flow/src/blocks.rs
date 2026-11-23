@@ -934,7 +934,7 @@ pub fn catalog() -> Vec<BlockInfo> {
                             max: 2.0,
                             step: 0.05,
                         },
-                        "Leave empty for the model's default.",
+                        "Leave empty to use the model's own setting (Settings → Models).",
                     )
                 },
                 ParamSpec {
