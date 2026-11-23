@@ -97,14 +97,22 @@ pub fn set_theme(app: AppHandle, state: State<'_, AppState>, theme: Theme) -> Cm
 pub struct AppInfo {
     pub version: &'static str,
     pub data_dir: PathBuf,
+    /// Chosen with `--data-dir` rather than the default.
+    pub data_dir_custom: bool,
+    /// Only you can open it (Unix: 0700, everything inside private too).
+    pub data_dir_locked: bool,
     /// Set if settings had to be recovered from a backup or reset at startup.
     pub recovery: Option<Recovery>,
 }
 
 #[tauri::command]
-pub fn app_info(state: State<'_, AppState>) -> AppInfo {
+pub fn app_info(app: AppHandle, state: State<'_, AppState>) -> AppInfo {
+    use tauri::Manager;
+    let default = app.path().app_local_data_dir().ok();
     AppInfo {
         version: env!("CARGO_PKG_VERSION"),
+        data_dir_custom: default.as_deref() != Some(state.dirs.root.as_path()),
+        data_dir_locked: chummy_store::is_locked(&state.dirs.root),
         data_dir: state.dirs.root.clone(),
         recovery: state.recovery.clone(),
     }

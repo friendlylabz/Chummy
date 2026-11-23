@@ -5,6 +5,7 @@
 //! dependency and are tested on their own.
 
 mod chats;
+mod cli;
 mod commands;
 mod dialogs;
 mod events;
@@ -36,8 +37,19 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             // The Chummy folder: one per-user folder for settings, loops,
-            // models and the local engine runtime.
-            let data_dir = app.path().app_local_data_dir()?;
+            // models and the local engine runtime, unless `--data-dir`
+            // names another one.
+            let cwd = std::env::current_dir().unwrap_or_default();
+            let data_dir = match cli::data_dir_arg(std::env::args_os(), &cwd)
+                .and_then(|d| d.map(|d| cli::prepare_data_dir(&d)).transpose())
+            {
+                Ok(Some(d)) => d,
+                Ok(None) => app.path().app_local_data_dir()?,
+                Err(e) => {
+                    eprintln!("chummy: {e}");
+                    return Err(e.into());
+                }
+            };
             // The app's own install location is protected too.
             let exe_dir = std::env::current_exe()
                 .ok()

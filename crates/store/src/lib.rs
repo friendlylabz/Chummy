@@ -24,4 +24,4 @@ mod doc;
 mod layout;
 
 pub use doc::{JsonDoc, Loaded, Recovery, StoreError, write_atomic};
-pub use layout::ChummyDirs;
+pub use layout::{ChummyDirs, is_locked, lock_to_owner};

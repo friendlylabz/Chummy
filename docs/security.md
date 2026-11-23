@@ -289,6 +289,15 @@ it. What was checked:
 - **Tools a sandbox can't run are never offered**, and none are while a
   Container or OpenShell sandbox hasn't passed a check.
 
+**The Chummy folder** (after pass 14): it's shown in Security and Privacy
+(moved from About). On macOS and Linux Chummy locks it to the owner at every
+start: the folder and all folders inside 700, files 600 (owner's execute bit
+kept for the engine's programs), links not followed. Windows relies on the
+per-user profile's ACLs (a folder given with `--data-dir` outside the profile
+is not re-permissioned on Windows yet). `--data-dir <folder>` picks another
+folder; it must be empty, new or already a Chummy folder, so the lock-down
+never touches someone's unrelated files.
+
 New risks to keep in mind:
 
 - **A container engine is powerful.** Access to the Docker daemon is close to

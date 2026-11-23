@@ -1,6 +1,28 @@
 # Chummy
 
+> [!WARNING]
+> **Chummy is a heavy work in progress, and 100% vibe-coded:** every line was
+> written by an AI (Claude) at a person's direction. Expect rough edges, bugs
+> and breaking changes between versions. Try it on folders you don't mind an
+> agent changing, and keep backups.
+
 A minimalist, configurable agent harness for Windows, macOS and Linux.
+
+## Download
+
+Get the latest build from the [Releases page](https://github.com/friendlylabz/Chummy/releases):
+
+| System | File | Notes |
+|---|---|---|
+| **Windows** | `Chummy_…_x64-setup.exe` | Windows may say it "protected your PC" because the app isn't signed yet: click **More info → Run anyway**. (There's also an `.msi`.) |
+| **macOS** (Apple Silicon: M1 and newer) | `Chummy_…_aarch64.dmg` | Open it and drag Chummy to Applications. The app isn't notarized yet, so the first time, macOS will refuse to open it: go to **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** (or right-click the app → Open). |
+| **macOS** (Intel) | `Chummy_…_x64.dmg` | As above. |
+| **Linux** | `Chummy_…_amd64.AppImage` | Make it runnable (`chmod +x Chummy_*.AppImage`, or Properties → Permissions) and open it. Some distributions need `libfuse2` for AppImages. There are also `.deb` and `.rpm` packages. |
+
+The first time it opens, Chummy walks you through connecting a model (for
+example [Ollama](https://ollama.com) or [LM Studio](https://lmstudio.ai) on
+your computer, or a cloud provider), adding the recommended loop and setting
+up an agent with its own folder.
 
 Chummy assumes the model behind it may be small and easily confused. Agent
 loops are built from small, editable blocks in a visual editor; every agent is
@@ -231,6 +253,17 @@ a folder per agent with an index and one file per chat), `jobs/` (scheduled jobs
 `models/`,
 `runtime/` (the built-in engine), `tools/` (the WebAssembly Python
 and installed tools) and `logs/`.
+Chummy keeps the folder private to your user account: on macOS and Linux it
+makes the folder 700 and everything in it 600 (keeping the owner's execute bit
+for programs), and checks again every time it starts. On Windows the default
+folder is inside your user profile, which is already private to you.
+
+To use another folder, start Chummy with `--data-dir <folder>` (or
+`--data-dir=<folder>`); a relative path is taken from the current folder. It
+must be empty, new, or an existing Chummy folder, so Chummy never takes over
+a folder with other things in it. Settings → Security and Privacy shows which
+folder is in use.
+
 Secrets are never stored here; they go to the system keychain (Keychain,
 Credential Manager, or Secret Service on Linux). Set `HF_ENDPOINT` to use a
 Hugging Face mirror.

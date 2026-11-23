@@ -7,7 +7,6 @@
   import SideNav from "$lib/components/SideNav.svelte";
   import ThemeSwitch from "$lib/components/ThemeSwitch.svelte";
   import Toggle from "$lib/components/Toggle.svelte";
-  import Button from "$lib/components/Button.svelte";
   import Icon from "$lib/components/Icon.svelte";
   import ModelsPane from "./ModelsPane.svelte";
   import LocalEnginePane from "./LocalEnginePane.svelte";
@@ -184,15 +183,10 @@
       {:else}
         <h1>About</h1>
         <p class="pane-sub">Chummy {info?.version ?? ""} · MIT license · friendlylabz</p>
-        <div class="card card-pad">
-          <div class="row-title">Chummy folder</div>
-          <p class="muted small" style="margin: 4px 0 var(--space-3)">
-            Settings, saved loops, chat history, downloaded models and the local engine live here. Agents can never see it.
-            API keys aren't here; they're in your system keychain.
-          </p>
-          <div class="mono small path" data-selectable>{info?.data_dir}</div>
-          <div class="actions"><Button icon="external" onclick={() => commands.revealDataDir()}>Open folder</Button></div>
-        </div>
+        <p class="muted small">
+          Where Chummy keeps its settings, loops and history (and how it's protected) is in
+          <button type="button" class="link" onclick={() => go("security")}>Security and Privacy</button>.
+        </p>
       {/if}
     </div>
   </main>
@@ -222,12 +216,18 @@
     max-width: 760px;
     padding: var(--space-6);
   }
+  .link {
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    cursor: pointer;
+    text-decoration: underline;
+  }
   h1 {
     font-size: var(--text-xl);
     font-weight: 650;
     letter-spacing: -0.01em;
-  }
-  .path {
-    word-break: break-all;
   }
 </style>

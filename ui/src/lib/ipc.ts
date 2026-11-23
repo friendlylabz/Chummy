@@ -157,6 +157,10 @@ export interface SetupStatus {
 export interface AppInfo {
   version: string;
   data_dir: string;
+  /** Chosen with --data-dir instead of the default. */
+  data_dir_custom: boolean;
+  /** Only you can open it. */
+  data_dir_locked: boolean;
   recovery: { kind: "used_backup" | "used_defaults"; reason: string } | null;
 }
 
@@ -870,7 +874,13 @@ export const commands = {
       mock.listeners.forEach((cb) => cb(mock.settings));
     }),
   appInfo: () =>
-    call<AppInfo>("app_info", undefined, () => ({ version: "dev", data_dir: "(browser preview)", recovery: null })),
+    call<AppInfo>("app_info", undefined, () => ({
+      version: "dev",
+      data_dir: "(browser preview)",
+      data_dir_custom: false,
+      data_dir_locked: true,
+      recovery: null,
+    })),
   revealDataDir: () => call<void>("reveal_data_dir"),
 
   pickWorkspace: (agentId: string | null) =>

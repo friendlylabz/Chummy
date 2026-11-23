@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { commands, errorText, type ContainerEngine, type ProgramFor, type SandboxKind } from "$lib/ipc";
+  import { commands, errorText, type AppInfo, type ContainerEngine, type ProgramFor, type SandboxKind } from "$lib/ipc";
   import { settings } from "$lib/stores/settings.svelte";
   import { sandbox } from "$lib/stores/sandbox.svelte";
   import Toggle from "$lib/components/Toggle.svelte";
@@ -19,8 +19,12 @@
   let image = $state("");
   let osImage = $state("");
   let removed = $state<number | null>(null);
+  let info = $state<AppInfo | null>(null);
 
-  onMount(() => sandbox.init());
+  onMount(async () => {
+    sandbox.init();
+    info = await commands.appInfo();
+  });
 
   // Keep the text boxes in step with saved settings (when not being edited).
   let lastImage = "";
@@ -322,11 +326,55 @@
   {/if}
 {/if}
 
+<div class="section-label">Chummy folder</div>
+<div class="card card-pad">
+  <p class="muted small" style="margin: 0 0 var(--space-3)">
+    Settings, saved loops, chat history, run logs, tools, downloaded models and the local engine live here. Agents can
+    never see it, and it can never be an agent's workspace. API keys and the log key aren't here; they're in your
+    system keychain.
+  </p>
+  <div class="mono small path" data-selectable>{info?.data_dir}</div>
+  {#if info}
+    <p class="small lock" class:warn-text={!info.data_dir_locked}>
+      <Icon name={info.data_dir_locked ? "shield" : "alert"} size={14} />
+      {#if info.data_dir_locked}
+        Only you can open it: Chummy keeps the folder and everything in it private to your user account (folders 700,
+        files 600 on macOS and Linux) and checks again every time it starts.
+      {:else}
+        Other users on this computer may be able to open it. Chummy couldn't make it private.
+      {/if}
+    </p>
+  {/if}
+  <p class="faint xs">
+    {#if info?.data_dir_custom}This isn't the default folder: Chummy was started with <span class="mono">--data-dir</span>.{/if}
+    To use another folder (a portable copy, another disk, a second profile), start Chummy with
+    <span class="mono">--data-dir &lt;folder&gt;</span>. The folder must be empty, new, or another Chummy folder.
+  </p>
+  <div class="actions"><Button icon="external" onclick={() => commands.revealDataDir()}>Open folder</Button></div>
+</div>
+
 <p class="faint xs" style="margin-top: var(--space-4)">
   Model connections in Models are made by Chummy itself and work regardless of these switches.
 </p>
 
 <style>
+  .path {
+    word-break: break-all;
+  }
+  .lock {
+    display: flex;
+    gap: var(--space-2);
+    align-items: flex-start;
+    margin: var(--space-3) 0 var(--space-2);
+  }
+  .lock :global(svg) {
+    flex: none;
+    margin-top: 2px;
+    color: var(--ok);
+  }
+  .warn-text :global(svg) {
+    color: var(--warn);
+  }
   .intro {
     margin: 0 0 var(--space-3);
   }
