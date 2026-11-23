@@ -17,12 +17,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Both macOS builds run on the Intel runner (Apple Silicon is
+          # cross-compiled): GitHub's arm64 macOS runners have been too busy
+          # to pick up jobs at all.
           - name: macOS (Apple Silicon)
-            os: macos-latest
+            os: macos-15-intel
             args: --target aarch64-apple-darwin
             target: aarch64-apple-darwin
           - name: macOS (Intel)
-            os: macos-latest
+            os: macos-15-intel
             args: --target x86_64-apple-darwin
             target: x86_64-apple-darwin
           - name: Linux
