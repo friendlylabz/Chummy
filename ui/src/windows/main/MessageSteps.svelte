@@ -8,17 +8,21 @@
   import type { Group } from "$lib/logs";
   import Icon from "$lib/components/Icon.svelte";
   import RunTimeline from "$lib/components/RunTimeline.svelte";
+  import type { Snippet } from "svelte";
 
   let {
     runId,
     live = null,
     summary = "",
+    end,
   }: {
     runId: string;
     /** Entries of a run still going (from the runs store). */
     live?: LogEntry[] | null;
     /** e.g. "3 model calls · 40 steps". */
     summary?: string;
+    /** Shown at the right end of the line (the message's trash can). */
+    end?: Snippet;
   } = $props();
 
   let open = $state(false);
@@ -46,10 +50,15 @@
       {open ? "Hide what happened" : "What happened"}
     </button>
     {#if summary}<span class="sum">{summary}</span>{/if}
-    {#if open}
-      <button type="button" class="logs" onclick={() => commands.openWindow("logs", `run:${runId}`)}>
-        Open in Logs <Icon name="external" size={12} />
-      </button>
+    {#if open || end}
+      <span class="right">
+        {#if open}
+          <button type="button" class="logs" onclick={() => commands.openWindow("logs", `run:${runId}`)}>
+            Open in Logs <Icon name="external" size={12} />
+          </button>
+        {/if}
+        {@render end?.()}
+      </span>
     {/if}
   </div>
   {#if open}
@@ -93,8 +102,13 @@
     color: var(--accent);
   }
   .logs {
-    margin-left: auto;
     color: var(--accent);
+  }
+  .right {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin-left: auto;
   }
   .sum {
     color: var(--text-faint);

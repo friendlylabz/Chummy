@@ -140,8 +140,8 @@ until you say so.
   chats run side by side, one message at a time each; a scheduled job or a
   test run of the same agent waits for them, and they wait for it. The
   Sessions panel shows which chat each run belongs to, and clicking it opens
-  that chat. A new agent starts with an empty chat. Hover over a message
-  and click its trash can, then **Delete**, to delete it: it's gone from the
+  that chat. A new agent starts with an empty chat. Click the trash can
+  under a message, then **Delete**, to delete it: it's gone from the
   chat and from what the agent sees next time (not while that chat is
   working). **Undo** brings it back where it was, for 20 seconds or until you
   send another message.

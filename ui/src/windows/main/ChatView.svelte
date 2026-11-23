@@ -72,26 +72,64 @@
       </div>
     {/if}
 
+    {#snippet del(m: ChatMessage)}
+      {#if confirming === m.id && !run}
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions (Escape cancels) -->
+        <span
+          class="confirm"
+          role="group"
+          aria-label="Delete this message?"
+          onkeydown={(e) => {
+            if (e.key === "Escape") confirming = null;
+          }}
+        >
+          Delete this message?
+          <!-- svelte-ignore a11y_autofocus -->
+          <button type="button" class="danger" autofocus onclick={() => confirmDelete(m.id)}>Delete</button>
+          <button type="button" onclick={() => (confirming = null)}>Cancel</button>
+        </span>
+      {:else}
+        <button
+          type="button"
+          class="trash"
+          disabled={!!run}
+          title={run ? "Wait until this chat is done to delete messages" : "Delete this message (the agent won't see it either)"}
+          aria-label="Delete message"
+          onclick={() => (confirming = m.id)}
+        >
+          <Icon name="trash" size={13} />
+        </button>
+      {/if}
+    {/snippet}
+
     {#each chat.messages as m (m.id)}
-      <!-- svelte-ignore a11y_no_static_element_interactions (hover only: leaving cancels "Delete?") -->
+      <!-- svelte-ignore a11y_no_static_element_interactions (leaving cancels "Delete?") -->
       <div
         class="item"
-        class:mine={m.role === "user" || m.role === "answer"}
-        class:plain={m.role === "notice"}
         onmouseleave={() => {
           if (confirming === m.id) confirming = null;
         }}
       >
-        {#if m.role === "user"}
-          <div class="msg user"><div class="bubble" data-selectable>{m.text}</div></div>
+        {#if m.role === "user" || m.role === "answer"}
+          <div class="msg user">
+            <div class="bubble" class:answer={m.role === "answer"} data-selectable>{m.text}</div>
+          </div>
+          <div class="meta-row mine">{@render del(m)}</div>
         {:else if m.role === "assistant"}
           <div class="msg assistant">
             <div class="avatar"><Icon name="bot" size={15} /></div>
             <div class="body">
               <Formatted text={m.text} />
               {#if m.run?.run_id && lastOfRun.has(m.id)}
-                <MessageSteps runId={m.run.run_id} summary={counts(m.run)} />
-              {:else if m.run}<div class="meta">{counts(m.run)}</div>{/if}
+                <MessageSteps runId={m.run.run_id} summary={counts(m.run)}>
+                  {#snippet end()}{@render del(m)}{/snippet}
+                </MessageSteps>
+              {:else}
+                <div class="meta-row">
+                  {#if m.run}<span class="meta">{counts(m.run)}</span>{/if}
+                  {@render del(m)}
+                </div>
+              {/if}
             </div>
           </div>
         {:else if m.role === "question"}
@@ -100,10 +138,9 @@
             <div class="body">
               {#if m.from}<div class="from">{m.from} asked</div>{/if}
               <Formatted text={m.text} />
+              <div class="meta-row">{@render del(m)}</div>
             </div>
           </div>
-        {:else if m.role === "answer"}
-          <div class="msg user"><div class="bubble answer" data-selectable>{m.text}</div></div>
         {:else}
           <div class="notice-wrap">
             <div class="msg notice">
@@ -111,35 +148,13 @@
               <span data-selectable>{m.text}</span>
             </div>
             {#if m.run?.run_id && lastOfRun.has(m.id)}
-              <MessageSteps runId={m.run.run_id} summary={counts(m.run)} />
+              <MessageSteps runId={m.run.run_id} summary={counts(m.run)}>
+                {#snippet end()}{@render del(m)}{/snippet}
+              </MessageSteps>
+            {:else}
+              <div class="meta-row">{@render del(m)}</div>
             {/if}
           </div>
-        {/if}
-        {#if !run && confirming === m.id}
-          <!-- svelte-ignore a11y_no_noninteractive_element_interactions (Escape cancels) -->
-          <div
-            class="confirm"
-            role="group"
-            aria-label="Delete this message?"
-            onkeydown={(e) => {
-              if (e.key === "Escape") confirming = null;
-            }}
-          >
-            <span>Delete this message?</span>
-            <!-- svelte-ignore a11y_autofocus -->
-            <button type="button" class="danger" autofocus onclick={() => confirmDelete(m.id)}>Delete</button>
-            <button type="button" onclick={() => (confirming = null)}>Cancel</button>
-          </div>
-        {:else if !run}
-          <button
-            type="button"
-            class="trash"
-            title="Delete this message (the agent won't see it either)"
-            aria-label="Delete message"
-            onclick={() => (confirming = m.id)}
-          >
-            <Icon name="trash" size={13} />
-          </button>
         {/if}
       </div>
     {/each}
@@ -209,53 +224,49 @@
     padding: var(--space-4) var(--space-5) var(--space-5);
     background: linear-gradient(to bottom, transparent, var(--bg) var(--space-4));
   }
-  .item {
-    position: relative;
+  .meta-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin-top: var(--space-1);
+  }
+  .meta-row.mine {
+    justify-content: flex-end;
+    margin-top: 2px;
+  }
+  .meta-row .meta {
+    margin-top: 0;
+  }
+  .meta-row > :global(:last-child) {
+    margin-left: auto;
   }
   .trash {
-    position: absolute;
-    top: 100%;
-    left: 40px;
-    display: grid;
+    display: inline-grid;
     place-items: center;
-    width: 22px;
-    height: 16px;
     padding: 0;
     border: none;
-    border-radius: var(--radius-sm);
     background: none;
     color: var(--text-faint);
     cursor: pointer;
-    opacity: 0;
-    transition: opacity var(--dur-fast) var(--ease);
+  }
+  .trash:hover:not(:disabled) {
+    color: var(--accent);
+  }
+  .trash:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
   .confirm {
-    position: absolute;
-    top: calc(100% - 2px);
-    left: 40px;
-    z-index: 1;
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    gap: var(--space-2);
-    padding: 3px 4px 3px var(--space-3);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--surface);
-    box-shadow: var(--shadow-sm);
-    font-size: var(--text-xs);
+    gap: var(--space-1);
     color: var(--text-muted);
+    font-size: var(--text-xs);
     white-space: nowrap;
-  }
-  .item.mine .confirm {
-    left: auto;
-    right: 0;
-  }
-  .item.plain .confirm {
-    left: 0;
   }
   .confirm button,
   .undo button {
-    padding: 2px var(--space-2);
+    padding: 0 var(--space-2);
     border: none;
     border-radius: var(--radius-sm);
     background: none;
@@ -293,21 +304,6 @@
     display: grid;
     place-items: center;
     color: var(--text-faint);
-  }
-  .item.plain .trash {
-    left: 0;
-  }
-  .item.mine .trash {
-    left: auto;
-    right: 0;
-  }
-  .item:hover .trash,
-  .trash:focus-visible {
-    opacity: 1;
-  }
-  .trash:hover {
-    color: var(--danger);
-    background: var(--surface-2);
   }
   .thread {
     flex: 1 0 auto;
