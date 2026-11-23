@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-remove-openshell-sandboxes"
+description = "Enables the remove_openshell_sandboxes command without any pre-configured scope."
+commands.allow = ["remove_openshell_sandboxes"]
+
+[[permission]]
+identifier = "deny-remove-openshell-sandboxes"
+description = "Denies the remove_openshell_sandboxes command without any pre-configured scope."
+commands.deny = ["remove_openshell_sandboxes"]

@@ -366,6 +366,9 @@ class FakeBackend:
                 "current_time", {})
         elif "current_time" in names and ("date" in low or "time" in low):
             text = call("current_time", {})
+        elif "run_shell" in names and "shell" in low:
+            # A real shell command (Container or OpenShell sandboxes only).
+            text = call("run_shell", {"command": "echo made by $(id -u) > shell.txt; cat shell.txt; uname -s"})
         elif "calculator" in names and ("work out" in low or "calculate" in low):
             text = call("calculator", {"expression": "365 - 326"})
         elif "write one yes-or-no question" in low:

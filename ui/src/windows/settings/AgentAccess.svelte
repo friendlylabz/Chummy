@@ -41,14 +41,14 @@
 <div class="card card-pad">
   <div class="section-title"><Icon name="wrench" size={16} /> Tools and internet for {agent.name}</div>
   <p class="explain">
-    A tool can run only when it is on <b>app-wide</b> (Settings → Tools and Permissions). Then <b>this agent's</b>
+    A tool can run only when it is on <b>app-wide</b> (Settings → Tools and Security and Privacy). Then <b>this agent's</b>
     switch decides. Loop blocks follow the agent by default; a block can turn a tool on or off just for itself, and
     the run notes it when a block turns on a tool that is off here. Going online also needs Internet access in
-    Permissions and the tool's own internet switch, which nothing can override.
+    Security and Privacy and the tool's own internet switch, which nothing can override.
   </p>
 
   {#if !perms.tools}
-    <div class="notice warn"><Icon name="alert" size={16} /><span style="flex: 1">Tools are off for the whole app (Permissions), so none of these run yet.</span></div>
+    <div class="notice warn"><Icon name="alert" size={16} /><span style="flex: 1">Tools are off for the whole app (Security and Privacy), so none of these run yet.</span></div>
   {/if}
 
   {#if !tools.installed.length}
@@ -61,14 +61,15 @@
     <div class="rows">
       {#each tools.installed as t (t.name)}
         {@const on = mine.includes(t.name)}
-        <label class="row tool">
+        <label class="row tool" class:unusable={!!t.unusable} title={t.unusable ?? undefined}>
           <input type="checkbox" checked={on} disabled={busy} onchange={(e) => toggle(t.name, (e.currentTarget as HTMLInputElement).checked)} />
           <span class="t-main">
             <span class="row-title">{t.title}{#if t.risky}<span class="risky" title="One call can change or delete many files in the workspace"> · potentially unsafe</span>{/if}</span>
             <span class="row-sub">{t.description}</span>
+            {#if t.unusable}<span class="why"><Icon name="alert" size={12} /> {t.unusable}</span>{/if}
           </span>
           <span class="levels" aria-label="Where it is on">
-            <span class="lvl" class:yes={perms.tools && t.enabled} title="App-wide (Settings → Tools and Permissions)">App</span>
+            <span class="lvl" class:yes={perms.tools && t.enabled && !t.unusable} title="App-wide (Settings → Tools and Security and Privacy)">App</span>
             <span class="lvl" class:yes={on} title="This agent">Agent</span>
           </span>
         </label>
@@ -81,7 +82,7 @@
     <span class="t-main">
       <span class="row-title">Tools may use the internet</span>
       <span class="row-sub">
-        {perms.network ? "Internet access is on in Permissions." : "Internet access is off in Permissions, so tools stay offline even if this is on."}
+        {perms.network ? "Internet access is on in Security and Privacy." : "Internet access is off in Security and Privacy, so tools stay offline even if this is on."}
         Each tool's own internet switch must be on too. Blocks follow this unless they say otherwise.
       </span>
     </span>
@@ -90,6 +91,18 @@
 </div>
 
 <style>
+  .unusable .t-main,
+  .unusable .levels {
+    opacity: 0.55;
+  }
+  .why {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 2px;
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+  }
   .risky {
     color: var(--warn);
     font-weight: normal;

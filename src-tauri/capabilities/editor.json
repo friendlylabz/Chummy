@@ -24,6 +24,7 @@
     "allow-stop-run",
     "allow-list-runs",
     "allow-tools-status",
+    "allow-sandbox-status",
     "allow-list-asks",
     "allow-answer-ask"
   ]

@@ -27,7 +27,7 @@ use chummy_llm::{ChatEvent, ChatRequest, Client, Message, ProviderConfig, Provid
 use chummy_log::system::{self as syslog, Level};
 use chummy_sandbox::Jail;
 use chummy_scheduler::{AskBroker, Cause, Origin, RecordStatus, RunRequest, RunResult, Snapshot};
-use chummy_tools::{NetPolicy, ToolHost, ToolManifest};
+use chummy_tools::{Health, NetPolicy, SandboxBackend, ToolManifest, ToolPaths};
 use jiff::tz::TimeZone;
 
 /// Largest file a Read file block reads.
@@ -39,8 +39,10 @@ pub const JOB_FILE_LIMIT: u64 = 256 * 1024;
 pub trait Services: Send + Sync + 'static {
     /// A stored secret, e.g. a model connection's API key.
     fn secret(&self, key: &str) -> Option<String>;
-    /// The tool sandbox (set up and ready).
-    fn tool_host(&self) -> impl Future<Output = Result<Arc<ToolHost>, String>> + Send;
+    /// The sandbox tool calls run in (the one chosen in the settings).
+    fn sandbox(&self) -> impl Future<Output = Result<Arc<dyn SandboxBackend>, String>> + Send;
+    /// Where installed tools live.
+    fn tool_paths(&self) -> ToolPaths;
     /// Starts the built-in engine for `p`; returns its address and token.
     fn local_engine(
         &self,
@@ -90,6 +92,10 @@ pub struct AgentSetup {
     pub agent: Option<AgentGrant>,
     /// Tools installed now.
     pub installed: Vec<ToolManifest>,
+    /// The sandbox's last known health. Tools it can't run (they need real
+    /// programs, a newer Python, or it isn't ready) are left out of the run.
+    /// `None`: no check (tests).
+    pub sandbox: Option<Health>,
     /// The agent's folder; `None` for editor test runs without an agent.
     pub jail: Option<Jail>,
     /// Who to ask, and how the questions are labelled. `None`: this run
@@ -167,6 +173,12 @@ impl<S: Services> AgentHost<S> {
                 .installed
                 .into_iter()
                 .filter(|m| setup.tool_grants.get(&m.name).is_some_and(|g| g.enabled))
+                .filter(|m| {
+                    setup
+                        .sandbox
+                        .as_ref()
+                        .is_none_or(|h| chummy_tools::unusable(m, h).is_none())
+                })
                 .map(|m| (m.name.clone(), m))
                 .collect()
         } else {
@@ -399,28 +411,36 @@ impl<S: Services> Host for AgentHost<S> {
                 is_error: true,
             });
         };
-        let host = self.services.tool_host().await?;
+        let backend = self.services.sandbox().await?;
+        let sandbox = backend.kind().label();
         let env = self
             .time_zone
             .iter()
             .map(|tz| ("TZ".to_string(), tz.clone()))
             .collect();
-        let workspace = self.jail.as_ref().map(|j| j.root().to_path_buf());
         let policy = self.net_policy(m, network);
         let internet = if policy.allowed { "allowed" } else { "off" };
-        let r = host
-            .run(name, arguments, workspace.as_deref(), policy, env)
-            .await
-            .map_err(|e| {
-                let e = sentence(e.to_string());
-                syslog::log(
-                    Level::Warn,
-                    "tools",
-                    format!("Tool {name} couldn't run"),
-                    &[("internet", internet), ("error", &e)],
-                );
-                e
-            })?;
+        let paths = self.services.tool_paths();
+        let r = chummy_tools::run_tool(
+            &*backend,
+            &paths,
+            name,
+            arguments,
+            self.jail.as_ref(),
+            policy,
+            env,
+        )
+        .await
+        .map_err(|e| {
+            let e = sentence(e.to_string());
+            syslog::log(
+                Level::Warn,
+                "tools",
+                format!("Tool {name} couldn't run"),
+                &[("internet", internet), ("sandbox", sandbox), ("error", &e)],
+            );
+            e
+        })?;
         syslog::log(
             if r.is_error { Level::Warn } else { Level::Info },
             "tools",
@@ -432,7 +452,7 @@ impl<S: Services> Host for AgentHost<S> {
                     ""
                 }
             ),
-            &[("internet", internet)],
+            &[("internet", internet), ("sandbox", sandbox)],
         );
         Ok(ToolOutput {
             text: r.text,
@@ -651,8 +671,11 @@ mod tests {
         fn secret(&self, _: &str) -> Option<String> {
             None
         }
-        async fn tool_host(&self) -> Result<Arc<ToolHost>, String> {
+        async fn sandbox(&self) -> Result<Arc<dyn SandboxBackend>, String> {
             Err("no tools here".into())
+        }
+        fn tool_paths(&self) -> ToolPaths {
+            ToolPaths::new("/nonexistent")
         }
         async fn local_engine(&self, _: &ProviderConfig) -> Result<(String, String), String> {
             Err("no engine".into())
@@ -669,6 +692,8 @@ mod tests {
             network,
             risky: false,
             timeout_secs: 5,
+            needs: vec![],
+            requires_python: None,
             dependencies: vec![],
             packages: vec![],
             python: chummy_tools::PYTHON_VERSION.into(),
@@ -689,6 +714,7 @@ mod tests {
                 network: true,
             }),
             installed: vec![manifest("calc", false), manifest("fetch", true)],
+            sandbox: None,
             jail,
             asks: None,
             time_zone: None,
@@ -714,6 +740,35 @@ mod tests {
             );
         }
         s
+    }
+
+    #[test]
+    fn tools_the_sandbox_cant_run_are_never_offered() {
+        use chummy_tools::SandboxKind;
+        let mut s = all_on();
+        s.installed[0].needs = vec!["programs".into()];
+        s.sandbox = Some(Health::ready(SandboxKind::Native, "3.14.7", "ok"));
+        let h = AgentHost::new(Arc::new(NoServices), s);
+        assert_eq!(h.tool_names(), ["fetch"], "calc needs programs");
+        assert!(
+            h.tool_info("calc").is_none(),
+            "a block can't turn it on either"
+        );
+
+        let mut s = all_on();
+        s.installed[0].needs = vec!["programs".into()];
+        s.sandbox = Some(Health::ready(SandboxKind::Container, "3.14.2", "ok"));
+        let h = AgentHost::new(Arc::new(NoServices), s);
+        assert_eq!(h.tool_names(), ["calc", "fetch"]);
+
+        // A sandbox that isn't ready offers nothing.
+        let mut s = all_on();
+        s.sandbox = Some(Health::problem(
+            SandboxKind::Container,
+            "Docker isn't running.",
+        ));
+        let h = AgentHost::new(Arc::new(NoServices), s);
+        assert!(h.tool_names().is_empty());
     }
 
     #[test]

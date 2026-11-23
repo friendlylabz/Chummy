@@ -112,6 +112,7 @@ export interface Settings {
   tools: Record<string, { enabled: boolean; network: boolean; ask: boolean }>;
   general: General;
   logging: Logging;
+  sandbox: SandboxSettings;
 }
 
 export type CloseAction = "ask" | "quit" | "tray";
@@ -645,6 +646,11 @@ export interface ToolView {
   enabled: boolean;
   network_allowed: boolean;
   ask: boolean;
+  /** What it needs from the sandbox beyond Python ("programs"). */
+  needs: string[];
+  requires_python: string | null;
+  /** Why the chosen sandbox can't run it (shown greyed out). */
+  unusable: string | null;
 }
 export interface ToolsStatus {
   runtime: { version: string; sha256: string } | null;
@@ -653,7 +659,45 @@ export interface ToolsStatus {
   installing: boolean;
   tools: ToolView[];
   builtin_count: number;
+  sandbox: SandboxHealth;
 }
+
+// ---- sandbox
+
+export type SandboxKind = "native" | "container" | "openshell";
+export type ContainerEngine = "docker" | "podman";
+export interface SandboxSettings {
+  kind: SandboxKind;
+  container: {
+    engine: ContainerEngine;
+    /** Empty: Chummy finds it. Set only through the native picker. */
+    program: string;
+    image: string;
+    /** The image ID Chummy runs, once you got the image. */
+    approved_id: string | null;
+    memory_mb: number;
+    cpus: number;
+  };
+  openshell: { program: string; image: string };
+}
+export interface SandboxHealth {
+  kind: SandboxKind;
+  ready: boolean;
+  message: string;
+  python: string | null;
+  programs: boolean;
+  details: string[];
+  /** 0: not checked yet. */
+  checked_at: number;
+}
+export interface SandboxStatus {
+  settings: SandboxSettings;
+  health: SandboxHealth;
+  checking: boolean;
+  kinds: { kind: SandboxKind; label: string; programs: boolean }[];
+  default_image: string;
+}
+export type ProgramFor = "container" | "openshell";
 export type ToolsProgress =
   | { type: "download"; done: number; total: number }
   | { type: "step"; message: string }
@@ -775,9 +819,26 @@ const mock = {
     tools: {},
     general: { close: "ask", notifications: true, max_job_runs: 1, markdown: true, math: true },
     logging: { runs: "verbose", encrypt: true, system: "info" },
+    sandbox: {
+      kind: "native",
+      container: { engine: "docker", program: "", image: "python:3.14-slim", approved_id: null, memory_mb: 1024, cpus: 2 },
+      openshell: { program: "", image: "" },
+    },
   } as Settings,
   listeners: new Set<(s: Settings) => void>(),
 };
+
+function mockHealth(): SandboxHealth {
+  return {
+    kind: "native",
+    ready: true,
+    message: "Tools run in WebAssembly, built into Chummy.",
+    python: "3.14.7",
+    programs: false,
+    details: ["Python 3.14.7 for WebAssembly"],
+    checked_at: Date.now(),
+  };
+}
 
 function call<T>(cmd: string, args?: Record<string, unknown>, fallback?: () => T): Promise<T> {
   if (inTauri) return invoke<T>(cmd, args);
@@ -907,12 +968,37 @@ export const commands = {
       download_bytes: 14_000_000,
       installing: false,
       tools: [],
-      builtin_count: 7,
+      builtin_count: 11,
+      sandbox: mockHealth(),
     })),
   setupTools: () => call<boolean>("setup_tools", undefined, () => false),
   setToolEnabled: (name: string, enabled: boolean) => call<boolean>("set_tool_enabled", { name, enabled }),
   setToolNetwork: (name: string, enabled: boolean) => call<boolean>("set_tool_network", { name, enabled }),
   setToolAsk: (name: string, ask: boolean) => call<void>("set_tool_ask", { name, ask }),
+
+  sandboxStatus: () =>
+    call<SandboxStatus>("sandbox_status", undefined, () => ({
+      settings: mock.settings.sandbox,
+      health: mockHealth(),
+      checking: false,
+      kinds: [
+        { kind: "native", label: "Native (WebAssembly)", programs: false },
+        { kind: "container", label: "Container (Docker or Podman)", programs: true },
+        { kind: "openshell", label: "NVIDIA OpenShell", programs: true },
+      ],
+      default_image: "python:3.14-slim",
+    })),
+  checkSandbox: () => call<SandboxHealth>("check_sandbox", undefined, mockHealth),
+  /** Asks natively when switching to Container or OpenShell. False: cancelled. */
+  setSandboxKind: (kind: SandboxKind) => call<boolean>("set_sandbox_kind", { kind }, () => true),
+  setContainerOptions: (choice: { engine: ContainerEngine; image: string; memory_mb: number; cpus: number }) =>
+    call<void>("set_container_options", { choice }),
+  /** Downloads the image (pull) or uses the local copy; asks first. */
+  getContainerImage: (pull: boolean) => call<boolean>("get_container_image", { pull }, () => false),
+  setOpenshellImage: (image: string) => call<void>("set_openshell_image", { image }),
+  chooseSandboxProgram: (which: ProgramFor) => call<boolean>("choose_sandbox_program", { which }, () => false),
+  clearSandboxProgram: (which: ProgramFor) => call<void>("clear_sandbox_program", { which }),
+  removeOpenshellSandboxes: () => call<number | null>("remove_openshell_sandboxes", undefined, () => null),
   setGeneral: (general: General) => call<void>("set_general", { general }),
 
   listAsks: () => call<Pending[]>("list_asks", undefined, () => []),
@@ -963,6 +1049,7 @@ export const events = {
   ) => on("chat:message_restored", cb),
   onChatsChanged: (cb: (e: { agent_id: string; index: ChatIndex }) => void) => on("chats:changed", cb),
   onToolsChanged: (cb: (s: ToolsStatus) => void) => on("tools:changed", cb),
+  onSandboxChanged: (cb: (s: SandboxStatus) => void) => on("sandbox:changed", cb),
   onToolsProgress: (cb: (p: ToolsProgress) => void) => on("tools:progress", cb),
   onAsksChanged: (cb: (p: Pending[]) => void) => on("asks:changed", cb),
   onJobsChanged: (cb: (o: JobsOverview) => void) => on("jobs:changed", cb),

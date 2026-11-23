@@ -45,6 +45,12 @@ pub struct ToolManifest {
     #[serde(default)]
     pub risky: bool,
     pub timeout_secs: u32,
+    /// What it needs from the sandbox beyond Python (`programs`).
+    #[serde(default)]
+    pub needs: Vec<String>,
+    /// Its `requires-python`, checked against the sandbox's Python.
+    #[serde(default)]
+    pub requires_python: Option<String>,
     pub dependencies: Vec<String>,
     pub packages: Vec<Package>,
     pub python: String,
@@ -87,6 +93,7 @@ pub fn builtins() -> Vec<Builtin> {
         tool!("search_files"),
         tool!("find_files"),
         tool!("run_command"),
+        tool!("run_shell"),
         tool!("calculator"),
         tool!("current_time", lock),
         tool!("fetch_page", lock),
@@ -110,9 +117,23 @@ pub fn manifest(paths: &ToolPaths, name: &str) -> Option<ToolManifest> {
         return None;
     }
     let dir = paths.tool_dir(name);
-    let m: ToolManifest =
+    let mut m: ToolManifest =
         serde_json::from_slice(&std::fs::read(dir.join("manifest.json")).ok()?).ok()?;
-    (m.name == name).then_some(m)
+    if m.name != name {
+        return None;
+    }
+    // Tools installed before sandboxes could be chosen have no `needs` or
+    // `requires_python` in their manifest; read them from the header (no
+    // code runs).
+    if m.needs.is_empty()
+        && m.requires_python.is_none()
+        && let Ok(src) = std::fs::read_to_string(dir.join("tool.py"))
+        && let Ok(meta) = parse_meta(&src)
+    {
+        m.needs = meta.needs;
+        m.requires_python = meta.requires_python;
+    }
+    Some(m)
 }
 
 /// Every installed tool, by name.
@@ -308,6 +329,8 @@ async fn build(
         network: meta.network,
         risky: meta.risky,
         timeout_secs: meta.timeout_secs,
+        needs: meta.needs.clone(),
+        requires_python: meta.requires_python.clone(),
         dependencies: meta.dependencies.clone(),
         packages,
         python: PYTHON_VERSION.into(),

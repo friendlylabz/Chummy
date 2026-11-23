@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-clear-sandbox-program"
+description = "Enables the clear_sandbox_program command without any pre-configured scope."
+commands.allow = ["clear_sandbox_program"]
+
+[[permission]]
+identifier = "deny-clear-sandbox-program"
+description = "Denies the clear_sandbox_program command without any pre-configured scope."
+commands.deny = ["clear_sandbox_program"]

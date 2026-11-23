@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-check-sandbox"
+description = "Enables the check_sandbox command without any pre-configured scope."
+commands.allow = ["check_sandbox"]
+
+[[permission]]
+identifier = "deny-check-sandbox"
+description = "Denies the check_sandbox command without any pre-configured scope."
+commands.deny = ["check_sandbox"]

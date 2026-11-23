@@ -81,6 +81,22 @@ pub async fn pick_folder(app: &AppHandle, window: &str, title: &str) -> Option<P
     .flatten()
 }
 
+/// Lets the user pick a program (any file).
+pub async fn pick_program(app: &AppHandle, window: &str, title: &str) -> Option<PathBuf> {
+    let app = app.clone();
+    let (window, title) = (window.to_string(), title.to_string());
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut d = app.dialog().file().set_title(title);
+        if let Some(w) = parent(&app, &window) {
+            d = d.set_parent(&w);
+        }
+        d.blocking_pick_file().and_then(|p| p.into_path().ok())
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 /// Lets the user pick a JSON file to import.
 pub async fn pick_json_file(
     app: &AppHandle,

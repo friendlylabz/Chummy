@@ -1,6 +1,7 @@
 <script lang="ts">
   import { commands, errorText } from "$lib/ipc";
   import { setup } from "$lib/stores/setup.svelte";
+  import { settings } from "$lib/stores/settings.svelte";
   import Button from "$lib/components/Button.svelte";
   import Icon from "$lib/components/Icon.svelte";
   import KeyTip from "$lib/components/KeyTip.svelte";
@@ -8,6 +9,11 @@
   const s = $derived(setup.status);
   // The first step that isn't done is the one to highlight.
   const next = $derived(!s.model_configured ? 1 : !s.loop_configured ? 2 : !s.agent_configured ? 3 : 0);
+  const sandboxName = $derived(
+    { native: "Native (WebAssembly)", container: "Container", openshell: "OpenShell" }[settings.current.sandbox.kind],
+  );
+  const perms = $derived(settings.current.permissions);
+  const toolsOn = $derived(Object.values(settings.current.tools).filter((t) => t.enabled).length);
   let adding = $state(false);
   let error = $state("");
 
@@ -27,7 +33,7 @@
 <section class="card" aria-labelledby="welcome-title">
   <div class="mark" aria-hidden="true"></div>
   <h1 id="welcome-title">Welcome to Chummy</h1>
-  <p class="lede">Three things to set up before your first chat.</p>
+  <p class="lede">Three things to set up before your first chat, and two you can look at now or later.</p>
 
   <ol class="steps">
     <li class:done={s.model_configured}>
@@ -72,6 +78,32 @@
       <Button variant={next === 3 ? "primary" : "secondary"} onclick={() => commands.openWindow("settings", "agents")}>
         {s.agent_configured ? "Manage" : "New agent"}
       </Button>
+    </li>
+  </ol>
+
+  <div class="optional-label">Optional</div>
+  <ol class="steps">
+    <li class="opt">
+      <span class="num"><Icon name="shield" size={14} /></span>
+      <div class="text">
+        <h2>Security and Privacy</h2>
+        <p>
+          Switch tools and internet access on for the whole app, and choose where tools run.
+          <span class="now">Now: tools {perms.tools ? "on" : "off"}, internet {perms.network ? "on" : "off"}, sandbox {sandboxName}.</span>
+        </p>
+      </div>
+      <Button variant="ghost" onclick={() => commands.openWindow("settings", "security")}>Open</Button>
+    </li>
+    <li class="opt">
+      <span class="num"><Icon name="wrench" size={14} /></span>
+      <div class="text">
+        <h2>Tools</h2>
+        <p>
+          Set up the tools agents can call: reading and editing files, searching, commands, the web.
+          <span class="now">Now: {toolsOn ? `${toolsOn} switched on` : "none switched on"}.</span>
+        </p>
+      </div>
+      <Button variant="ghost" onclick={() => commands.openWindow("settings", "tools")}>Open</Button>
     </li>
   </ol>
 
@@ -148,6 +180,29 @@
     color: var(--accent);
     font-size: var(--text-sm);
     font-weight: 650;
+  }
+  .optional-label {
+    margin: var(--space-4) 0 0;
+    color: var(--text-faint);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .optional-label + .steps {
+    margin-top: var(--space-2);
+  }
+  .opt {
+    background: transparent !important;
+    border-style: dashed !important;
+  }
+  .opt .num {
+    background: var(--surface-2);
+    color: var(--text-muted);
+  }
+  .now {
+    display: block;
+    color: var(--text-faint);
   }
   .done .num {
     background: color-mix(in srgb, var(--ok) 16%, transparent);

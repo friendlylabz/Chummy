@@ -9,14 +9,15 @@ until you say so.
 
 ![Chatting with an agent](docs/screenshot-main.png)
 
-> **Status:** passes 1–8 of the roadmap are done: the app shell, the folder
+> **Status:** passes 1–14 of the roadmap are done: the app shell, the folder
 > jail, settings, model connections (including a basic built-in engine), the
 > loop engine and editor, agents and chat, sandboxed Python tools, exchanges,
 > block functions, the scheduler with tray mode and questions for you, and
 > the default **Chummy assistant** loop (one agent loop with its own to-do list) with tool modes,
 > failure outputs, daily token limits and per-agent settings, and logs of
 > every run (each block's inputs and outputs) plus a system log, viewable in
-> the app and under each chat message. Next: chummyd,
+> the app and under each chat message, and a choice of sandbox for tools
+> (WebAssembly, containers or NVIDIA OpenShell). Next: chummyd,
 > an optional background service ([plan](docs/chummyd-plan.md)).
 
 ![The Chummy assistant at work in chat: what it's doing, its to-do list, a tool call and the result](docs/screenshot-assistant-chat.png)
@@ -36,17 +37,26 @@ until you say so.
   light up each block as it works. Blocks can carry a **comment**, links a
   **label**, and the canvas **notes**, all saved in the loop file so a loop
   explains itself.
-- **Tools.** A tool is one Python file with a standard PEP 723 header. It runs
-  as WebAssembly (CPython for WASI, under Wasmtime) and can see only the
-  agent's workspace. It can't go online except through Chummy, and only if
-  it asks for that, Internet access is on, and you allowed that tool. There
-  is no unsandboxed mode. Dependencies come from a checksummed PEP 751 lock
-  and must be pure Python. Ten built-in tools ship with Chummy: read (in
-  chunks, by line), write, edit (exact text replacement, like Claude Code's
-  Edit), list, search (grep-like) and find files, calculator, current time,
-  fetch web page, and **run command**, a small shell (pipes, redirects,
-  common commands, `python`) that runs in the same sandbox and is marked
-  *potentially unsafe*: it asks before it's switched on and before each use.
+- **Tools.** A tool is one Python file with a standard PEP 723 header. It can
+  see only the agent's workspace and can't go online except through Chummy,
+  and only if it asks for that, Internet access is on, and you allowed that
+  tool. There is no unsandboxed mode. Dependencies come from a checksummed
+  PEP 751 lock and must be pure Python. Eleven built-in tools ship with
+  Chummy: read (in chunks, by line), write, edit (exact text replacement,
+  like Claude Code's Edit), list, search (grep-like) and find files,
+  calculator, current time, fetch web page, **run command**, a small shell
+  (pipes, redirects, common commands, `python`) that works in every sandbox,
+  and **run shell**, a real `sh -c` for the sandboxes that have programs.
+  Both are marked *potentially unsafe*: they ask before they're switched on
+  and before each use.
+- **Sandboxes.** You choose where tool calls run, in Settings → Security and
+  Privacy: **Native** (the default: CPython for WebAssembly under Wasmtime,
+  built in, nothing to install), **Container** (a fresh, locked-down Docker
+  or Podman container per call, with no network, running exactly the image
+  you approved) or **NVIDIA OpenShell** (Landlock-enforced sandboxes with no
+  network; the workspace is copied in and out). Tools the chosen sandbox
+  can't run are greyed out with the reason. See
+  [docs/sandboxes.md](docs/sandboxes.md).
   See [docs/tool-format.md](docs/tool-format.md).
 - **Model block with tools.** Ask the model has outputs **Answer**,
   **Tool call** (fires instead of Answer when the model calls a tool),
@@ -151,7 +161,7 @@ until you say so.
   refused, along with any folder that contains one of them. File access goes
   through a `cap-std` capability handle, so symlinks and junctions can't
   escape the folder.
-- **Permissions.** Internet access and tools are off by default, and so is
+- **Security and Privacy.** Internet access and tools are off by default, and so is
   every tool, and every tool's internet access. Turning any of them on needs
   a native confirmation, shown by Rust, not by the web UI. A tool runs only
   when it's on at every level: app-wide, for the agent, and in the block. See
@@ -282,7 +292,7 @@ crates/          Pure Rust libraries, no Tauri dependency, tested on their own
   store/         Chummy folder layout, atomic versioned JSON, keychain secrets
   flow/          Loop format, block catalog, validation, the loop engine, templates
     templates/   The Chummy assistant's loop file and its generator (make_templates.py, assistant.py)
-  tools/         Python tools as WebAssembly: format, locks, installer, sandbox host
+  tools/         Python tools: format, locks, installer, sandboxes (Wasm, container, OpenShell)
     builtin/     The built-in tools and their pylock files
     support/     The in-sandbox runner and the `chummy` helper module
   scheduler/     Jobs, triggers, the run planner, folder watching, history, questions
@@ -361,7 +371,15 @@ OpenAI-compatible endpoint (127.0.0.1, random bearer token, offline).
 10. **A new default assistant: one go if it can, otherwise the whole plan
     first (depth first, two levels, 10 steps), then each step with 5 checked
     tries, stopping with a reason if one can't be done.** Done.
-11. **chummyd.** An optional, separately installed background service for jobs,
+11. **The Chummy assistant rebuilt as one agent loop with its own to-do list,
+    context lengths and compaction.** Done.
+12. **Several chats per agent.** Done.
+13. **Better built-in tools: chunked reading, exact edits, search, find, and
+    a sandboxed command line.** Done.
+14. **Choice of sandbox (Native, Container or NVIDIA OpenShell), Security and
+    Privacy with optional onboarding steps, tools greyed out when the
+    sandbox can't run them, and a real-shell tool.** Done.
+15. **chummyd.** An optional, separately installed background service for jobs,
    with an authenticated API, configured from the app. See
    [docs/chummyd-plan.md](docs/chummyd-plan.md).
 

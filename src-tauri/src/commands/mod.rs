@@ -13,6 +13,7 @@ pub mod local;
 pub mod logs;
 pub mod loops;
 pub mod providers;
+pub mod sandbox;
 pub mod tools;
 
 pub type CmdResult<T> = Result<T, String>;

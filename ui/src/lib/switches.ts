@@ -2,7 +2,7 @@
  * Block switches that inherit. A block's tools (and its tools' internet) are
  * "inherit" by default: the agent's own switches decide. "on" turns something
  * on for that block even when the agent's switch is off; "off" never. The
- * app-wide switches (Permissions, Settings → Tools) always apply on top.
+ * app-wide switches (Security and Privacy, Settings → Tools) always apply on top.
  *
  * In a loop file, `tools` is a switch for all tools ("inherit" | "on" | "off"),
  * or `{ all, each: { tool: switch } }` when single tools differ. Left out, it

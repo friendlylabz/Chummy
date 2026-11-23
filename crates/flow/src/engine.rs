@@ -1656,7 +1656,7 @@ impl<'a, H: Host> Runner<'a, H> {
             let Some(info) = self.host.tool_info(&name) else {
                 if switches.each.contains_key(&name) {
                     notes.push(format!(
-                        "The tool “{name}” is off in Chummy (Permissions or Settings → Tools), so the model wasn't offered it."
+                        "The tool “{name}” is off in Chummy (Security and Privacy or Settings → Tools), so the model wasn't offered it."
                     ));
                 }
                 continue;

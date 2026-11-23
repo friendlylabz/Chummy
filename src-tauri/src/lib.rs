@@ -20,7 +20,7 @@ mod windows;
 use tauri::{Manager, RunEvent, WindowEvent};
 
 use commands::{
-    agent_setup, agents, asks, chat, general, jobs, local, logs, loops, providers, tools,
+    agent_setup, agents, asks, chat, general, jobs, local, logs, loops, providers, sandbox, tools,
 };
 use state::AppState;
 
@@ -60,6 +60,9 @@ pub fn run() {
             logs::start(&handle, &state);
             app.manage(state);
             commands::tools::refresh_builtins(&handle);
+            // Container and OpenShell are checked at start-up; until a check
+            // passes, no tools are offered.
+            commands::sandbox::check_soon(&handle);
             if let Err(e) = tray::create(&handle) {
                 chummy_log::system::warn(
                     "app",
@@ -135,6 +138,15 @@ pub fn run() {
             tools::set_tool_enabled,
             tools::set_tool_network,
             tools::set_tool_ask,
+            sandbox::sandbox_status,
+            sandbox::check_sandbox,
+            sandbox::set_sandbox_kind,
+            sandbox::set_container_options,
+            sandbox::get_container_image,
+            sandbox::set_openshell_image,
+            sandbox::choose_sandbox_program,
+            sandbox::clear_sandbox_program,
+            sandbox::remove_openshell_sandboxes,
             agent_setup::set_agent_access,
             agent_setup::agent_loop_config,
             agent_setup::set_agent_block_config,

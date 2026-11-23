@@ -42,6 +42,9 @@ pub struct ToolMeta {
     pub risky: bool,
     /// Longest a call may run, in seconds.
     pub timeout_secs: u32,
+    /// What the tool needs from the sandbox beyond Python (see [`NEEDS`]).
+    /// A tool whose needs the chosen sandbox can't meet is shown greyed out.
+    pub needs: Vec<String>,
     pub requires_python: Option<String>,
     /// PEP 508 requirements, from PyPI only.
     pub dependencies: Vec<String>,
@@ -84,7 +87,16 @@ struct ChummyTable {
     risky: bool,
     #[serde(default = "d_timeout")]
     timeout: u32,
+    #[serde(default)]
+    needs: Vec<String>,
 }
+
+/// What a tool can say it needs in `needs = [...]`:
+///
+/// - `programs`: it starts other programs (`subprocess`), so it only works in
+///   a sandbox that has real programs (Container or OpenShell), not in the
+///   WebAssembly one.
+pub const NEEDS: &[&str] = &["programs"];
 
 /// Longest timeout a tool may ask for.
 pub const MAX_TIMEOUT_SECS: u32 = 300;
@@ -208,6 +220,15 @@ pub fn parse_meta(source: &str) -> Result<ToolMeta, ToolError> {
             "the dependency “{r}” isn't a plain package requirement (no URLs or paths)"
         )));
     }
+    if let Some(n) = c.needs.iter().find(|n| !NEEDS.contains(&n.as_str())) {
+        return Err(bad(format!(
+            "needs “{n}” isn't something Chummy knows; use {}",
+            NEEDS.join(", ")
+        )));
+    }
+    let mut needs = c.needs;
+    needs.sort();
+    needs.dedup();
     let title = if c.title.trim().is_empty() {
         c.name.replace('_', " ")
     } else {
@@ -220,6 +241,7 @@ pub fn parse_meta(source: &str) -> Result<ToolMeta, ToolError> {
         network: c.network,
         risky: c.risky,
         timeout_secs: c.timeout,
+        needs,
         requires_python: block.requires_python,
         dependencies: block.dependencies,
     })
@@ -326,6 +348,16 @@ import chummy
         assert!(!m.risky);
         let risky = parse_meta(&GOOD.replace("network = true", "network = true\n# risky = true"));
         assert!(risky.unwrap().risky);
+        assert!(m.needs.is_empty());
+    }
+
+    #[test]
+    fn reads_needs() {
+        let m = parse_meta(&GOOD.replace("network = true", "needs = [\"programs\", \"programs\"]"))
+            .unwrap();
+        assert_eq!(m.needs, vec!["programs".to_string()]);
+        let bad = parse_meta(&GOOD.replace("network = true", "needs = [\"gpu\"]"));
+        assert!(bad.unwrap_err().to_string().contains("gpu"));
     }
 
     #[test]

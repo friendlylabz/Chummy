@@ -39,6 +39,7 @@ pub struct SettingsView {
     pub tools: BTreeMap<String, ToolPref>,
     pub general: General,
     pub logging: Logging,
+    pub sandbox: chummy_tools::SandboxSettings,
 }
 
 pub fn settings_view(state: &AppState, s: &Settings) -> SettingsView {
@@ -61,6 +62,7 @@ pub fn settings_view(state: &AppState, s: &Settings) -> SettingsView {
         tools: s.tools.clone(),
         general: s.general.clone(),
         logging: s.logging.clone(),
+        sandbox: s.sandbox.clone(),
     }
 }
 

@@ -9,7 +9,7 @@
   import Toggle from "$lib/components/Toggle.svelte";
   import ProgressBar from "$lib/components/ProgressBar.svelte";
 
-  let { gotoPermissions }: { gotoPermissions: () => void } = $props();
+  let { gotoSecurity }: { gotoSecurity: () => void } = $props();
 
   let error = $state("");
   let open = $state<string | null>(null);
@@ -17,6 +17,10 @@
   const s = $derived(tools.status);
   const perms = $derived(settings.current.permissions);
   const progress = $derived(tools.progress);
+  const sb = $derived(s?.sandbox);
+  const kindLabel = $derived(
+    sb?.kind === "container" ? "a container" : sb?.kind === "openshell" ? "OpenShell" : "WebAssembly (Native)",
+  );
 
   onMount(() => tools.init());
 
@@ -67,8 +71,8 @@
 
 <h1>Tools</h1>
 <p class="pane-sub">
-  Small Python programs agents can call. Each runs in a WebAssembly sandbox that can only see the agent's workspace
-  folder, and can only go online through Chummy, when you allow it.
+  Small Python programs agents can call. Each runs in a sandbox that can only see the agent's workspace folder, and can
+  only go online through Chummy, when you allow it.
 </p>
 
 {#if error || tools.error}
@@ -102,8 +106,22 @@
   {#if !perms.tools}
     <div class="notice warn" style="margin-bottom: var(--space-4)">
       <Icon name="shield" size={16} />
-      <span>Tools are off in Permissions, so agents can't use any of these yet.</span>
-      <Button variant="ghost" onclick={gotoPermissions}>Permissions</Button>
+      <span>Tools are off in Security and Privacy, so agents can't use any of these yet.</span>
+      <Button variant="ghost" onclick={gotoSecurity}>Security and Privacy</Button>
+    </div>
+  {/if}
+  {#if sb}
+    <div class="notice sandbox" class:warn={!sb.ready} style="margin-bottom: var(--space-4)">
+      <Icon name={sb.ready ? "shield" : "alert"} size={16} />
+      <span>
+        {#if sb.ready}
+          Tools run in {kindLabel}{sb.python ? `, on Python ${sb.python}` : ""}.
+          {sb.programs ? "They can run the programs the sandbox has." : "They can't start other programs here."}
+        {:else}
+          The sandbox isn't ready, so agents get no tools: {sb.message}
+        {/if}
+      </span>
+      <Button variant="ghost" onclick={gotoSecurity}>Change</Button>
     </div>
   {/if}
 
@@ -114,25 +132,32 @@
   <div class="section-label">Installed</div>
   <div class="card rows">
     {#each s.tools as t (t.name)}
-      <div class="tool">
+      <div class="tool" class:unusable={!!t.unusable}>
         <div class="row">
           <button type="button" class="tool-main" onclick={() => (open = open === t.name ? null : t.name)} aria-expanded={open === t.name}>
             <div class="row-title">
               {t.title}
               <span class="mono faint xs">{t.name}</span>
-              {#if t.network}<span class="badge" title="Asks for internet access"><Icon name="globe" size={11} /> Internet</span>{/if}
+              {#if t.needs.includes("programs")}<span class="badge" title="Starts other programs, so it needs the Container or OpenShell sandbox"><Icon name="cpu" size={11} /> Programs</span>{/if}
+            {#if t.network}<span class="badge" title="Asks for internet access"><Icon name="globe" size={11} /> Internet</span>{/if}
               {#if t.risky}<span class="badge risky" title="One call can change or delete many files in the workspace"><Icon name="alert" size={11} /> Potentially unsafe</span>{/if}
             </div>
             <div class="row-sub">{t.description}</div>
+            {#if t.unusable}<div class="why"><Icon name="alert" size={12} /> {t.unusable}</div>{/if}
           </button>
-          <Toggle checked={t.enabled} label="Use {t.title}" onchange={(v) => toggle(t, v)} />
+          <Toggle
+            checked={t.enabled}
+            disabled={!!t.unusable && !t.enabled}
+            label="Use {t.title}"
+            onchange={(v) => toggle(t, v)}
+          />
         </div>
         {#if t.network && t.enabled}
           <div class="row sub-row">
             <div>
               <div class="small">Internet access for this tool</div>
               <div class="faint xs">
-                {#if !perms.network}Also needs Internet access in Permissions.{:else}Can't reach this computer or your local network.{/if}
+                {#if !perms.network}Also needs Internet access in Security and Privacy.{:else}Can't reach this computer or your local network.{/if}
                 Each agent and block must allow the internet too.
               </div>
             </div>
@@ -164,12 +189,27 @@
     {/each}
   </div>
   <p class="faint xs" style="margin-top: var(--space-3)">
-    Python {s.runtime.version} for WebAssembly. A tool can read and write only the agent's own workspace, and only
-    tools that ask for it can go online, through Chummy, if you allow it here and in Permissions.
+    Tools are read and checked with Python {s.runtime.version} for WebAssembly, whichever sandbox runs them. A tool can
+    read and write only the agent's own workspace, and only tools that ask for it can go online, through Chummy, if
+    you allow it here and in Security and Privacy.
   </p>
 {/if}
 
 <style>
+  .unusable .tool-main {
+    opacity: 0.55;
+  }
+  .why {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 3px;
+    font-size: var(--text-xs);
+    color: var(--text);
+  }
+  .notice.sandbox:not(.warn) {
+    background: var(--surface-2);
+  }
   .tool + .tool {
     border-top: 1px solid var(--border);
   }

@@ -29,6 +29,8 @@ pub const CHAT_MESSAGE_RESTORED: &str = "chat:message_restored";
 pub const CHATS_CHANGED: &str = "chats:changed";
 /// Payload: `ToolsStatus`.
 pub const TOOLS_CHANGED: &str = "tools:changed";
+/// Payload: `commands::sandbox::SandboxStatus`.
+pub const SANDBOX_CHANGED: &str = "sandbox:changed";
 /// Payload: `ToolsProgress`.
 pub const TOOLS_PROGRESS: &str = "tools:progress";
 /// Payload: `chummy_scheduler::Overview`.

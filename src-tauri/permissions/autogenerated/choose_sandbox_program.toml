@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-choose-sandbox-program"
+description = "Enables the choose_sandbox_program command without any pre-configured scope."
+commands.allow = ["choose_sandbox_program"]
+
+[[permission]]
+identifier = "deny-choose-sandbox-program"
+description = "Denies the choose_sandbox_program command without any pre-configured scope."
+commands.deny = ["choose_sandbox_program"]

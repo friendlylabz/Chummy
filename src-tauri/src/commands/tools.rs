@@ -22,6 +22,8 @@ pub struct ToolView {
     pub network_allowed: bool,
     /// Every call waits for the user's OK.
     pub ask: bool,
+    /// Why the chosen sandbox can't run it (shown greyed out), if it can't.
+    pub unusable: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -34,10 +36,13 @@ pub struct ToolsStatus {
     pub tools: Vec<ToolView>,
     /// How many tools ship with Chummy.
     pub builtin_count: usize,
+    /// The sandbox tools run in, as last checked.
+    pub sandbox: chummy_tools::Health,
 }
 
 pub fn status(state: &AppState) -> ToolsStatus {
     let s = state.settings();
+    let health = state.sandbox_health(&s.sandbox);
     ToolsStatus {
         runtime: chummy_tools::python_status(&state.tool_paths),
         python_version: chummy_tools::PYTHON_VERSION,
@@ -51,11 +56,13 @@ pub fn status(state: &AppState) -> ToolsStatus {
                     enabled: pref.enabled,
                     network_allowed: pref.network && m.network,
                     ask: pref.ask,
+                    unusable: chummy_tools::unusable(&m, &health),
                     manifest: m,
                 }
             })
             .collect(),
         builtin_count: chummy_tools::builtins().len(),
+        sandbox: health,
     }
 }
 
@@ -73,8 +80,11 @@ pub fn tools_status(state: State<'_, AppState>) -> ToolsStatus {
     status(&state)
 }
 
-fn changed(app: &AppHandle, state: &AppState) {
+/// Tells every window about the tools, and the sandbox (whose health
+/// depends on the tool runtime too).
+pub fn changed(app: &AppHandle, state: &AppState) {
     let _ = app.emit(events::TOOLS_CHANGED, status(state));
+    let _ = app.emit(events::SANDBOX_CHANGED, super::sandbox::status(state));
 }
 
 /// At start-up, once tools are set up: installs built-in tools that are new
@@ -256,7 +266,7 @@ pub async fn set_tool_network(
         let msg = format!(
             "“{}” will be able to make web requests for agents: {}\n\nIt can't reach this computer or your \
              local network, and it still can't see anything outside the agent's workspace. Internet access \
-             also has to be on in Permissions.",
+             also has to be on in Security and Privacy.",
             m.title, m.description
         );
         let title = format!("Let “{}” use the internet?", m.title);

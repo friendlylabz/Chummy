@@ -1,10 +1,12 @@
 """Runs one Chummy tool inside the sandbox.
 
 Chummy starts this with the tool mounted at /tool (tool.py plus its
-packages in /tool/site-packages), the agent's workspace at /workspace, and
-the Python standard library at /lib. The first line on stdin says what to
-do; the last line on stdout is the result. Everything the tool prints goes
-to stderr, which Chummy keeps as the tool's log.
+packages in /tool/site-packages) and the agent's workspace at /workspace.
+Sandboxes that can't mount folders there (OpenShell copies them in) set
+CHUMMY_ROOT to the folder holding tool/ and chummy/, and CHUMMY_WORKSPACE to
+the workspace copy. The first line on stdin says what to do; the last line
+on stdout is the result. Everything the tool prints goes to stderr, which
+Chummy keeps as the tool's log.
 """
 
 import importlib.util
@@ -14,6 +16,9 @@ import os
 import sys
 import traceback
 import typing
+
+ROOT = os.environ.get("CHUMMY_ROOT", "").rstrip("/")
+TOOL = ROOT + "/tool"
 
 PROTO = sys.__stdout__
 sys.stdout = sys.stderr
@@ -33,10 +38,10 @@ def done_err(message, kind="error"):
 
 
 def load_tool():
-    sys.path.append("/tool/site-packages")
+    sys.path.append(TOOL + "/site-packages")
     import chummy
 
-    spec = importlib.util.spec_from_file_location("chummy_tool", "/tool/tool.py")
+    spec = importlib.util.spec_from_file_location("chummy_tool", TOOL + "/tool.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     fns = list(chummy._registered)

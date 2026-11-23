@@ -14,8 +14,9 @@
   import AgentsPane from "./AgentsPane.svelte";
   import ToolsPane from "./ToolsPane.svelte";
   import LogsPane from "./LogsPane.svelte";
+  import SecurityPane from "./SecurityPane.svelte";
 
-  type Section = "agents" | "models" | "engine" | "tools" | "permissions" | "logs" | "general" | "appearance" | "about";
+  type Section = "agents" | "models" | "engine" | "tools" | "security" | "logs" | "general" | "appearance" | "about";
 
   const sections: {
     id: Section;
@@ -26,7 +27,7 @@
     { id: "models", label: "Models", icon: "bot" },
     { id: "engine", label: "Local engine", icon: "cpu" },
     { id: "tools", label: "Tools", icon: "wrench" },
-    { id: "permissions", label: "Permissions", icon: "shield" },
+    { id: "security", label: "Security and Privacy", icon: "shield" },
     { id: "logs", label: "Logs", icon: "history" },
     { id: "general", label: "General", icon: "sliders" },
     { id: "appearance", label: "Appearance", icon: "palette" },
@@ -34,7 +35,9 @@
   ];
 
   const fromHash = (h: string): Section | null => {
-    const id = h.replace(/^#/, "").split(":")[0];
+    let id = h.replace(/^#/, "").split(":")[0];
+    // The section was called Permissions before.
+    if (id === "permissions") id = "security";
     return sections.some((x) => x.id === id) ? (id as Section) : null;
   };
   /** `logs:export` and `logs:import` open those dialogs. */
@@ -48,7 +51,6 @@
   let logsKey = $state(0);
   let modelsView = $state<"list" | "pick" | "form" | "local">("list");
   let info = $state<AppInfo | null>(null);
-  const perms = $derived(settings.current.permissions);
   const general = $derived(settings.current.general);
   const closeOptions = [
     { value: "ask", label: "Ask each time" },
@@ -107,43 +109,9 @@
       {:else if active === "agents"}
         <AgentsPane gotoModels={() => go("models", "pick")} gotoTools={() => go("tools")} />
       {:else if active === "tools"}
-        <ToolsPane gotoPermissions={() => go("permissions")} />
-      {:else if active === "permissions"}
-        <h1>Permissions</h1>
-        <p class="pane-sub">Everything beyond the workspace folder is off until you turn it on. Turning something on asks you to confirm.</p>
-        <div class="card rows">
-          <div class="row">
-            <div>
-              <div class="row-title">Internet access</div>
-              <div class="row-sub">The app-wide switch. A tool goes online only if this, the tool's internet switch in Tools, the agent's internet switch in Agents, and the block's “may use the internet” are all on.</div>
-            </div>
-            <Toggle checked={perms.network} label="Internet access" onchange={(v) => commands.setPermission("network", v)} />
-          </div>
-          <div class="row">
-            <div>
-              <div class="row-title">Tools</div>
-              <div class="row-sub">The app-wide switch. A tool runs only if this and the tool are on in Tools, the agent may use it (Agents), and the loop block ticks it. Tools stay locked to the agent's workspace.</div>
-            </div>
-            <Toggle checked={perms.tools} label="Tools" onchange={(v) => commands.setPermission("tools", v)} />
-          </div>
-          <div class="row">
-            <div>
-              <div class="row-title">Ask before tools go online</div>
-              <div class="row-sub">
-                Every call to a tool that can use the internet waits for your OK in chat, so a web page can't quietly
-                talk an agent into sending your files somewhere. Scheduled jobs wait too.
-              </div>
-            </div>
-            <Toggle
-              checked={perms.confirm_online_tools}
-              label="Ask before tools go online"
-              onchange={(v) => commands.setPermission("confirm_online_tools", v)}
-            />
-          </div>
-        </div>
-        <p class="faint xs" style="margin-top: var(--space-3)">
-          Model connections in Models are made by Chummy itself and work regardless of these switches.
-        </p>
+        <ToolsPane gotoSecurity={() => go("security")} />
+      {:else if active === "security"}
+        <SecurityPane gotoTools={() => go("tools")} />
       {:else if active === "general"}
         <h1>General</h1>
         <p class="pane-sub">Closing Chummy, notifications and scheduled jobs.</p>

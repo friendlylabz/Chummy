@@ -991,7 +991,7 @@ pub fn catalog() -> Vec<BlockInfo> {
                         "tools",
                         "Tools",
                         K::Tools,
-                        "Same as the agent offers the tools the agent allows. Set a tool On to offer it even when the agent's switch is off, or Off to never offer it here. A tool off app-wide (Permissions or Settings → Tools) is never offered. Fewer tools means a shorter prompt and fewer mistakes.",
+                        "Same as the agent offers the tools the agent allows. Set a tool On to offer it even when the agent's switch is off, or Off to never offer it here. A tool off app-wide (Security and Privacy or Settings → Tools) is never offered. Fewer tools means a shorter prompt and fewer mistakes.",
                     )
                 },
                 p(
@@ -1030,7 +1030,7 @@ pub fn catalog() -> Vec<BlockInfo> {
                     "network",
                     "Tools may use the internet",
                     switch_choice("Same as the agent"),
-                    "Same as the agent uses the agent's Internet switch. On works even when the agent's is off; Off never. Internet access in Settings → Permissions and the tool's own internet switch must always allow it too.",
+                    "Same as the agent uses the agent's Internet switch. On works even when the agent's is off; Off never. Internet access in Settings → Security and Privacy and the tool's own internet switch must always allow it too.",
                 ),
                 p(
                     "on_limit",
@@ -1132,7 +1132,7 @@ pub fn catalog() -> Vec<BlockInfo> {
                     "network",
                     "Tools may use the internet",
                     switch_choice("Same as the agent"),
-                    "Same as the agent uses the agent's Internet switch. On works even when the agent's is off; Off never. Internet access in Settings → Permissions and the tool's own internet switch must always allow it too.",
+                    "Same as the agent uses the agent's Internet switch. On works even when the agent's is off; Off never. Internet access in Settings → Security and Privacy and the tool's own internet switch must always allow it too.",
                 ),
             ],
             json!({}),

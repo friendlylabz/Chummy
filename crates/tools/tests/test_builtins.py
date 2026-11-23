@@ -215,3 +215,30 @@ class RunCommand(Workspace):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipIf(os.name == "nt", "needs sh")
+class RunShell(Workspace):
+    def setUp(self):
+        super().setUp()
+        self.run = load("run_shell")
+
+    def test_runs_in_the_workspace_with_exit_codes(self):
+        self.put("a.txt", "hello\n")
+        self.assertEqual(self.run("cat a.txt; pwd"), f"hello\n{self.ws}\n[exit code 0]")
+        self.assertEqual(self.run("exit 3"), "(no output)\n[exit code 3]")
+        self.assertIn("no-such-program", self.run("no-such-program 2>&1"))
+
+    def test_gets_no_host_environment(self):
+        os.environ["CHUMMY_TEST_SECRET"] = "x"
+        try:
+            self.assertNotIn("CHUMMY_TEST_SECRET", self.run("env"))
+        finally:
+            del os.environ["CHUMMY_TEST_SECRET"]
+
+    def test_long_output_is_cut_and_empty_commands_refused(self):
+        out = self.run("i=0; while [ $i -lt 3000 ]; do echo line $i; i=$((i+1)); done")
+        self.assertIn("characters cut", out)
+        self.assertTrue(out.endswith("[exit code 0]"))
+        with self.assertRaises(chummy.ToolError):
+            self.run("  ")

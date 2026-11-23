@@ -58,6 +58,7 @@ you agree to is known before anything is installed.
 | `version` | Shown in Settings. |
 | `network` | `true` if the tool needs the internet. It still can't go online until the user allows it. |
 | `timeout` | Seconds a call may run (default 30, at most 300). |
+| `needs` | What the tool needs from the sandbox beyond Python. `["programs"]` means it starts other programs (`subprocess`), so it only runs in the Container or OpenShell sandbox; in Native it's shown greyed out and never offered. Leave it out otherwise. See [sandboxes.md](sandboxes.md). |
 | `risky` | `true` for a tool that can do a lot of damage inside the workspace in one call (like `run_command`). Settings shows it as **Potentially unsafe**, switching it on asks for confirmation, and it then asks before each use until you turn that off. It is still sandboxed like every other tool. |
 
 Unknown keys in `[tool.chummy]` are errors. Other tools' tables are ignored.
@@ -93,12 +94,20 @@ explained to the model so it can try again.
 | `@chummy.tool` | Marks the function the model calls. |
 | `chummy.ToolError` | An error message for the model. |
 | `chummy.workspace_path(p)` | Turns a path the model gave into one inside the workspace; refuses absolute paths and `..`. |
-| `chummy.WORKSPACE` | `/workspace`, which is also the current folder. |
+| `chummy.WORKSPACE` | Where the workspace is (`/workspace`, or the copy's folder in OpenShell); also the current folder. |
 | `chummy.http.get(url, headers=None)`, `chummy.http.post(url, data=None, json=None, headers=None)` | Web requests made by the app on the tool's behalf. Return a `Response` with `status`, `url`, `headers`, `text`, `ok`, `json()`, `raise_for_status()`. |
 
 ## The sandbox
 
-Each call gets a fresh WebAssembly instance that can see exactly:
+Tool calls run in the sandbox chosen in Security and Privacy: Native (below,
+the default), Container or OpenShell. Each one gives the tool the same view
+(the workspace, the tool, Chummy's runner, no network of its own); see
+[sandboxes.md](sandboxes.md). Inside a sandbox that copies the workspace
+(OpenShell), `chummy.WORKSPACE` says where the copy is, so use it rather than
+writing `/workspace` yourself.
+
+In the **Native** sandbox each call gets a fresh WebAssembly instance that can
+see exactly:
 
 | Path | What | Access |
 |------|------|--------|
@@ -113,7 +122,7 @@ sockets, so a tool has no network of its own: `chummy.http` sends the request
 to the app, which makes it only if **all** of these hold:
 
 1. the tool's header says `network = true`;
-2. Internet access is on in Permissions;
+2. Internet access is on in Security and Privacy;
 3. the tool's own internet switch is on in Settings → Tools (turning it on
    asks for confirmation);
 4. the address is `http`/`https` and doesn't point to this computer or the
@@ -163,6 +172,7 @@ update, tools are reinstalled). Installs run one at a time.
 | `search_files` | Searches files' contents, like grep: plain text or a `regex`, `file_glob` (e.g. `*.py`), `ignore_case`, `context_lines`, `max_results`. Answers `file:line: text`. Skips `.git`, `node_modules`, build folders, hidden files and files over 2 MB. | no |
 | `find_files` | Finds files by name with a glob (`*.md`, `src/**/*.ts`), newest first, up to 200. | no |
 | `run_command` | **Potentially unsafe.** Runs a shell-style command line in the workspace (see below). | no |
+| `run_shell` | **Potentially unsafe.** Runs a real `sh -c` command in the workspace, with whatever programs the sandbox has. `needs = ["programs"]`: Container or OpenShell only. Output is cut to 10,000 characters and ends with the exit code; 110-second limit; no host environment. | no |
 | `calculator` | Works out arithmetic exactly (no `eval`). | no |
 | `current_time` | Today's date and the time, in any time zone (uses `tzdata`). | no |
 | `fetch_page` | Gets the readable text of a web page (uses `beautifulsoup4`). | yes |

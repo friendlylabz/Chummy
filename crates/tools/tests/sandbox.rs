@@ -98,6 +98,12 @@ async fn builtin_file_tools_work_inside_the_workspace_only() {
     let rc = chummy_tools::manifest(&paths, "run_command").unwrap();
     assert!(rc.risky, "run_command is marked potentially unsafe");
     assert!(!rf.risky);
+    assert!(rc.needs.is_empty(), "run_command works in WebAssembly");
+    // run_shell describes itself in WebAssembly, but needs real programs.
+    let rs = chummy_tools::manifest(&paths, "run_shell").unwrap();
+    assert!(rs.risky);
+    assert_eq!(rs.needs, vec!["programs".to_string()]);
+    assert_eq!(rs.requires_python.as_deref(), Some(">=3.14"));
 
     let ws = tempfile::tempdir().unwrap();
     std::fs::write(ws.path().join("notes.md"), "hello from the workspace").unwrap();

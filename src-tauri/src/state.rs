@@ -15,7 +15,8 @@ use chummy_sandbox::Protected;
 use chummy_scheduler::{AskBroker, Manager};
 use chummy_store::secrets::{Keychain, SecretStore};
 use chummy_store::{ChummyDirs, JsonDoc, Recovery};
-use chummy_tools::{ToolHost, ToolPaths};
+use chummy_tools::sandbox::{ContainerSandbox, NativeSandbox, OpenShellSandbox};
+use chummy_tools::{Health, SandboxBackend, SandboxKind, SandboxSettings, ToolHost, ToolPaths};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
@@ -76,6 +77,15 @@ pub struct AppState {
     tool_host: tokio::sync::Mutex<Option<Arc<ToolHost>>>,
     /// Set while the tool runtime is being set up.
     pub tools_installing: Mutex<bool>,
+    /// The Container or OpenShell sandbox, built for the settings it was
+    /// made with (rebuilt when they change). Native is built from the tool
+    /// host each time.
+    sandbox: Mutex<Option<(SandboxSettings, Arc<dyn SandboxBackend>)>>,
+    /// The last check of the Container or OpenShell sandbox, for the
+    /// settings it was made with.
+    sandbox_health: Mutex<Option<(SandboxSettings, Health)>>,
+    /// Set while a sandbox check runs.
+    pub sandbox_checking: AtomicBool,
     /// Questions and tool approvals waiting for the user, from every run.
     pub asks: AskBroker,
     /// Tokens used per model connection per day, for daily limits.
@@ -172,6 +182,9 @@ impl AppState {
             tool_paths: ToolPaths::new(&dirs.tools),
             tool_host: tokio::sync::Mutex::new(None),
             tools_installing: Mutex::new(false),
+            sandbox: Mutex::new(None),
+            sandbox_health: Mutex::new(None),
+            sandbox_checking: AtomicBool::new(false),
             asks: AskBroker::new(),
             usage: Arc::new(chummy_runner::usage::UsageLedger::open(
                 &dirs.root.join("usage.json"),
@@ -244,6 +257,96 @@ impl AppState {
         let host = Arc::new(host);
         *guard = Some(host.clone());
         Ok(host)
+    }
+
+    /// The sandbox tool calls run in, for the current settings.
+    pub async fn sandbox(&self) -> Result<Arc<dyn SandboxBackend>, String> {
+        let s = self.settings().sandbox;
+        if s.kind == SandboxKind::Native {
+            return Ok(Arc::new(NativeSandbox::new(self.tool_host().await?)));
+        }
+        let mut cached = lock(&self.sandbox);
+        if let Some((made_for, b)) = cached.as_ref()
+            && *made_for == s
+        {
+            return Ok(b.clone());
+        }
+        let b = self.build_sandbox(&s)?;
+        *cached = Some((s, b.clone()));
+        Ok(b)
+    }
+
+    fn build_sandbox(&self, s: &SandboxSettings) -> Result<Arc<dyn SandboxBackend>, String> {
+        let e = |e: chummy_tools::ToolError| e.to_string();
+        Ok(match s.kind {
+            SandboxKind::Native => unreachable!("native is built from the tool host"),
+            SandboxKind::Container => Arc::new(
+                ContainerSandbox::new(s.container.clone(), self.tool_paths.clone()).map_err(e)?,
+            ),
+            SandboxKind::Openshell => Arc::new(
+                OpenShellSandbox::new(
+                    s.openshell.clone(),
+                    self.tool_paths.clone(),
+                    self.tool_paths.cache.join("openshell"),
+                )
+                .map_err(e)?,
+            ),
+        })
+    }
+
+    /// Drops the cached Container or OpenShell sandbox (after its sandboxes
+    /// were removed), so the next call starts fresh.
+    pub fn forget_sandbox(&self) {
+        *lock(&self.sandbox) = None;
+        *lock(&self.sandbox_health) = None;
+    }
+
+    /// A Container sandbox for `opts` (to get its image).
+    pub fn container(
+        &self,
+        opts: chummy_tools::sandbox::ContainerOptions,
+    ) -> Result<ContainerSandbox, String> {
+        ContainerSandbox::new(opts, self.tool_paths.clone()).map_err(|e| e.to_string())
+    }
+
+    /// The OpenShell sandbox for the current settings.
+    pub fn openshell(&self) -> Result<OpenShellSandbox, String> {
+        OpenShellSandbox::new(
+            self.settings().sandbox.openshell,
+            self.tool_paths.clone(),
+            self.tool_paths.cache.join("openshell"),
+        )
+        .map_err(|e| e.to_string())
+    }
+
+    /// What's known about the sandbox now, without checking again. Native
+    /// is always current; the others are as last checked (or "not checked
+    /// yet", which offers no tools until a check passes).
+    pub fn sandbox_health(&self, s: &SandboxSettings) -> Health {
+        if s.kind == SandboxKind::Native {
+            return NativeSandbox::health(&self.tool_paths);
+        }
+        match lock(&self.sandbox_health).as_ref() {
+            Some((made_for, h)) if made_for == s => h.clone(),
+            _ => Health::unknown(s.kind),
+        }
+    }
+
+    /// Checks the sandbox now and remembers the answer.
+    pub async fn check_sandbox(&self) -> Health {
+        let s = self.settings().sandbox;
+        if s.kind == SandboxKind::Native {
+            return NativeSandbox::health(&self.tool_paths);
+        }
+        let h = match self.sandbox().await {
+            Ok(b) => b.check().await,
+            Err(e) => Health::problem(s.kind, e),
+        };
+        // Only keep it if the settings didn't change meanwhile.
+        if self.settings().sandbox == s {
+            *lock(&self.sandbox_health) = Some((s, h.clone()));
+        }
+        h
     }
 
     pub fn has_secret(&self, key: &str) -> bool {

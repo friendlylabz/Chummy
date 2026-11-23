@@ -256,6 +256,52 @@ are counted in it. Test connection is an explicit user action and isn't
 gated. Context-length detection reads the server's model metadata only and
 makes no model calls.
 
+## Pass 14: choosing the sandbox
+
+Tool calls can run in Native (WebAssembly, the default), Container (Docker or
+Podman) or OpenShell; the full design is in [sandboxes.md](sandboxes.md). The
+Permissions page is now **Security and Privacy**, with the sandbox choice on
+it. What was checked:
+
+- **Nothing widens without a native confirm.** Switching to Container or
+  OpenShell, approving a container image (download or local copy) and
+  choosing the engine's program all ask from Rust. A window can send only the
+  engine, the image *name* and limits; the approved image ID and program
+  paths never come from a window.
+- **The program Chummy starts** runs outside any sandbox, so it can only be
+  set with a native file picker and is refused inside any agent's workspace
+  (where a tool could replace it) or the Chummy folder. Its environment is
+  reduced to what the engine needs.
+- **Containers.** `--network none`, read-only root, all capabilities dropped,
+  `no-new-privileges`, `--ipc none`, process/memory/CPU limits, no engine
+  logs, only the workspace (rw) and the tool and runner (ro) mounted, never
+  the Docker socket, not root (Docker on Linux/macOS), `--pull never` and the
+  approved image ID. Tested with real Docker: no network, no host files or
+  environment, files owned by the workspace's owner, the web bridge still
+  under Chummy's policy, timeouts killing the container.
+- **OpenShell.** Chummy's policy: Landlock required, unprivileged user,
+  system folders read-only, no network rules. The workspace copy goes both
+  ways through the jail: links never travel, the tool's changes don't
+  overwrite files you changed during the call, size limits apply before
+  anything is written back, and only finished calls bring changes back.
+- **Same network rules everywhere.** No backend gives a tool a network; web
+  requests travel over the tool's stdin/stdout to Chummy's `NetPolicy`.
+- **Tools a sandbox can't run are never offered**, and none are while a
+  Container or OpenShell sandbox hasn't passed a check.
+
+New risks to keep in mind:
+
+- **A container engine is powerful.** Access to the Docker daemon is close to
+  root on Linux. Chummy only uses one you already run, and says so when you
+  switch. Container escapes through kernel bugs are possible in principle;
+  Docker Desktop's VM adds a layer on macOS and Windows.
+- **The image is yours to trust.** Chummy pins the ID you approve, but can't
+  tell whether an image is benign.
+- **OpenShell sandboxes are kept per workspace**, so something a tool leaves
+  in `/tmp` can be seen by later calls for the same workspace (never another
+  agent's). The OpenShell backend has been tested against a stand-in for the
+  `openshell` program, not yet a real gateway.
+
 ## Known risks and what to do next
 
 In rough order of importance:

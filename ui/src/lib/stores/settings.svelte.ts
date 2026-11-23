@@ -19,6 +19,11 @@ class SettingsStore {
     tools: {},
     general: { close: "ask", notifications: true, max_job_runs: 1, markdown: true, math: true },
     logging: { runs: "verbose", encrypt: true, system: "info" },
+    sandbox: {
+      kind: "native",
+      container: { engine: "docker", program: "", image: "python:3.14-slim", approved_id: null, memory_mb: 1024, cpus: 2 },
+      openshell: { program: "", image: "" },
+    },
   });
   /** The theme actually shown, with "system" resolved. */
   resolvedTheme = $state<"dark" | "light">(prefersDark.matches ? "dark" : "light");

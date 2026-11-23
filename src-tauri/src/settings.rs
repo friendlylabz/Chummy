@@ -238,6 +238,8 @@ pub struct Settings {
     pub tools: BTreeMap<String, ToolPref>,
     pub general: General,
     pub logging: Logging,
+    /// Where tool calls run (Security and Privacy → Sandbox).
+    pub sandbox: chummy_tools::SandboxSettings,
 }
 
 impl Default for Settings {
@@ -254,6 +256,7 @@ impl Default for Settings {
             tools: BTreeMap::new(),
             general: General::default(),
             logging: Logging::default(),
+            sandbox: chummy_tools::SandboxSettings::default(),
         }
     }
 }
@@ -363,6 +366,62 @@ pub fn log_changes(old: &Settings, new: &Settings) {
             format!(
                 "Ask before tools go online turned {}",
                 on(b.confirm_online_tools)
+            ),
+        ));
+    }
+    let (x, y) = (&old.sandbox, &new.sandbox);
+    if x.kind != y.kind {
+        changes.push((
+            Level::Warn,
+            format!("Tools now run in the {} sandbox", y.kind.label()),
+        ));
+    }
+    if x.container.approved_id != y.container.approved_id
+        && let Some(id) = &y.container.approved_id
+    {
+        changes.push((
+            Level::Warn,
+            format!("Container image {} approved ({id})", y.container.image),
+        ));
+    }
+    if x.container.engine != y.container.engine || x.container.program != y.container.program {
+        changes.push((
+            Level::Warn,
+            format!(
+                "Container engine set to {}{}",
+                y.container.engine.label(),
+                if y.container.program.is_empty() {
+                    String::new()
+                } else {
+                    format!(" at {}", y.container.program)
+                }
+            ),
+        ));
+    }
+    if x.container.memory_mb != y.container.memory_mb || x.container.cpus != y.container.cpus {
+        changes.push((
+            Level::Info,
+            format!(
+                "Container limits set to {} MB and {} CPUs",
+                y.container.memory_mb, y.container.cpus
+            ),
+        ));
+    }
+    if x.openshell != y.openshell {
+        changes.push((
+            Level::Warn,
+            format!(
+                "OpenShell set to {} with image {}",
+                if y.openshell.program.is_empty() {
+                    "the openshell program on this computer"
+                } else {
+                    &y.openshell.program
+                },
+                if y.openshell.image.is_empty() {
+                    "(OpenShell's default)"
+                } else {
+                    &y.openshell.image
+                }
             ),
         ));
     }
@@ -536,6 +595,10 @@ mod tests {
             "online tools ask by default"
         );
         assert_eq!(s.general.close, CloseAction::Ask);
+        // Tools run in the built-in sandbox unless the user picks another,
+        // and no container image is approved.
+        assert_eq!(s.sandbox.kind, chummy_tools::SandboxKind::Native);
+        assert!(s.sandbox.container.approved_id.is_none());
         // Older files without the new switch get the safe default.
         let s: Settings = serde_json::from_value(migrate(
             serde_json::json!({ "version": 2, "permissions": { "network": true } }),

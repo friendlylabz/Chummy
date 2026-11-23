@@ -68,7 +68,7 @@
   }
   /** Whether this block offers the tool, and why (or why not). */
   function verdict(t: { enabled: boolean; name: string }): { on: boolean; text: string } {
-    if (!settings.current.permissions.tools) return { on: false, text: "tools off in Permissions" };
+    if (!settings.current.permissions.tools) return { on: false, text: "tools off in Security and Privacy" };
     if (!t.enabled) return { on: false, text: "off in Settings → Tools" };
     const s = switchFor(toolSwitches(), t.name);
     if (s === "off") return { on: false, text: "off here" };

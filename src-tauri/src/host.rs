@@ -8,7 +8,7 @@ use chummy_llm::ProviderConfig;
 use chummy_runner::{AgentGrant, AgentHost, AgentSetup, Permissions, Services, ToolGrant};
 use chummy_sandbox::Jail;
 use chummy_scheduler::Origin;
-use chummy_tools::ToolHost;
+use chummy_tools::{SandboxBackend, ToolPaths};
 use tauri::{AppHandle, Manager};
 
 use crate::commands::local::start_engine_for;
@@ -24,8 +24,12 @@ impl Services for AppServices {
         self.app.state::<AppState>().secrets.get(key).ok().flatten()
     }
 
-    async fn tool_host(&self) -> Result<Arc<ToolHost>, String> {
-        self.app.state::<AppState>().tool_host().await
+    async fn sandbox(&self) -> Result<Arc<dyn SandboxBackend>, String> {
+        self.app.state::<AppState>().sandbox().await
+    }
+
+    fn tool_paths(&self) -> ToolPaths {
+        self.app.state::<AppState>().tool_paths.clone()
     }
 
     async fn local_engine(&self, p: &ProviderConfig) -> Result<(String, String), String> {
@@ -83,6 +87,7 @@ pub fn agent_host(
         } else {
             vec![]
         },
+        sandbox: Some(state.sandbox_health(&s.sandbox)),
         jail,
         asks: origin.map(|o| (state.asks.clone(), o)),
         time_zone: iana_time_zone::get_timezone().ok(),

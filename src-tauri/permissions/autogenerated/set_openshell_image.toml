@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-openshell-image"
+description = "Enables the set_openshell_image command without any pre-configured scope."
+commands.allow = ["set_openshell_image"]
+
+[[permission]]
+identifier = "deny-set-openshell-image"
+description = "Denies the set_openshell_image command without any pre-configured scope."
+commands.deny = ["set_openshell_image"]

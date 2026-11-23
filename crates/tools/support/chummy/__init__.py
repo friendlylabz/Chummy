@@ -1,8 +1,8 @@
 """Helpers for Chummy tools.
 
 A Chummy tool is one Python file with one function marked ``@chummy.tool``.
-It runs inside a WebAssembly sandbox: it can see the agent's workspace (as
-the current folder) and nothing else on the computer, and it can reach the
+It runs inside a sandbox (WebAssembly by default, or a container): it can see
+the agent's workspace (as the current folder) and nothing else on the computer, and it can reach the
 internet only through ``chummy.http``, and only if the user allowed it.
 
     import chummy
@@ -25,7 +25,8 @@ import sys as _sys
 __all__ = ["tool", "ToolError", "workspace_path", "http", "Response", "WORKSPACE"]
 
 #: Where the agent's workspace is mounted. It is also the current folder.
-WORKSPACE = "/workspace"
+#: (Usually /workspace; a sandbox that copies the workspace in says where.)
+WORKSPACE = (_os.environ.get("CHUMMY_WORKSPACE") or "/workspace").rstrip("/") or "/workspace"
 
 _registered = []
 

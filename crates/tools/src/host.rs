@@ -40,9 +40,9 @@ use crate::python::{ToolPaths, python_status, write_support};
 /// Memory a tool may use.
 const MEMORY_LIMIT: usize = 512 * 1024 * 1024;
 /// Most bytes a tool may write to stdout (protocol) in one call.
-const STDOUT_LIMIT: usize = 16 * 1024 * 1024;
+pub(crate) const STDOUT_LIMIT: usize = 16 * 1024 * 1024;
 /// Most bytes of log (stderr) kept per call.
-const LOG_LIMIT: usize = 64 * 1024;
+pub(crate) const LOG_LIMIT: usize = 64 * 1024;
 /// Largest result accepted from a tool.
 pub const RESULT_LIMIT: usize = 1024 * 1024;
 const TICK: Duration = Duration::from_millis(50);
@@ -136,12 +136,7 @@ impl ToolHost {
             })
             .map_err(ToolError::io("starting the tool clock"))?;
 
-        let web = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(Duration::from_secs(15))
-            .user_agent(concat!("Chummy/", env!("CARGO_PKG_VERSION"), " (tool)"))
-            .build()
-            .map_err(|e| ToolError::Runtime(e.to_string()))?;
+        let web = web_client()?;
         Ok(Self {
             engine,
             pre,
@@ -161,10 +156,7 @@ impl ToolHost {
 
     /// Runs one call in a fresh sandbox.
     pub async fn call(&self, spec: CallSpec<'_>) -> Result<CallOutcome, ToolError> {
-        let request = match &spec.mode {
-            Mode::Describe => json!({ "mode": "describe" }),
-            Mode::Call(args) => json!({ "mode": "call", "args": args }),
-        };
+        let request = request_json(&spec.mode);
 
         let (to_guest, guest_in) = mpsc::unbounded_channel::<Vec<u8>>();
         let (guest_out, mut from_guest) = mpsc::unbounded_channel::<Vec<u8>>();
@@ -221,29 +213,11 @@ impl ToolHost {
                     let Ok(msg) = serde_json::from_slice::<Json>(&line) else {
                         continue;
                     };
-                    match msg.get("op").and_then(|o| o.as_str()) {
-                        Some("done") => done = Some(msg),
-                        Some("http") => {
-                            let id = msg.get("id").cloned().unwrap_or(Json::Null);
-                            let reply = match http_request(&http, &policy, &msg).await {
-                                Ok(mut r) => {
-                                    r["ok"] = json!(true);
-                                    r["id"] = id;
-                                    r
-                                }
-                                Err(e) => json!({ "id": id, "ok": false, "error": e }),
-                            };
-                            let _ = to_guest.send((reply.to_string() + "\n").into_bytes());
-                        }
-                        _ => {
-                            let id = msg.get("id").cloned().unwrap_or(Json::Null);
-                            let _ = to_guest.send(
-                                (json!({ "id": id, "ok": false, "error": "unknown request" })
-                                    .to_string()
-                                    + "\n")
-                                    .into_bytes(),
-                            );
-                        }
+                    if msg.get("op").and_then(|o| o.as_str()) == Some("done") {
+                        done = Some(msg);
+                    } else {
+                        let reply = answer(&http, &policy, &msg).await;
+                        let _ = to_guest.send((reply.to_string() + "\n").into_bytes());
                     }
                 }
             }
@@ -280,26 +254,7 @@ impl ToolHost {
                 }
             }
         }
-        let done =
-            done.ok_or_else(|| ToolError::Crashed("the tool didn't report a result".into()))?;
-        let result = if done.get("ok").and_then(|v| v.as_bool()) == Some(true) {
-            let r = done.get("result").cloned().unwrap_or(Json::Null);
-            if r.to_string().len() > RESULT_LIMIT {
-                return Err(ToolError::Crashed("the tool's result is too large".into()));
-            }
-            Ok(r)
-        } else {
-            Err((
-                done.get("kind")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("error")
-                    .to_string(),
-                done.get("error")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("The tool failed.")
-                    .to_string(),
-            ))
-        };
+        let result = parse_done(done)?;
         Ok(CallOutcome { result, log })
     }
 
@@ -307,6 +262,65 @@ impl ToolHost {
     pub fn tool_dir(&self, name: &str) -> PathBuf {
         self.paths.tool_dir(name)
     }
+}
+
+/// The first line a tool reads: what to do.
+pub(crate) fn request_json(mode: &Mode) -> Json {
+    match mode {
+        Mode::Describe => json!({ "mode": "describe" }),
+        Mode::Call(args) => json!({ "mode": "call", "args": args }),
+    }
+}
+
+/// Answers one request a running tool sent (anything but `done`): web
+/// requests go through `policy`; anything else is refused.
+pub(crate) async fn answer(http: &reqwest::Client, policy: &NetPolicy, msg: &Json) -> Json {
+    let id = msg.get("id").cloned().unwrap_or(Json::Null);
+    match msg.get("op").and_then(|o| o.as_str()) {
+        Some("http") => match http_request(http, policy, msg).await {
+            Ok(mut r) => {
+                r["ok"] = json!(true);
+                r["id"] = id;
+                r
+            }
+            Err(e) => json!({ "id": id, "ok": false, "error": e }),
+        },
+        _ => json!({ "id": id, "ok": false, "error": "unknown request" }),
+    }
+}
+
+/// Reads the tool's final `done` message.
+pub(crate) fn parse_done(done: Option<Json>) -> Result<Result<Json, (String, String)>, ToolError> {
+    let done = done.ok_or_else(|| ToolError::Crashed("the tool didn't report a result".into()))?;
+    Ok(if done.get("ok").and_then(|v| v.as_bool()) == Some(true) {
+        let r = done.get("result").cloned().unwrap_or(Json::Null);
+        if r.to_string().len() > RESULT_LIMIT {
+            return Err(ToolError::Crashed("the tool's result is too large".into()));
+        }
+        Ok(r)
+    } else {
+        Err((
+            done.get("kind")
+                .and_then(|v| v.as_str())
+                .unwrap_or("error")
+                .to_string(),
+            done.get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("The tool failed.")
+                .to_string(),
+        ))
+    })
+}
+
+/// The client for tools' web requests: it never follows redirects by
+/// itself, so every hop is checked (see [`crate::net`]).
+pub(crate) fn web_client() -> Result<reqwest::Client, ToolError> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(15))
+        .user_agent(concat!("Chummy/", env!("CARGO_PKG_VERSION"), " (tool)"))
+        .build()
+        .map_err(|e| ToolError::Runtime(e.to_string()))
 }
 
 fn short_trap(e: &wasmtime::Error) -> String {

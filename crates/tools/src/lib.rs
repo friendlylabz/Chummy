@@ -11,8 +11,11 @@
 //!   pure-Python wheels with SHA-256 hashes, then unpacked by Chummy itself.
 //! - **Runtime** ([`python`]): the official CPython WASI build, downloaded
 //!   once and checksum-verified.
-//! - **Sandbox** ([`host`]): Wasmtime. A tool sees the agent's workspace and
-//!   its own read-only files, nothing else. It has no network of its own;
+//! - **Sandbox** ([`sandbox`]): where calls run, chosen once for the app.
+//!   Native ([`host`], the default) is Wasmtime; Container runs a hardened
+//!   Docker or Podman container; OpenShell runs an NVIDIA OpenShell
+//!   sandbox. In each a tool sees the agent's workspace and its own
+//!   read-only files, nothing else. It has no network of its own;
 //!   `chummy.http` goes through the app ([`net`]), which allows it only when
 //!   the tool's internet access is on, and never to the local network.
 //!
@@ -24,6 +27,7 @@ pub mod lock;
 pub mod meta;
 pub mod net;
 pub mod python;
+pub mod sandbox;
 
 use std::path::Path;
 use std::time::Duration;
@@ -37,6 +41,9 @@ pub use meta::{ToolMeta, parse_meta};
 pub use net::NetPolicy;
 pub use python::{
     PYTHON_DOWNLOAD_BYTES, PYTHON_VERSION, PythonInfo, ToolPaths, install_python, python_status,
+};
+pub use sandbox::{
+    Health, SandboxBackend, SandboxCall, SandboxKind, SandboxSettings, run_tool, unusable,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -104,22 +111,27 @@ impl ToolHost {
                 env,
             })
             .await?;
-        Ok(match out.result {
-            Ok(serde_json::Value::String(s)) => ToolResult {
-                text: s,
-                is_error: false,
-                log: out.log,
-            },
-            Ok(v) => ToolResult {
-                text: serde_json::to_string_pretty(&v).unwrap_or_default(),
-                is_error: false,
-                log: out.log,
-            },
-            Err((_, msg)) => ToolResult {
-                text: format!("Error: {msg}"),
-                is_error: true,
-                log: out.log,
-            },
-        })
+        Ok(to_result(out))
+    }
+}
+
+/// Turns a call's outcome into what the model sees.
+pub(crate) fn to_result(out: CallOutcome) -> ToolResult {
+    match out.result {
+        Ok(serde_json::Value::String(s)) => ToolResult {
+            text: s,
+            is_error: false,
+            log: out.log,
+        },
+        Ok(v) => ToolResult {
+            text: serde_json::to_string_pretty(&v).unwrap_or_default(),
+            is_error: false,
+            log: out.log,
+        },
+        Err((_, msg)) => ToolResult {
+            text: format!("Error: {msg}"),
+            is_error: true,
+            log: out.log,
+        },
     }
 }

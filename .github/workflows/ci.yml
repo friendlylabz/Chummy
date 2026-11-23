@@ -81,5 +81,11 @@ jobs:
             https://github.com/brettcannon/cpython-wasi-build/releases/download/v3.14.7/python-3.14.7-wasi_sdk-24.zip
           echo "CHUMMY_TEST_PYTHON_ZIP=$RUNNER_TEMP/python-wasi.zip" >> "$GITHUB_ENV"
           echo "CHUMMY_TEST_PYPI=1" >> "$GITHUB_ENV"
+      # The Container sandbox test runs real tools in real Docker containers.
+      - name: Docker image for the container sandbox test
+        if: runner.os == 'Linux'
+        run: |
+          docker pull python:3.14-slim
+          echo "CHUMMY_TEST_DOCKER_IMAGE=python:3.14-slim" >> "$GITHUB_ENV"
       - name: Test
         run: cargo test --workspace --locked
