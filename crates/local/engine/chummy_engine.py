@@ -339,10 +339,10 @@ class FakeBackend:
         elif "tried 5 times" in low:
             text = "Every try was judged incomplete, so it needs more to go on."
         elif "still has unchecked steps" in low:
-            # Chummy assistant 2 sends the model back to finish its to-do list.
+            # The Chummy assistant sends the model back to finish its to-do list.
             text = "- [x] Find the date\n- [x] Tell you\n\nAll done: the date is in the tool's result above."
         elif "current_time" in names and "step by step" in low:
-            # Chummy assistant 2: a to-do list and a tool call in one answer.
+            # The Chummy assistant: a to-do list and a tool call in one answer.
             text = "I'll make a list and look up the date.\n\n- [ ] Find the date\n- [ ] Tell you\n" + call(
                 "current_time", {})
         elif "current_time" in names and ("date" in low or "time" in low):

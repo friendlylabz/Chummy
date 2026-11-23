@@ -130,7 +130,7 @@ class SplitterTests(unittest.TestCase):
         self.assertEqual(say("One step of it: Find the date\nCould you do this step in one go"), "ONE GO")
         self.assertTrue(say("One step of it: Write a short summary\nOne go?").startswith("BREAK DOWN"))
 
-    def test_fake_backend_plays_assistant_2(self):
+    def test_fake_backend_plays_the_agent_loop_assistant(self):
         tools = [{"type": "function", "function": {"name": "current_time", "parameters": {}}}]
         def say(prompt):
             gen = ce.FakeBackend(ce.PARSERS["hermes"]).generate(

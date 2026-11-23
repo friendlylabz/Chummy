@@ -46,8 +46,8 @@
       <div class="text">
         <h2>Add a loop</h2>
         <p>
-          How an agent thinks. The recommended <b>Chummy assistant</b> plans, checks its work, asks you when it's unsure,
-          and keeps notes. Or build your own in the loop editor.
+          How an agent thinks. The recommended <b>Chummy assistant</b> works with tools until the job is done, tells
+          you what it's doing and keeps its own to-do list. Or build your own in the loop editor.
         </p>
         {#if error}<p class="err">{error}</p>{/if}
       </div>

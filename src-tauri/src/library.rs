@@ -36,6 +36,9 @@ pub fn valid_id(id: &str) -> bool {
 const RETIRED: &[&str] = &[
     // Chummy assistant, format 3, before "one go, or plan fully first" (Nov 2026).
     "824d111054b29bc81b7a6d16b6d33e77050c8cac08f12df830ade4a77d54a8f2",
+    // Chummy assistant "one go, or plan fully first" (pass 10), replaced by the
+    // one agent loop (pass 11, Nov 2026).
+    "5feeeda2a0c5fd2c5e899f8544000e0ff224be2900b59c43007bd012a76edd63",
 ];
 
 /// A loop's content as a SHA-256 hex string.

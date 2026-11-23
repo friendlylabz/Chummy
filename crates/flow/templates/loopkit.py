@@ -1,4 +1,4 @@
-"""Small helpers shared by the template generators (make_templates.py, assistant2.py)."""
+"""Small helpers shared by the template generators (make_templates.py, assistant.py)."""
 
 
 def b(id, type, label, x, y, params=None, comment=""):

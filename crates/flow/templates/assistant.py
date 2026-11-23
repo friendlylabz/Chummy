@@ -1,7 +1,8 @@
-"""Chummy assistant 2: one agent loop, modelled on the basic behaviour of a
-coding agent's core loop (Claude Code's query loop), written as Chummy blocks.
+"""The Chummy assistant (the default loop): one agent loop, modelled on the
+basic behaviour of a coding agent's core loop (Claude Code's query loop),
+written as Chummy blocks.
 
-Imported by make_templates.py, which writes assistant2.chummy.json.
+Imported by make_templates.py, which writes assistant.chummy.json.
 
 The shape (root loop):
 
@@ -40,13 +41,11 @@ plays the part of its stop checks and to-do reminders): if the model stops
 while its to-do list still has unchecked steps, or with an empty answer, it is
 told to carry on (twice at most). An answer that ends with a question is never
 pushed.
-
-Constants are prefixed A2_ so they can't collide with make_templates.py's.
 """
 
 from loopkit import b, l, note, fn
 
-A2_SYSTEM = (
+SYSTEM = (
     "You are Chummy, a helpful assistant. You work in the user's folder using the tools you have, and you keep "
     "going until the user's request is done.\n\n"
     "# How you work\n"
@@ -76,18 +75,18 @@ A2_SYSTEM = (
     "# The user's instructions for this folder (CHUMMY.md)\n{{instructions}}\n\n"
     "# Conversation before this request\n{{conversation}}"
 )
-A2_SUMMARIZE = (
+SUMMARIZE = (
     "Here is your work on the user's request so far:\n\n_INPUT1_\n\n"
     "It's getting long, so write a summary to carry on from. Include what the user asked for, what you've done, "
     "the key facts you found (file names, values, errors, decisions) and what's left to do, with your to-do list "
     "if you have one. Write only the summary, at most 25 short lines."
 )
-A2_RESUME = (
+RESUME = (
     "The user's request:\n{{request}}\n\n"
     "Your work on it so far, summarised to save room:\n_INPUT1_\n\n"
     "Carry on from where you left off."
 )
-A2_OPEN_NUDGE = (
+OPEN_NUDGE = (
     "The user's request:\n{{request}}\n\n"
     "Your latest work on it:\n{{progress}}\n\n"
     "You then said:\n_INPUT1_\n\n"
@@ -95,34 +94,34 @@ A2_OPEN_NUDGE = (
     "If there's more to do, carry on with the next unchecked step now. If every step is actually done or isn't "
     "needed, write the list again with each step checked, then your final answer."
 )
-A2_EMPTY_NUDGE = (
+EMPTY_NUDGE = (
     "The user's request:\n{{request}}\n\n"
     "Your latest work on it:\n{{progress}}\n\n"
     "Your last reply was empty. If the work is done, give your final answer now. If not, carry on."
 )
-A2_COMPACTED = "_(The work so far got long, so I summarised it to make room.)_"
+COMPACTED = "_(The work so far got long, so I summarised it to make room.)_"
 
 # A to-do line: "- [ ] step" or "- [x] step" (also * or +, any indent).
-A2_TODO_LINE = r"(?m)^[ \t]*[-*+] \[[ xX]\] .*\S.*$"
+TODO_LINE = r"(?m)^[ \t]*[-*+] \[[ xX]\] .*\S.*$"
 # An unchecked to-do line.
-A2_OPEN = r"(?m)^[ \t]*[-*+] \[ \]"
-A2_HAS_TEXT = r"\S"
-A2_ANY = r"(?s)."
+OPEN = r"(?m)^[ \t]*[-*+] \[ \]"
+HAS_TEXT = r"\S"
+ANY = r"(?s)."
 # An answer that ends with a question waits for you.
-A2_QUESTION = r"\?[\s*_)\"'”»]*$"
+QUESTION = r"\?[\s*_)\"'”»]*$"
 # Two nudges given already.
-A2_SPENT = r"x{2}"
+SPENT = r"x{2}"
 # The first 60 lines (the folder listing shown to the model).
-A2_HEAD = r"\A(?:[^\n]*(?:\n|\z)){1,60}"
+HEAD = r"\A(?:[^\n]*(?:\n|\z)){1,60}"
 # "Too long": the transcript is cut into ~2,000-character chunks joined with a marker; 10 markers means 11 or
 # more chunks, about 20,000+ characters (~5,000 tokens). Regular expressions can't count characters that far
 # directly, so the chunks do the counting. Change the chunk size or the {10} to make room sooner or later.
-A2_MARK = "\n⟦chunk⟧\n"
-A2_BIG = r"(?s)(?:⟦chunk⟧.*?){10}"
-A2_CHUNK = 2000
+MARK = "\n⟦chunk⟧\n"
+BIG = r"(?s)(?:⟦chunk⟧.*?){10}"
+CHUNK = 2000
 
 
-def a2_keep_todos_fn():
+def keep_todos_fn():
     return fn(
         "keep_todos", "Keep the to-do list",
         "Finds checklist lines (- [ ] / - [x]) in the model's text and, if there are any, saves them as "
@@ -131,9 +130,9 @@ def a2_keep_todos_fn():
         [("after", "After", "text", "out")],
         [
             b("text", "forward", "Text", 0, 0),
-            b("find", "regex", "Checklist lines", 260, 0, {"pattern": A2_TODO_LINE}),
+            b("find", "regex", "Checklist lines", 260, 0, {"pattern": TODO_LINE}),
             b("join", "join", "As one list", 520, 0, {"separator": "\n"}),
-            b("any", "branch", "Any?", 780, 0, {"pattern": A2_HAS_TEXT},
+            b("any", "branch", "Any?", 780, 0, {"pattern": HAS_TEXT},
               "No checklist in this text: keep the old list."),
             b("save", "store", "Save the to-do list", 1040, 0, {"key": "todos", "max_chars": 3000},
               "Read anywhere as {{todos}}."),
@@ -148,7 +147,7 @@ def a2_keep_todos_fn():
     )
 
 
-def a2_get_ready_fn():
+def get_ready_fn():
     return fn(
         "get_ready", "Get ready",
         "Before the first model call: remembers the request and the conversation, reads CHUMMY.md (the user's "
@@ -173,9 +172,9 @@ def a2_get_ready_fn():
             b("top", "combine", "Top of the folder", 260, 300, {"inputs": 1, "format": "."}),
             b("ls", "list_files", "List the folder", 520, 300),
             b("lines", "join", "One per line", 780, 300, {"separator": "\n"}),
-            b("head", "regex", "First 60", 1040, 300, {"pattern": A2_HEAD}),
+            b("head", "regex", "First 60", 1040, 300, {"pattern": HEAD}),
             b("head_text", "join", "As text", 1300, 300, {"separator": ""}),
-            b("not_empty", "branch", "Anything?", 1560, 300, {"pattern": A2_HAS_TEXT}),
+            b("not_empty", "branch", "Anything?", 1560, 300, {"pattern": HAS_TEXT}),
             b("empty", "combine", "Empty folder", 1820, 420, {"inputs": 1, "format": "(empty)"}),
             b("no_list", "combine", "Couldn't list", 780, 450, {
                 "inputs": 1, "format": "(couldn't list it: _INPUT1_)"}),
@@ -207,7 +206,7 @@ def a2_get_ready_fn():
     )
 
 
-def a2_show_fn():
+def show_fn():
     return fn(
         "show", "Show what it says",
         "When the model calls tools, whatever it wrote alongside the calls (\"I'll read the file first.\") is "
@@ -218,7 +217,7 @@ def a2_show_fn():
             b("ex", "forward", "Tool call", 0, 0),
             b("read", "read_exchange", "What it said", 260, 0, {"role": "assistant"},
               "Newest message: empty when the model only called tools, so older text is never shown twice."),
-            b("said", "branch", "Said anything?", 520, 0, {"pattern": A2_HAS_TEXT}),
+            b("said", "branch", "Said anything?", 520, 0, {"pattern": HAS_TEXT}),
             b("reply", "output", "Show it", 780, -100),
             b("todos", "function", "Keep the to-do list", 780, 100, {"function": "keep_todos"}),
         ],
@@ -230,7 +229,7 @@ def a2_show_fn():
     )
 
 
-def a2_make_room_fn():
+def make_room_fn():
     return fn(
         "make_room", "Make room",
         "After each round of tool results: saves the latest work as {{progress}}, and if the conversation has "
@@ -243,18 +242,18 @@ def a2_make_room_fn():
             b("read", "read_exchange", "The work so far", 260, 0, {"role": "any"}),
             b("save", "store", "Save the progress", 520, -200, {"key": "progress", "max_chars": 8000},
               "{{progress}} keeps the newest 8,000 characters."),
-            b("chunks", "split", "Cut into chunks", 520, 0, {"chunk_size": A2_CHUNK, "overlap": 0}),
-            b("marked", "join", "Mark the cuts", 780, 0, {"separator": A2_MARK}),
-            b("big", "branch", "Too long?", 1040, -100, {"pattern": A2_BIG},
+            b("chunks", "split", "Cut into chunks", 520, 0, {"chunk_size": CHUNK, "overlap": 0}),
+            b("marked", "join", "Mark the cuts", 780, 0, {"separator": MARK}),
+            b("big", "branch", "Too long?", 1040, -100, {"pattern": BIG},
               "11 or more chunks: about 20,000+ characters."),
-            b("small", "branch", "Short enough", 1040, 150, {"pattern": A2_BIG}),
-            b("ask", "combine", "Ask for a summary", 1300, -100, {"inputs": 1, "format": A2_SUMMARIZE}),
+            b("small", "branch", "Short enough", 1040, 150, {"pattern": BIG}),
+            b("ask", "combine", "Ask for a summary", 1300, -100, {"inputs": 1, "format": SUMMARIZE}),
             b("summ", "llm", "Summarise the work", 1560, -100, {"temperature": 0.2}),
-            b("resume", "combine", "Carry on from it", 1820, -100, {"inputs": 1, "format": A2_RESUME}),
+            b("resume", "combine", "Carry on from it", 1820, -100, {"inputs": 1, "format": RESUME}),
             b("restart", "exchange", "Fresh exchange", 2080, -100, {"roles": ["user"]}),
-            b("say", "combine", "Tell you", 1820, -300, {"inputs": 1, "format": A2_COMPACTED}),
+            b("say", "combine", "Tell you", 1820, -300, {"inputs": 1, "format": COMPACTED}),
             b("show", "output", "Show that", 2080, -300),
-            b("keep", "branch", "If that fails", 1820, 150, {"pattern": A2_ANY},
+            b("keep", "branch", "If that fails", 1820, 150, {"pattern": ANY},
               "Carry on with the long conversation."),
             b("out", "forward", "Exchange", 2340, 0),
         ],
@@ -277,7 +276,7 @@ def a2_make_room_fn():
     )
 
 
-def a2_done_fn():
+def done_fn():
     return fn(
         "done_check", "Done?",
         "When the model answers without tool calls. Keeps any checklist in the answer, then decides: an answer "
@@ -290,16 +289,16 @@ def a2_done_fn():
             b("ans", "forward", "Answer", 0, 0),
             b("todos_fn", "function", "Keep the to-do list", 260, 0, {"function": "keep_todos"}),
             b("nudged", "recall", "Times sent back", 520, -200, {"key": "nudged"}),
-            b("spent", "branch", "Sent back twice?", 780, 0, {"pattern": A2_SPENT},
+            b("spent", "branch", "Sent back twice?", 780, 0, {"pattern": SPENT},
               "Twice already: take this answer."),
-            b("question", "branch", "Asks you?", 1040, 0, {"pattern": A2_QUESTION},
+            b("question", "branch", "Asks you?", 1040, 0, {"pattern": QUESTION},
               "Ends with a question: the turn ends and your reply carries on."),
-            b("empty", "branch", "Any answer?", 1300, 0, {"pattern": A2_HAS_TEXT}),
+            b("empty", "branch", "Any answer?", 1300, 0, {"pattern": HAS_TEXT}),
             b("todos", "recall", "The to-do list", 1560, -200, {"key": "todos"}),
-            b("open", "branch", "Unchecked steps?", 1820, 0, {"pattern": A2_OPEN}),
-            b("open_msg", "combine", "Carry on with the list", 2080, 150, {"inputs": 1, "format": A2_OPEN_NUDGE}),
+            b("open", "branch", "Unchecked steps?", 1820, 0, {"pattern": OPEN}),
+            b("open_msg", "combine", "Carry on with the list", 2080, 150, {"inputs": 1, "format": OPEN_NUDGE}),
             b("show", "output", "Show what it said", 2080, -250, {}, "You still see what the model said."),
-            b("empty_msg", "combine", "Carry on after nothing", 1560, 300, {"inputs": 1, "format": A2_EMPTY_NUDGE}),
+            b("empty_msg", "combine", "Carry on after nothing", 1560, 300, {"inputs": 1, "format": EMPTY_NUDGE}),
             b("again", "forward", "Carry on", 2340, 250),
             b("count", "combine", "Count it", 2600, 400, {"inputs": 1, "format": "{{nudged}}x"}),
             b("save_count", "store", "Remember the count", 2860, 400, {"key": "nudged", "max_chars": 100}),
@@ -327,7 +326,7 @@ def a2_done_fn():
     )
 
 
-def a2_agent_fn():
+def agent_fn():
     return fn(
         "agent", "Agent loop",
         "The core loop: the model is called with the conversation so far; if it calls tools, what it said is "
@@ -339,7 +338,7 @@ def a2_agent_fn():
             b("req", "forward", "Request", 0, 0),
             b("start", "exchange", "Start the exchange", 260, 0, {"roles": ["user"]},
               "Just your message: the instructions are the work block's system message."),
-            b("work", "llm", "Work", 560, 0, {"system": A2_SYSTEM, "retries": 3, "on_limit": "ask"},
+            b("work", "llm", "Work", 560, 0, {"system": SYSTEM, "retries": 3, "on_limit": "ask"},
               "Uses the tools this agent allows. The system message (with {{todos}}) is filled in fresh at "
               "every call."),
             b("show", "function", "Show what it says", 860, 250, {"function": "show"}),
@@ -367,7 +366,7 @@ def a2_agent_fn():
     )
 
 
-def assistant2():
+def assistant():
     blocks = [
         b("message", "input", "Your message", 0, 0),
         b("history", "history", "Recent conversation", 0, 200, {"max_messages": 20}),
@@ -389,9 +388,10 @@ def assistant2():
         l("why", "out", "show_why", "in"), l("why", "out", "stop", "in"),
     ]
     return {
-        "format": "chummy.loop", "version": 3, "name": "Chummy assistant 2",
+        "format": "chummy.loop", "version": 3, "name": "Chummy assistant",
         "description": (
-            "One agent loop, like a coding agent's core loop: the model works with tools, call after call, until it "
+            "The default loop. One agent loop, like a coding agent's: the model works with tools, call after call, "
+            "until it "
             "answers without one. It says what it's doing as it goes, plans with its own to-do list when the work "
             "has several steps, reads CHUMMY.md from the folder for your instructions, and summarises the "
             "conversation when it gets long. If it stops with steps unchecked, it's sent back to finish (twice "
@@ -399,11 +399,11 @@ def assistant2():
         ),
         "limits": {"max_steps": 10000, "max_llm_calls": 200, "max_tool_calls": 150},
         "blocks": blocks, "links": links,
-        "functions": [a2_keep_todos_fn(), a2_get_ready_fn(), a2_show_fn(), a2_make_room_fn(), a2_done_fn(),
-                      a2_agent_fn()],
+        "functions": [keep_todos_fn(), get_ready_fn(), show_fn(), make_room_fn(), done_fn(),
+                      agent_fn()],
         "notes": [
             note("n1", 0, 450,
-                 "Chummy assistant 2\n\n"
+                 "Chummy assistant\n\n"
                  "1. Get ready: your request, the conversation, CHUMMY.md (your instructions for this folder) "
                  "and the folder's top level.\n"
                  "2. Agent loop: one model does the work. Each answer with tool calls: what it says is shown, the "

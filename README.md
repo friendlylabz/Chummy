@@ -13,13 +13,13 @@ until you say so.
 > jail, settings, model connections (including a basic built-in engine), the
 > loop engine and editor, agents and chat, sandboxed Python tools, exchanges,
 > block functions, the scheduler with tray mode and questions for you, and
-> the default **Chummy assistant** loop with tool modes, working notes,
+> the default **Chummy assistant** loop (one agent loop with its own to-do list) with tool modes,
 > failure outputs, daily token limits and per-agent settings, and logs of
 > every run (each block's inputs and outputs) plus a system log, viewable in
 > the app and under each chat message. Next: chummyd,
 > an optional background service ([plan](docs/chummyd-plan.md)).
 
-![The 5 step recursive plan answering in chat, using tools](docs/screenshot-plan-chat.png)
+![The Chummy assistant at work in chat: what it's doing, its to-do list, a tool call and the result](docs/screenshot-assistant-chat.png)
 
 ## What works today
 
@@ -99,32 +99,16 @@ until you say so.
 - **Block functions.** Select some blocks and choose **Make function**: they
   become one block whose ports are exactly the inputs and outputs you left
   open. Double-click to edit inside. Functions are saved in the loop file.
-- **Chummy assistant (the default).** Asks you one question if your request
-  is unclear. If the model can do it in one go, it does, and checks the
-  result. Otherwise it makes **the whole plan first**, doing nothing yet: up
-  to 10 specific steps, checked for being concrete, with any step too big for
-  one go planned again (depth first, two levels at most). Then it does the
-  steps in order, each with up to 5 checked tries; the model checks every
-  tool call before it runs and keeps working notes as it goes. The plan is
-  shown nested with ticks (a **Plan outline** block keeps it, and the model
-  sees it as `{{plan}}`). If a step fails all its tries, the model explains
-  why and the run stops. Onboarding offers it with one click, and a first
-  agent gets it automatically.
-- **Chummy assistant 2 (a candidate default).** One agent loop, like a
-  coding agent's: the model works with tools, call after call, until it
-  answers without one. It says what it's doing as it goes, keeps its own
-  to-do list (a checklist it rewrites as it works) for bigger jobs, reads
-  `CHUMMY.md` from the agent's folder for your instructions, and summarises
-  the conversation when it gets long. If it stops with steps unchecked or
-  with an empty answer, it's sent back to finish (twice at most).
-- **Templates.** Chummy assistant, Chummy assistant 2, Blank, Simple chat, Draft and self-check, **5 step
-  recursive plan** and **5 step recursive plan verify**. The planner tries
-  your goal straight away (by writing or with tools); anything too big is
-  broken into 5 or fewer steps, and each step is tried the same way,
-  breadth-first, with every result and plan shown as it goes. The verify
-  version also has the model write a yes/no check question for each result
-  and plan and answer it, breaking down results that fail and re-planning
-  plans that fail.
+- **Chummy assistant (the default).** One agent loop, like a coding
+  agent's: the model works with tools, call after call, until it answers
+  without one. It says what it's doing as it goes, keeps its own to-do list
+  (a checklist it rewrites as it works) for bigger jobs, reads `CHUMMY.md`
+  from the agent's folder for your instructions, and summarises the
+  conversation when it gets long. If it stops with steps unchecked or with
+  an empty answer, it's sent back to finish (twice at most). Onboarding
+  offers it with one click, and a first agent gets it automatically.
+- **Templates.** Chummy assistant, Blank (a Message and a Reply block) and
+  Simple chat (one model call with the conversation as context).
 - **Scheduled jobs.** A job runs one of your agents with a message: at set
   times, every so often, once, or when files land in a folder of the
   agent's. It runs with exactly that agent's folder, model and permissions.
@@ -176,7 +160,7 @@ until you say so.
   Chummy's folder; none of them ship with the app. The engine is much slower
   than vLLM or llama.cpp, and the app says so.
 
-![The Chummy assistant in the loop editor, with comments, link labels and notes](docs/screenshot-assistant.png)
+![The Chummy assistant's agent loop open in the editor, with comments, link labels and notes](docs/screenshot-assistant.png)
 
 ![Agent Loop Configuration: a block's setting changed for one agent](docs/screenshot-agent-loop-config.png)
 
@@ -272,7 +256,7 @@ crates/          Pure Rust libraries, no Tauri dependency, tested on their own
     engine/      chummy_engine.py: the OpenAI-compatible transformers server
   store/         Chummy folder layout, atomic versioned JSON, keychain secrets
   flow/          Loop format, block catalog, validation, the loop engine, templates
-    templates/   Template loop files and their generators (make_templates.py, assistant2.py)
+    templates/   The Chummy assistant's loop file and its generator (make_templates.py, assistant.py)
   tools/         Python tools as WebAssembly: format, locks, installer, sandbox host
     builtin/     The built-in tools and their pylock files
     support/     The in-sandbox runner and the `chummy` helper module
