@@ -41,7 +41,7 @@ def probe(action: str, url: str = "") -> str:
     """Probe the sandbox.
 
     action: files, net, programs or sleep
-    url: for net
+    url: for net (for files: a host path that must not be visible)
     """
     if action == "files":
         with open("made.txt", "w") as f:
@@ -61,7 +61,7 @@ def probe(action: str, url: str = "") -> str:
         return "|".join([
             "ws=" + chummy.WORKSPACE,
             "cwd=" + os.getcwd(),
-            "host_home_visible=" + str(os.path.exists("/home/claude/chummy")),
+            "host_home_visible=" + str(os.path.exists(url)),
             "env_leak=" + str("CARGO_MANIFEST_DIR" in os.environ),
         ])
     if action == "net":
@@ -216,7 +216,7 @@ async fn container_runs_tools_locked_down() {
             &b,
             &tool,
             Some(&jail),
-            json!({"action": "files"}),
+            json!({"action": "files", "url": env!("CARGO_MANIFEST_DIR")}),
             NetPolicy::off("no"),
             30,
         )
@@ -290,7 +290,10 @@ async fn container_runs_tools_locked_down() {
             &b,
             &shell,
             Some(&jail),
-            json!({"command": "echo hi; cat keep.txt; ls /home 2>&1; exit 3"}),
+            json!({"command": format!(
+                "echo hi; cat keep.txt; echo; test -e '{}' && echo host-visible || echo host-hidden; exit 3",
+                env!("CARGO_MANIFEST_DIR")
+            )}),
             NetPolicy::off("no"),
             30,
         )
@@ -298,10 +301,7 @@ async fn container_runs_tools_locked_down() {
         .unwrap(),
     );
     assert!(out.starts_with("hi\nkept+changed"), "{out}");
-    assert!(
-        out.contains("/home': No such file"),
-        "the host isn't visible: {out}"
-    );
+    assert!(out.contains("host-hidden"), "the host isn't visible: {out}");
     assert!(out.ends_with("[exit code 3]"), "{out}");
 
     // A call that runs too long is stopped, and its container is gone.
@@ -412,7 +412,7 @@ async fn openshell_copies_the_workspace_in_and_out() {
         &b,
         &tool,
         Some(&jail),
-        json!({"action": "files"}),
+        json!({"action": "files", "url": env!("CARGO_MANIFEST_DIR")}),
         NetPolicy::off("no"),
         30,
     )
