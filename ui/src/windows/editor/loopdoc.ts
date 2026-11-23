@@ -377,6 +377,8 @@ export function summary(b: Block): string {
     }
     case "decline_calls":
       return "Answers each call: not run";
+    case "stop":
+      return "Ends the run as failed";
     default:
       return "";
   }
@@ -385,7 +387,7 @@ export function summary(b: Block): string {
 export function blankLoop(name = "New loop"): LoopFile {
   return {
     format: "chummy.loop",
-    version: 2,
+    version: 3,
     name,
     description: "",
     limits: { max_steps: 200, max_llm_calls: 20, max_tool_calls: 20 },

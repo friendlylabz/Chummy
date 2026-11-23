@@ -2,11 +2,11 @@
   "format": "chummy.loop",
   "version": 3,
   "name": "Chummy assistant",
-  "description": "The default loop. It asks you a question first if your request is unclear, then tries it straight away, with tools. Anything too big is broken into 5 or fewer steps, tried the same way. Every tool call is checked before it runs, every result and plan is checked, and the model keeps working notes as it goes. Failures are caught and reported instead of stopping the run.",
+  "description": "The default loop. It asks you a question first if your request is unclear. If the model can do it in one go, it does, with its result checked. Otherwise it makes the whole plan first (up to 10 specific steps, big steps planned again, two levels at most), then does the steps in order, each with up to 5 checked tries. Every tool call is checked before it runs, and the model keeps working notes. If a step fails all its tries, it says why and stops.",
   "limits": {
-    "max_steps": 2500,
-    "max_llm_calls": 150,
-    "max_tool_calls": 40
+    "max_steps": 10000,
+    "max_llm_calls": 400,
+    "max_tool_calls": 120
   },
   "blocks": [
     {
@@ -49,13 +49,39 @@
       "type": "function",
       "label": "Clarify the request",
       "position": {
-        "x": 600,
+        "x": 300,
         "y": 0
       },
       "params": {
         "function": "clarify"
       },
       "comment": "Asks you one question if the request is unclear."
+    },
+    {
+      "id": "goal",
+      "type": "store",
+      "label": "Remember the goal",
+      "position": {
+        "x": 600,
+        "y": -250
+      },
+      "params": {
+        "key": "goal",
+        "max_chars": 8000
+      }
+    },
+    {
+      "id": "conversation",
+      "type": "store",
+      "label": "Remember the conversation",
+      "position": {
+        "x": 300,
+        "y": -450
+      },
+      "params": {
+        "key": "conversation",
+        "max_chars": 6000
+      }
     },
     {
       "id": "blank_notes",
@@ -83,151 +109,515 @@
       }
     },
     {
-      "id": "goal_text",
-      "type": "combine",
-      "label": "Goal with context",
+      "id": "start_plan",
+      "type": "outline",
+      "label": "Start the plan outline",
       "position": {
-        "x": 900,
-        "y": -250
+        "x": 600,
+        "y": 250
+      },
+      "params": {
+        "action": "start"
+      },
+      "comment": "The goal is the root of {{plan}}."
+    },
+    {
+      "id": "ask_one_go",
+      "type": "combine",
+      "label": "Ask: one go?",
+      "position": {
+        "x": 600,
+        "y": 0
       },
       "params": {
         "inputs": 2,
-        "format": "Conversation so far:\n_INPUT1_\n\nGoal: _INPUT2_"
+        "format": "Recent conversation:\n_INPUT2_\n\nThe user's goal:\n_INPUT1_\n\nCould you do this whole goal in one go: one answer, using tools if needed, without first making a plan of several steps? Most everyday requests can be done in one go. Reply with only ONE GO or PLAN, then one short reason."
       }
     },
     {
-      "id": "start",
-      "type": "exchange",
-      "label": "Running exchange",
-      "position": {
-        "x": 1200,
-        "y": -250
-      },
-      "params": {
-        "system": "You are a careful assistant working toward the user's goal one task at a time. Keep every answer short and concrete.\n\nYour working notes:\n{{notes}}",
-        "roles": [
-          "user"
-        ]
-      },
-      "comment": "The system message includes {{notes}}, read fresh at every model call."
-    },
-    {
-      "id": "queue",
-      "type": "forward",
-      "label": "Tasks to do",
+      "id": "one_go_judge",
+      "type": "llm",
+      "label": "One go?",
       "position": {
         "x": 900,
-        "y": 100
+        "y": 0
       },
-      "params": {}
+      "params": {
+        "system": "Reply ONE GO or PLAN, then one short reason.",
+        "temperature": 0.0,
+        "tools": "off"
+      },
+      "comment": "A blank answer counts as one go."
     },
     {
-      "id": "pair",
-      "type": "augment",
-      "label": "Next task",
+      "id": "one_go",
+      "type": "branch",
+      "label": "One go",
       "position": {
         "x": 1200,
         "y": 0
       },
       "params": {
-        "role": "user",
-        "format": "Task: _INPUT_"
-      },
-      "comment": "Waits for the running exchange and the next task, so tasks go strictly in order."
+        "pattern": "(?i)^\\W*one\\s*-?\\s*go|^\\s*$"
+      }
     },
     {
-      "id": "attempt",
-      "type": "function",
-      "label": "Attempt the task",
+      "id": "judge_failed",
+      "type": "branch",
+      "label": "Judgement failed",
+      "position": {
+        "x": 1200,
+        "y": 200
+      },
+      "params": {
+        "pattern": "(?s)."
+      },
+      "comment": "If the model call fails, try it in one go."
+    },
+    {
+      "id": "go",
+      "type": "forward",
+      "label": "Do it in one go",
       "position": {
         "x": 1500,
         "y": 0
       },
+      "params": {}
+    },
+    {
+      "id": "brief1",
+      "type": "combine",
+      "label": "What to do",
+      "position": {
+        "x": 1800,
+        "y": 0
+      },
       "params": {
-        "function": "attempt"
+        "inputs": 1,
+        "format": "Your task now: _INPUT1_"
       }
     },
     {
-      "id": "show_result",
-      "type": "output",
-      "label": "Show result",
+      "id": "try1",
+      "type": "function",
+      "label": "Try 1 of 2",
       "position": {
-        "x": 1800,
-        "y": -250
+        "x": 2100,
+        "y": 0
+      },
+      "params": {
+        "function": "try_step"
+      }
+    },
+    {
+      "id": "brief2",
+      "type": "combine",
+      "label": "Add what went wrong",
+      "position": {
+        "x": 2400,
+        "y": 200
+      },
+      "params": {
+        "inputs": 2,
+        "format": "_INPUT1_\n\nTry 1 didn't pass: _INPUT2_\nFix that this time."
+      }
+    },
+    {
+      "id": "try2",
+      "type": "function",
+      "label": "Try 2 of 2",
+      "position": {
+        "x": 2700,
+        "y": 200
+      },
+      "params": {
+        "function": "try_step"
+      }
+    },
+    {
+      "id": "answer",
+      "type": "forward",
+      "label": "Answer",
+      "position": {
+        "x": 3000,
+        "y": -100
       },
       "params": {}
     },
     {
-      "id": "notes_result",
+      "id": "show_answer",
+      "type": "output",
+      "label": "Show the answer",
+      "position": {
+        "x": 3300,
+        "y": -100
+      },
+      "params": {}
+    },
+    {
+      "id": "answer_done",
+      "type": "branch",
+      "label": "Only on success",
+      "position": {
+        "x": 3000,
+        "y": -300
+      },
+      "params": {
+        "pattern": "(?s)."
+      }
+    },
+    {
+      "id": "mark_done",
+      "type": "outline",
+      "label": "Mark done",
+      "position": {
+        "x": 3300,
+        "y": -300
+      },
+      "params": {
+        "action": "mark",
+        "status": "done"
+      }
+    },
+    {
+      "id": "why_plan",
+      "type": "combine",
+      "label": "Why plan instead",
+      "position": {
+        "x": 3000,
+        "y": 400
+      },
+      "params": {
+        "inputs": 1,
+        "format": "I tried to do it in one go, but it didn't pass its check: _INPUT1_"
+      }
+    },
+    {
+      "id": "say_plan",
+      "type": "combine",
+      "label": "Tell you",
+      "position": {
+        "x": 3300,
+        "y": 400
+      },
+      "params": {
+        "inputs": 1,
+        "format": "↻ That didn't work in one go, so I'm making a plan first."
+      }
+    },
+    {
+      "id": "show_replan",
+      "type": "output",
+      "label": "Show that",
+      "position": {
+        "x": 3600,
+        "y": 400
+      },
+      "params": {}
+    },
+    {
+      "id": "notes_one_go",
       "type": "function",
       "label": "Update the notes",
       "position": {
-        "x": 1800,
-        "y": -450
+        "x": 3300,
+        "y": 600
       },
       "params": {
         "function": "update_notes"
       }
     },
     {
-      "id": "plan",
-      "type": "function",
-      "label": "Plan smaller steps",
+      "id": "goal_again",
+      "type": "branch",
+      "label": "Then plan",
       "position": {
-        "x": 1800,
-        "y": 200
+        "x": 3600,
+        "y": 600
       },
       "params": {
-        "function": "break_down"
+        "pattern": "(?s)."
+      }
+    },
+    {
+      "id": "to_plan",
+      "type": "forward",
+      "label": "Plan",
+      "position": {
+        "x": 1500,
+        "y": 900
+      },
+      "params": {}
+    },
+    {
+      "id": "full_plan",
+      "type": "function",
+      "label": "Make the full plan",
+      "position": {
+        "x": 1800,
+        "y": 900
+      },
+      "params": {
+        "function": "full_plan"
+      },
+      "comment": "Nothing is done while planning."
+    },
+    {
+      "id": "planned_steps",
+      "type": "recall",
+      "label": "Any steps?",
+      "position": {
+        "x": 2100,
+        "y": 900
+      },
+      "params": {
+        "key": "steps"
+      }
+    },
+    {
+      "id": "got_steps",
+      "type": "branch",
+      "label": "Got steps",
+      "position": {
+        "x": 2400,
+        "y": 900
+      },
+      "params": {
+        "pattern": "\\S"
+      }
+    },
+    {
+      "id": "plan_text",
+      "type": "combine",
+      "label": "The plan",
+      "position": {
+        "x": 2100,
+        "y": 750
+      },
+      "params": {
+        "inputs": 1,
+        "format": "**▾ Here's the plan:**\n{{plan}}"
       }
     },
     {
       "id": "show_plan",
       "type": "output",
-      "label": "Show plan",
+      "label": "Show the plan",
       "position": {
-        "x": 2100,
-        "y": 200
+        "x": 2400,
+        "y": 750
       },
       "params": {}
+    },
+    {
+      "id": "plan_what",
+      "type": "combine",
+      "label": "What happened",
+      "position": {
+        "x": 2100,
+        "y": 1050
+      },
+      "params": {
+        "inputs": 1,
+        "format": "Made this plan (nothing done yet):\n{{plan}}"
+      }
     },
     {
       "id": "notes_plan",
       "type": "function",
       "label": "Update the notes",
       "position": {
-        "x": 2100,
-        "y": 0
+        "x": 2400,
+        "y": 1050
       },
       "params": {
         "function": "update_notes"
+      },
+      "comment": "The notes are updated before any step starts."
+    },
+    {
+      "id": "steps",
+      "type": "recall",
+      "label": "The steps to do",
+      "position": {
+        "x": 2700,
+        "y": 1050
+      },
+      "params": {
+        "key": "steps"
       }
     },
     {
-      "id": "more",
-      "type": "for_each",
-      "label": "Up to 5 steps",
+      "id": "no_steps",
+      "type": "branch",
+      "label": "No steps",
       "position": {
-        "x": 2100,
-        "y": 400
+        "x": 2400,
+        "y": 1250
       },
       "params": {
-        "limit": 5
+        "pattern": "^\\s*$"
       },
-      "comment": "New steps join the back of the queue: breadth-first."
+      "comment": "If planning produced nothing, the goal is done as one step."
     },
     {
-      "id": "start_plan",
-      "type": "outline",
-      "label": "Start the plan outline",
+      "id": "say_one",
+      "type": "combine",
+      "label": "Tell you",
       "position": {
-        "x": 900,
-        "y": 300
+        "x": 2700,
+        "y": 1250
       },
       "params": {
-        "action": "start"
+        "inputs": 1,
+        "format": "▾ I couldn't break this into steps, so I'll do it as one."
+      }
+    },
+    {
+      "id": "show_one",
+      "type": "output",
+      "label": "Show that",
+      "position": {
+        "x": 3000,
+        "y": 1350
       },
-      "comment": "The request is the first task. Read anywhere as {{plan}}."
+      "params": {}
+    },
+    {
+      "id": "then_one",
+      "type": "branch",
+      "label": "Then do it",
+      "position": {
+        "x": 3000,
+        "y": 1200
+      },
+      "params": {
+        "pattern": "(?s)."
+      }
+    },
+    {
+      "id": "carry_out",
+      "type": "function",
+      "label": "Carry out the plan",
+      "position": {
+        "x": 3300,
+        "y": 900
+      },
+      "params": {
+        "function": "carry_out"
+      }
+    },
+    {
+      "id": "as_one",
+      "type": "function",
+      "label": "Do it as one step",
+      "position": {
+        "x": 3300,
+        "y": 1200
+      },
+      "params": {
+        "function": "do_step"
+      }
+    },
+    {
+      "id": "ask_final",
+      "type": "combine",
+      "label": "Ask for the final reply",
+      "position": {
+        "x": 3600,
+        "y": 750
+      },
+      "params": {
+        "inputs": 1,
+        "format": "The user's goal:\n{{goal}}\n\nThe plan:\n{{plan}}\n\nThe latest results:\n{{results}}\n\nYour working notes:\n{{notes}}\n\nAll the steps are done. Write the final reply to the user: the outcome and anything they need to know, in a few sentences. Don't repeat every step."
+      }
+    },
+    {
+      "id": "final",
+      "type": "llm",
+      "label": "Write the final reply",
+      "position": {
+        "x": 3600,
+        "y": 900
+      },
+      "params": {
+        "temperature": 0.3,
+        "tools": "off"
+      }
+    },
+    {
+      "id": "final_request",
+      "type": "combine",
+      "label": "The goal",
+      "position": {
+        "x": 3600,
+        "y": 1100
+      },
+      "params": {
+        "inputs": 1,
+        "format": "{{goal}}"
+      }
+    },
+    {
+      "id": "final_check",
+      "type": "function",
+      "label": "Check the reply",
+      "position": {
+        "x": 3900,
+        "y": 1000
+      },
+      "params": {
+        "function": "verify"
+      }
+    },
+    {
+      "id": "final_ok",
+      "type": "combine",
+      "label": "Final message",
+      "position": {
+        "x": 4200,
+        "y": 900
+      },
+      "params": {
+        "inputs": 1,
+        "format": "**Done.** _INPUT1_"
+      }
+    },
+    {
+      "id": "final_doubt",
+      "type": "combine",
+      "label": "With the doubt",
+      "position": {
+        "x": 4200,
+        "y": 1100
+      },
+      "params": {
+        "inputs": 2,
+        "format": "**Done.** _INPUT1_\n\n(My own check of this isn't sure: _INPUT2_)"
+      }
+    },
+    {
+      "id": "final_failed",
+      "type": "combine",
+      "label": "If that fails",
+      "position": {
+        "x": 3900,
+        "y": 1300
+      },
+      "params": {
+        "inputs": 1,
+        "format": "**Done.** All the steps above are finished."
+      }
+    },
+    {
+      "id": "show_final",
+      "type": "output",
+      "label": "Show the final reply",
+      "position": {
+        "x": 4500,
+        "y": 1000
+      },
+      "params": {}
     }
   ],
   "links": [
@@ -273,6 +663,26 @@
     },
     {
       "from": {
+        "block": "history",
+        "port": "out"
+      },
+      "to": {
+        "block": "conversation",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "block": "clarify",
+        "port": "request"
+      },
+      "to": {
+        "block": "goal",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
         "block": "blank_notes",
         "port": "out"
       },
@@ -280,37 +690,6 @@
         "block": "start_notes",
         "port": "in"
       }
-    },
-    {
-      "from": {
-        "block": "history",
-        "port": "out"
-      },
-      "to": {
-        "block": "goal_text",
-        "port": "in1"
-      }
-    },
-    {
-      "from": {
-        "block": "clarify",
-        "port": "request"
-      },
-      "to": {
-        "block": "goal_text",
-        "port": "in2"
-      }
-    },
-    {
-      "from": {
-        "block": "clarify",
-        "port": "request"
-      },
-      "to": {
-        "block": "queue",
-        "port": "in"
-      },
-      "label": "the first task: the request itself"
     },
     {
       "from": {
@@ -324,90 +703,366 @@
     },
     {
       "from": {
-        "block": "goal_text",
+        "block": "clarify",
+        "port": "request"
+      },
+      "to": {
+        "block": "ask_one_go",
+        "port": "in1"
+      }
+    },
+    {
+      "from": {
+        "block": "history",
         "port": "out"
       },
       "to": {
-        "block": "start",
+        "block": "ask_one_go",
+        "port": "in2"
+      }
+    },
+    {
+      "from": {
+        "block": "ask_one_go",
+        "port": "out"
+      },
+      "to": {
+        "block": "one_go_judge",
         "port": "in"
       }
     },
     {
       "from": {
-        "block": "start",
-        "port": "out"
+        "block": "clarify",
+        "port": "request"
       },
       "to": {
-        "block": "pair",
-        "port": "exchange"
+        "block": "one_go",
+        "port": "value"
       }
     },
     {
       "from": {
-        "block": "queue",
+        "block": "one_go_judge",
         "port": "out"
       },
       "to": {
-        "block": "pair",
+        "block": "one_go",
+        "port": "test"
+      }
+    },
+    {
+      "from": {
+        "block": "one_go",
+        "port": "yes"
+      },
+      "to": {
+        "block": "go",
+        "port": "in"
+      },
+      "label": "one go"
+    },
+    {
+      "from": {
+        "block": "one_go",
+        "port": "no"
+      },
+      "to": {
+        "block": "to_plan",
+        "port": "in"
+      },
+      "label": "plan"
+    },
+    {
+      "from": {
+        "block": "clarify",
+        "port": "request"
+      },
+      "to": {
+        "block": "judge_failed",
+        "port": "value"
+      }
+    },
+    {
+      "from": {
+        "block": "one_go_judge",
+        "port": "error"
+      },
+      "to": {
+        "block": "judge_failed",
+        "port": "test"
+      }
+    },
+    {
+      "from": {
+        "block": "judge_failed",
+        "port": "yes"
+      },
+      "to": {
+        "block": "go",
         "port": "in"
       }
     },
     {
       "from": {
-        "block": "pair",
+        "block": "go",
         "port": "out"
       },
       "to": {
-        "block": "attempt",
-        "port": "exchange"
+        "block": "brief1",
+        "port": "in1"
       }
     },
     {
       "from": {
-        "block": "attempt",
-        "port": "message"
+        "block": "brief1",
+        "port": "out"
       },
       "to": {
-        "block": "show_result",
+        "block": "try1",
+        "port": "brief"
+      }
+    },
+    {
+      "from": {
+        "block": "go",
+        "port": "out"
+      },
+      "to": {
+        "block": "try1",
+        "port": "step"
+      }
+    },
+    {
+      "from": {
+        "block": "brief1",
+        "port": "out"
+      },
+      "to": {
+        "block": "brief2",
+        "port": "in1"
+      }
+    },
+    {
+      "from": {
+        "block": "try1",
+        "port": "failed"
+      },
+      "to": {
+        "block": "brief2",
+        "port": "in2"
+      },
+      "label": "failed"
+    },
+    {
+      "from": {
+        "block": "brief2",
+        "port": "out"
+      },
+      "to": {
+        "block": "try2",
+        "port": "brief"
+      }
+    },
+    {
+      "from": {
+        "block": "go",
+        "port": "out"
+      },
+      "to": {
+        "block": "try2",
+        "port": "step"
+      }
+    },
+    {
+      "from": {
+        "block": "try1",
+        "port": "passed"
+      },
+      "to": {
+        "block": "answer",
+        "port": "in"
+      },
+      "label": "passed"
+    },
+    {
+      "from": {
+        "block": "try2",
+        "port": "passed"
+      },
+      "to": {
+        "block": "answer",
+        "port": "in"
+      },
+      "label": "passed"
+    },
+    {
+      "from": {
+        "block": "answer",
+        "port": "out"
+      },
+      "to": {
+        "block": "show_answer",
         "port": "in"
       }
     },
     {
       "from": {
-        "block": "attempt",
-        "port": "message"
+        "block": "go",
+        "port": "out"
       },
       "to": {
-        "block": "notes_result",
+        "block": "answer_done",
+        "port": "value"
+      }
+    },
+    {
+      "from": {
+        "block": "answer",
+        "port": "out"
+      },
+      "to": {
+        "block": "answer_done",
+        "port": "test"
+      }
+    },
+    {
+      "from": {
+        "block": "answer_done",
+        "port": "yes"
+      },
+      "to": {
+        "block": "mark_done",
+        "port": "task"
+      }
+    },
+    {
+      "from": {
+        "block": "try2",
+        "port": "failed"
+      },
+      "to": {
+        "block": "why_plan",
+        "port": "in1"
+      },
+      "label": "failed twice"
+    },
+    {
+      "from": {
+        "block": "why_plan",
+        "port": "out"
+      },
+      "to": {
+        "block": "say_plan",
+        "port": "in1"
+      }
+    },
+    {
+      "from": {
+        "block": "say_plan",
+        "port": "out"
+      },
+      "to": {
+        "block": "show_replan",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "block": "why_plan",
+        "port": "out"
+      },
+      "to": {
+        "block": "notes_one_go",
         "port": "what"
       }
     },
     {
       "from": {
-        "block": "attempt",
-        "port": "done"
+        "block": "go",
+        "port": "out"
       },
       "to": {
-        "block": "pair",
-        "port": "exchange"
-      },
-      "label": "the exchange, with the result"
+        "block": "goal_again",
+        "port": "value"
+      }
     },
     {
       "from": {
-        "block": "attempt",
-        "port": "breakdown"
+        "block": "notes_one_go",
+        "port": "after"
       },
       "to": {
-        "block": "plan",
-        "port": "exchange"
-      },
-      "label": "too big"
+        "block": "goal_again",
+        "port": "test"
+      }
     },
     {
       "from": {
-        "block": "plan",
-        "port": "message"
+        "block": "goal_again",
+        "port": "yes"
+      },
+      "to": {
+        "block": "to_plan",
+        "port": "in"
+      },
+      "label": "plan instead"
+    },
+    {
+      "from": {
+        "block": "to_plan",
+        "port": "out"
+      },
+      "to": {
+        "block": "full_plan",
+        "port": "goal"
+      }
+    },
+    {
+      "from": {
+        "block": "full_plan",
+        "port": "planned"
+      },
+      "to": {
+        "block": "planned_steps",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "block": "planned_steps",
+        "port": "out"
+      },
+      "to": {
+        "block": "got_steps",
+        "port": "value"
+      }
+    },
+    {
+      "from": {
+        "block": "planned_steps",
+        "port": "out"
+      },
+      "to": {
+        "block": "got_steps",
+        "port": "test"
+      }
+    },
+    {
+      "from": {
+        "block": "got_steps",
+        "port": "yes"
+      },
+      "to": {
+        "block": "plan_text",
+        "port": "in1"
+      },
+      "label": "a plan"
+    },
+    {
+      "from": {
+        "block": "plan_text",
+        "port": "out"
       },
       "to": {
         "block": "show_plan",
@@ -416,8 +1071,18 @@
     },
     {
       "from": {
-        "block": "plan",
-        "port": "message"
+        "block": "got_steps",
+        "port": "yes"
+      },
+      "to": {
+        "block": "plan_what",
+        "port": "in1"
+      }
+    },
+    {
+      "from": {
+        "block": "plan_what",
+        "port": "out"
       },
       "to": {
         "block": "notes_plan",
@@ -426,35 +1091,216 @@
     },
     {
       "from": {
-        "block": "plan",
+        "block": "notes_plan",
         "port": "after"
       },
       "to": {
-        "block": "pair",
-        "port": "exchange"
+        "block": "steps",
+        "port": "in"
       },
-      "label": "the exchange, with the plan"
+      "label": "then start"
     },
     {
       "from": {
-        "block": "plan",
-        "port": "steps"
+        "block": "steps",
+        "port": "out"
       },
       "to": {
-        "block": "more",
+        "block": "carry_out",
+        "port": "steps"
+      }
+    },
+    {
+      "from": {
+        "block": "to_plan",
+        "port": "out"
+      },
+      "to": {
+        "block": "no_steps",
+        "port": "value"
+      }
+    },
+    {
+      "from": {
+        "block": "planned_steps",
+        "port": "out"
+      },
+      "to": {
+        "block": "no_steps",
+        "port": "test"
+      }
+    },
+    {
+      "from": {
+        "block": "no_steps",
+        "port": "yes"
+      },
+      "to": {
+        "block": "say_one",
+        "port": "in1"
+      },
+      "label": "no plan came out"
+    },
+    {
+      "from": {
+        "block": "say_one",
+        "port": "out"
+      },
+      "to": {
+        "block": "show_one",
         "port": "in"
       }
     },
     {
       "from": {
-        "block": "more",
+        "block": "to_plan",
         "port": "out"
       },
       "to": {
-        "block": "queue",
-        "port": "in"
+        "block": "then_one",
+        "port": "value"
+      }
+    },
+    {
+      "from": {
+        "block": "say_one",
+        "port": "out"
       },
-      "label": "each step"
+      "to": {
+        "block": "then_one",
+        "port": "test"
+      }
+    },
+    {
+      "from": {
+        "block": "then_one",
+        "port": "yes"
+      },
+      "to": {
+        "block": "as_one",
+        "port": "step"
+      }
+    },
+    {
+      "from": {
+        "block": "carry_out",
+        "port": "finished"
+      },
+      "to": {
+        "block": "ask_final",
+        "port": "in1"
+      },
+      "label": "all steps done"
+    },
+    {
+      "from": {
+        "block": "ask_final",
+        "port": "out"
+      },
+      "to": {
+        "block": "final",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "block": "carry_out",
+        "port": "finished"
+      },
+      "to": {
+        "block": "final_request",
+        "port": "in1"
+      }
+    },
+    {
+      "from": {
+        "block": "final_request",
+        "port": "out"
+      },
+      "to": {
+        "block": "final_check",
+        "port": "request"
+      }
+    },
+    {
+      "from": {
+        "block": "final",
+        "port": "out"
+      },
+      "to": {
+        "block": "final_check",
+        "port": "answer"
+      }
+    },
+    {
+      "from": {
+        "block": "final_check",
+        "port": "passed"
+      },
+      "to": {
+        "block": "final_ok",
+        "port": "in1"
+      }
+    },
+    {
+      "from": {
+        "block": "final_ok",
+        "port": "out"
+      },
+      "to": {
+        "block": "show_final",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "block": "final",
+        "port": "out"
+      },
+      "to": {
+        "block": "final_doubt",
+        "port": "in1"
+      }
+    },
+    {
+      "from": {
+        "block": "final_check",
+        "port": "failed"
+      },
+      "to": {
+        "block": "final_doubt",
+        "port": "in2"
+      }
+    },
+    {
+      "from": {
+        "block": "final_doubt",
+        "port": "out"
+      },
+      "to": {
+        "block": "show_final",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "block": "final",
+        "port": "error"
+      },
+      "to": {
+        "block": "final_failed",
+        "port": "in1"
+      }
+    },
+    {
+      "from": {
+        "block": "final_failed",
+        "port": "out"
+      },
+      "to": {
+        "block": "show_final",
+        "port": "in"
+      }
     }
   ],
   "functions": [
@@ -537,7 +1383,7 @@
           },
           "params": {
             "inputs": 2,
-            "format": "(?i)^\\W*question\\s*:\\s*\\S"
+            "format": "Request: _INPUT1_\n\nAnswer: _INPUT2_\n\nWrite one yes-or-no question that checks this answer against the request, such as \"Does this answer make sense given the request?\" Write only the question."
           }
         },
         {
@@ -1477,6 +2323,14 @@
             "block": "save",
             "port": "out"
           }
+        },
+        {
+          "name": "after",
+          "label": "After",
+          "from": {
+            "block": "after",
+            "port": "out"
+          }
         }
       ],
       "blocks": [
@@ -1522,6 +2376,17 @@
             "max_chars": 1000
           },
           "comment": "Keeps the old notes; just remembers what went wrong."
+        },
+        {
+          "id": "after",
+          "type": "forward",
+          "label": "After",
+          "position": {
+            "x": 600,
+            "y": 100
+          },
+          "params": {},
+          "comment": "Fires once either way, so the work can go on."
         }
       ],
       "links": [
@@ -1544,54 +2409,74 @@
             "block": "keep",
             "port": "in"
           }
+        },
+        {
+          "from": {
+            "block": "save",
+            "port": "out"
+          },
+          "to": {
+            "block": "after",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "keep",
+            "port": "out"
+          },
+          "to": {
+            "block": "after",
+            "port": "in"
+          }
         }
       ]
     },
     {
-      "id": "attempt",
-      "name": "Attempt the task",
-      "description": "The model tries the task, calling tools (each checked first) as often as it needs, or asks you a question. Its result is checked with Verify. If it says the task is too big, or the result fails its check, the exchange goes out of Breakdown instead. A failed model call becomes a short message.",
+      "id": "try_step",
+      "name": "Try a step",
+      "description": "One try at a step: the model does it, calling tools (each checked first) as often as it needs, and the result is verified. Passed sends the result; Failed sends what went wrong (a failed check, an empty answer, or a failed model call or tool).",
       "inputs": [
         {
-          "name": "exchange",
-          "label": "Exchange",
+          "name": "brief",
+          "label": "What to do",
           "to": {
-            "block": "entry",
+            "block": "brief",
+            "port": "in"
+          }
+        },
+        {
+          "name": "step",
+          "label": "The step",
+          "to": {
+            "block": "step",
             "port": "in"
           }
         }
       ],
       "outputs": [
         {
-          "name": "message",
-          "label": "Result message",
+          "name": "passed",
+          "label": "Passed (result)",
           "from": {
-            "block": "message",
+            "block": "passed",
             "port": "out"
           }
         },
         {
-          "name": "done",
-          "label": "Exchange with result",
+          "name": "failed",
+          "label": "Failed (reason)",
           "from": {
-            "block": "done",
-            "port": "out"
-          }
-        },
-        {
-          "name": "breakdown",
-          "label": "Breakdown",
-          "from": {
-            "block": "to_plan",
+            "block": "failed",
             "port": "out"
           }
         }
       ],
       "blocks": [
         {
-          "id": "entry",
+          "id": "brief",
           "type": "forward",
-          "label": "Exchange",
+          "label": "What to do",
           "position": {
             "x": 0,
             "y": 0
@@ -1599,38 +2484,51 @@
           "params": {}
         },
         {
-          "id": "which",
-          "type": "read_exchange",
-          "label": "Which task",
+          "id": "step",
+          "type": "forward",
+          "label": "The step",
           "position": {
             "x": 0,
-            "y": -220
+            "y": 400
+          },
+          "params": {}
+        },
+        {
+          "id": "start",
+          "type": "exchange",
+          "label": "Start the exchange",
+          "position": {
+            "x": 260,
+            "y": 0
           },
           "params": {
-            "role": "user"
-          }
+            "system": "You are a careful assistant doing one step of a larger piece of work for the user. Do exactly the step you're given, using tools when they help. Then give its result in a few sentences: what you did and what came out (names, values, files).\n\nThe user's goal:\n{{goal}}\n\nRecent conversation:\n{{conversation}}\n\nThe plan (✓ done, ○ to do, ▸ working, ▾ broken down):\n{{plan}}\n\nYour working notes:\n{{notes}}\n\nResults so far (latest last):\n{{results}}",
+            "roles": [
+              "user"
+            ]
+          },
+          "comment": "The system message holds the goal, the plan, the notes and the results so far, read fresh at every model call."
         },
         {
           "id": "work",
           "type": "llm",
-          "label": "Try the task",
+          "label": "Do the step",
           "position": {
-            "x": 300,
+            "x": 520,
             "y": 0
           },
           "params": {
-            "system": "Do the user's latest task now. Use a tool if it helps. If you can do it, give the result in a few sentences. If it is too big to finish in one go, reply with only: TOO BIG\nIf you can't go on without the user's input, reply with only: QUESTION: and your question.\n\nThe whole plan (✓ done, ○ to do, ▾ broken down):\n{{plan}}\n\nYour working notes:\n{{notes}}",
             "retries": 2,
             "on_limit": "ask"
           },
-          "comment": "Can use the tools this agent allows, answer, say TOO BIG, or ask a QUESTION."
+          "comment": "Uses the tools this agent allows."
         },
         {
           "id": "check",
           "type": "function",
           "label": "Check the tool call",
           "position": {
-            "x": 300,
+            "x": 520,
             "y": 300
           },
           "params": {
@@ -1643,7 +2541,7 @@
           "type": "run_tool",
           "label": "Run tool",
           "position": {
-            "x": 600,
+            "x": 820,
             "y": 300
           },
           "params": {
@@ -1652,104 +2550,42 @@
           "comment": "Tool errors go back to the model, which can try again."
         },
         {
-          "id": "asks",
+          "id": "has_text",
           "type": "branch",
-          "label": "A question for you?",
+          "label": "Any answer?",
           "position": {
-            "x": 600,
+            "x": 820,
             "y": 0
           },
           "params": {
-            "pattern": "(?i)^\\W*question\\s*:\\s*\\S"
-          }
+            "pattern": "\\S"
+          },
+          "comment": "An empty answer (a model that only thought) never passes."
         },
         {
-          "id": "ask",
-          "type": "ask_user",
-          "label": "Ask you",
-          "position": {
-            "x": 900,
-            "y": -300
-          },
-          "params": {
-            "prompt": "_INPUT_",
-            "timeout_minutes": 60,
-            "default_answer": "No answer came. Use your best judgement and carry on."
-          },
-          "comment": "Waits up to an hour, then carries on without an answer."
-        },
-        {
-          "id": "no_answer",
+          "id": "empty",
           "type": "combine",
-          "label": "No answer",
+          "label": "Empty answer",
           "position": {
-            "x": 900,
-            "y": -150
+            "x": 1080,
+            "y": 150
           },
           "params": {
             "inputs": 1,
-            "format": "No answer came. Use your best judgement and carry on."
+            "format": "The answer was empty."
           }
         },
         {
-          "id": "keep",
-          "type": "remember",
-          "label": "Task exchange",
+          "id": "request",
+          "type": "combine",
+          "label": "What it should do",
           "position": {
-            "x": 600,
-            "y": -450
-          },
-          "params": {},
-          "comment": "Re-sends the task's exchange each time a question or failure needs it."
-        },
-        {
-          "id": "q_ex",
-          "type": "augment",
-          "label": "Add the question",
-          "position": {
-            "x": 1200,
-            "y": -450
+            "x": 820,
+            "y": 450
           },
           "params": {
-            "role": "assistant",
-            "format": "_INPUT_"
-          }
-        },
-        {
-          "id": "q_ans",
-          "type": "augment",
-          "label": "Add your answer",
-          "position": {
-            "x": 1200,
-            "y": -300
-          },
-          "params": {
-            "role": "user",
-            "format": "_INPUT_"
-          }
-        },
-        {
-          "id": "big_answer",
-          "type": "branch",
-          "label": "Too big? (answer)",
-          "position": {
-            "x": 900,
-            "y": 0
-          },
-          "params": {
-            "pattern": "(?i)^\\W*too\\s*big"
-          }
-        },
-        {
-          "id": "big_exchange",
-          "type": "branch",
-          "label": "Too big? (exchange)",
-          "position": {
-            "x": 900,
-            "y": 200
-          },
-          "params": {
-            "pattern": "(?i)^\\W*too\\s*big"
+            "inputs": 1,
+            "format": "The user's goal:\n{{goal}}\n\nThe step: _INPUT1_"
           }
         },
         {
@@ -1757,216 +2593,79 @@
           "type": "function",
           "label": "Verify the result",
           "position": {
-            "x": 1200,
+            "x": 1080,
             "y": 0
           },
           "params": {
             "function": "verify"
-          }
-        },
-        {
-          "id": "checked",
-          "type": "branch",
-          "label": "Passed the check?",
-          "position": {
-            "x": 1200,
-            "y": 200
           },
-          "params": {
-            "pattern": "(?i)^\\W*yes|^\\s*$"
-          }
+          "comment": "The model writes a yes/no check question and answers it."
         },
         {
-          "id": "note",
-          "type": "augment",
-          "label": "Note the failed check",
-          "position": {
-            "x": 1500,
-            "y": 450
-          },
-          "params": {
-            "role": "assistant",
-            "format": "My attempt didn't pass this check: _INPUT_"
-          }
-        },
-        {
-          "id": "add_result",
-          "type": "augment",
-          "label": "Add result",
-          "position": {
-            "x": 1500,
-            "y": 150
-          },
-          "params": {
-            "role": "assistant",
-            "format": "_INPUT_"
-          }
-        },
-        {
-          "id": "message",
+          "id": "call_failed",
           "type": "combine",
-          "label": "Result message",
+          "label": "Model call failed",
           "position": {
-            "x": 1500,
-            "y": -150
-          },
-          "params": {
-            "inputs": 2,
-            "format": "**✓ _INPUT1_**\n\n_INPUT2_"
-          }
-        },
-        {
-          "id": "to_plan",
-          "type": "forward",
-          "label": "Needs a plan",
-          "position": {
-            "x": 1800,
-            "y": 450
-          },
-          "params": {}
-        },
-        {
-          "id": "err_text",
-          "type": "combine",
-          "label": "Explain the failure",
-          "position": {
-            "x": 900,
-            "y": 550
+            "x": 820,
+            "y": -200
           },
           "params": {
             "inputs": 1,
-            "format": "I couldn't finish this task. (_INPUT1_)"
-          },
-          "comment": "If the model call fails, say so and move on."
-        },
-        {
-          "id": "err_add",
-          "type": "augment",
-          "label": "Add the failure",
-          "position": {
-            "x": 1500,
-            "y": 650
-          },
-          "params": {
-            "role": "assistant",
-            "format": "_INPUT_"
+            "format": "The model call failed: _INPUT1_"
           }
         },
         {
-          "id": "done",
-          "type": "forward",
-          "label": "Exchange with result",
+          "id": "tool_failed",
+          "type": "combine",
+          "label": "Tool failed",
           "position": {
-            "x": 1800,
-            "y": 150
+            "x": 1080,
+            "y": 450
+          },
+          "params": {
+            "inputs": 1,
+            "format": "A tool couldn't run: _INPUT1_"
+          }
+        },
+        {
+          "id": "passed",
+          "type": "forward",
+          "label": "Passed",
+          "position": {
+            "x": 1340,
+            "y": 0
           },
           "params": {}
         },
         {
-          "id": "first_line",
-          "type": "regex",
-          "label": "Task's lines",
+          "id": "failed",
+          "type": "forward",
+          "label": "Failed",
           "position": {
-            "x": 1200,
-            "y": -150
+            "x": 1340,
+            "y": 250
           },
-          "params": {
-            "pattern": "[^\\n]*\\S[^\\n]*"
-          }
-        },
-        {
-          "id": "task_line",
-          "type": "separate",
-          "label": "First line",
-          "position": {
-            "x": 1350,
-            "y": -150
-          },
-          "params": {
-            "outputs": 1
-          },
-          "comment": "A clarified request has your answer on later lines; the heading shows only the first."
-        },
-        {
-          "id": "passed_task",
-          "type": "branch",
-          "label": "Task passed?",
-          "position": {
-            "x": 1500,
-            "y": -350
-          },
-          "params": {
-            "pattern": "(?i)^\\W*yes|^\\s*$"
-          }
-        },
-        {
-          "id": "mark_done",
-          "type": "outline",
-          "label": "Mark done in the plan",
-          "position": {
-            "x": 1800,
-            "y": -350
-          },
-          "params": {
-            "action": "mark",
-            "status": "done"
-          },
-          "comment": "Ticks the task in the plan outline."
-        },
-        {
-          "id": "failed_task",
-          "type": "branch",
-          "label": "Task failed",
-          "position": {
-            "x": 1200,
-            "y": 650
-          },
-          "params": {
-            "pattern": "(?s)."
-          }
-        },
-        {
-          "id": "mark_failed",
-          "type": "outline",
-          "label": "Mark failed in the plan",
-          "position": {
-            "x": 1500,
-            "y": 850
-          },
-          "params": {
-            "action": "mark",
-            "status": "failed"
-          }
+          "params": {}
         }
       ],
       "links": [
         {
           "from": {
-            "block": "entry",
+            "block": "brief",
+            "port": "out"
+          },
+          "to": {
+            "block": "start",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "start",
             "port": "out"
           },
           "to": {
             "block": "work",
-            "port": "in"
-          }
-        },
-        {
-          "from": {
-            "block": "entry",
-            "port": "out"
-          },
-          "to": {
-            "block": "which",
-            "port": "in"
-          }
-        },
-        {
-          "from": {
-            "block": "entry",
-            "port": "out"
-          },
-          "to": {
-            "block": "keep",
             "port": "in"
           }
         },
@@ -2019,7 +2718,7 @@
             "port": "out"
           },
           "to": {
-            "block": "asks",
+            "block": "has_text",
             "port": "value"
           }
         },
@@ -2029,187 +2728,44 @@
             "port": "out"
           },
           "to": {
-            "block": "asks",
+            "block": "has_text",
             "port": "test"
           }
         },
         {
           "from": {
-            "block": "asks",
-            "port": "yes"
+            "block": "has_text",
+            "port": "no"
           },
           "to": {
-            "block": "ask",
-            "port": "in"
-          },
-          "label": "QUESTION: …"
-        },
-        {
-          "from": {
-            "block": "asks",
-            "port": "yes"
-          },
-          "to": {
-            "block": "keep",
-            "port": "in"
-          }
-        },
-        {
-          "from": {
-            "block": "ask",
-            "port": "error"
-          },
-          "to": {
-            "block": "no_answer",
+            "block": "empty",
             "port": "in1"
           }
         },
         {
           "from": {
-            "block": "no_answer",
+            "block": "empty",
             "port": "out"
           },
           "to": {
-            "block": "q_ans",
+            "block": "failed",
             "port": "in"
           }
         },
         {
           "from": {
-            "block": "keep",
+            "block": "step",
             "port": "out"
           },
           "to": {
-            "block": "q_ex",
-            "port": "exchange"
-          }
-        },
-        {
-          "from": {
-            "block": "asks",
-            "port": "yes"
-          },
-          "to": {
-            "block": "q_ex",
-            "port": "in"
-          }
-        },
-        {
-          "from": {
-            "block": "q_ex",
-            "port": "out"
-          },
-          "to": {
-            "block": "q_ans",
-            "port": "exchange"
-          }
-        },
-        {
-          "from": {
-            "block": "ask",
-            "port": "out"
-          },
-          "to": {
-            "block": "q_ans",
-            "port": "in"
-          }
-        },
-        {
-          "from": {
-            "block": "q_ans",
-            "port": "out"
-          },
-          "to": {
-            "block": "work",
-            "port": "in"
-          },
-          "label": "try again with your answer"
-        },
-        {
-          "from": {
-            "block": "asks",
-            "port": "no"
-          },
-          "to": {
-            "block": "big_answer",
-            "port": "value"
-          }
-        },
-        {
-          "from": {
-            "block": "asks",
-            "port": "no"
-          },
-          "to": {
-            "block": "big_answer",
-            "port": "test"
-          }
-        },
-        {
-          "from": {
-            "block": "entry",
-            "port": "out"
-          },
-          "to": {
-            "block": "big_exchange",
-            "port": "value"
-          }
-        },
-        {
-          "from": {
-            "block": "asks",
-            "port": "no"
-          },
-          "to": {
-            "block": "big_exchange",
-            "port": "test"
-          }
-        },
-        {
-          "from": {
-            "block": "big_exchange",
-            "port": "yes"
-          },
-          "to": {
-            "block": "to_plan",
-            "port": "in"
-          },
-          "label": "too big"
-        },
-        {
-          "from": {
-            "block": "which",
-            "port": "last"
-          },
-          "to": {
-            "block": "first_line",
-            "port": "in"
-          }
-        },
-        {
-          "from": {
-            "block": "first_line",
-            "port": "out"
-          },
-          "to": {
-            "block": "task_line",
-            "port": "in"
-          }
-        },
-        {
-          "from": {
-            "block": "task_line",
-            "port": "out1"
-          },
-          "to": {
-            "block": "message",
+            "block": "request",
             "port": "in1"
           }
         },
         {
           "from": {
-            "block": "which",
-            "port": "last"
+            "block": "request",
+            "port": "out"
           },
           "to": {
             "block": "verify",
@@ -2218,44 +2774,14 @@
         },
         {
           "from": {
-            "block": "big_answer",
-            "port": "no"
+            "block": "has_text",
+            "port": "yes"
           },
           "to": {
             "block": "verify",
             "port": "answer"
           },
-          "label": "a result"
-        },
-        {
-          "from": {
-            "block": "big_exchange",
-            "port": "no"
-          },
-          "to": {
-            "block": "checked",
-            "port": "value"
-          }
-        },
-        {
-          "from": {
-            "block": "verify",
-            "port": "verdict"
-          },
-          "to": {
-            "block": "checked",
-            "port": "test"
-          }
-        },
-        {
-          "from": {
-            "block": "checked",
-            "port": "yes"
-          },
-          "to": {
-            "block": "add_result",
-            "port": "exchange"
-          }
+          "label": "the result"
         },
         {
           "from": {
@@ -2263,28 +2789,8 @@
             "port": "passed"
           },
           "to": {
-            "block": "add_result",
+            "block": "passed",
             "port": "in"
-          }
-        },
-        {
-          "from": {
-            "block": "verify",
-            "port": "passed"
-          },
-          "to": {
-            "block": "message",
-            "port": "in2"
-          }
-        },
-        {
-          "from": {
-            "block": "checked",
-            "port": "no"
-          },
-          "to": {
-            "block": "note",
-            "port": "exchange"
           }
         },
         {
@@ -2293,20 +2799,10 @@
             "port": "failed"
           },
           "to": {
-            "block": "note",
-            "port": "in"
-          }
-        },
-        {
-          "from": {
-            "block": "note",
-            "port": "out"
-          },
-          "to": {
-            "block": "to_plan",
+            "block": "failed",
             "port": "in"
           },
-          "label": "failed its check"
+          "label": "didn't pass"
         },
         {
           "from": {
@@ -2314,202 +2810,83 @@
             "port": "error"
           },
           "to": {
-            "block": "err_text",
+            "block": "call_failed",
             "port": "in1"
-          },
-          "label": "the call failed"
+          }
         },
         {
           "from": {
-            "block": "work",
+            "block": "call_failed",
+            "port": "out"
+          },
+          "to": {
+            "block": "failed",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "run",
             "port": "error"
           },
           "to": {
-            "block": "keep",
+            "block": "tool_failed",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "tool_failed",
+            "port": "out"
+          },
+          "to": {
+            "block": "failed",
             "port": "in"
           }
-        },
-        {
-          "from": {
-            "block": "err_text",
-            "port": "out"
-          },
-          "to": {
-            "block": "message",
-            "port": "in2"
-          }
-        },
-        {
-          "from": {
-            "block": "keep",
-            "port": "out"
-          },
-          "to": {
-            "block": "err_add",
-            "port": "exchange"
-          }
-        },
-        {
-          "from": {
-            "block": "err_text",
-            "port": "out"
-          },
-          "to": {
-            "block": "err_add",
-            "port": "in"
-          }
-        },
-        {
-          "from": {
-            "block": "add_result",
-            "port": "out"
-          },
-          "to": {
-            "block": "done",
-            "port": "in"
-          }
-        },
-        {
-          "from": {
-            "block": "err_add",
-            "port": "out"
-          },
-          "to": {
-            "block": "done",
-            "port": "in"
-          }
-        },
-        {
-          "from": {
-            "block": "which",
-            "port": "last"
-          },
-          "to": {
-            "block": "passed_task",
-            "port": "value"
-          }
-        },
-        {
-          "from": {
-            "block": "verify",
-            "port": "verdict"
-          },
-          "to": {
-            "block": "passed_task",
-            "port": "test"
-          }
-        },
-        {
-          "from": {
-            "block": "passed_task",
-            "port": "yes"
-          },
-          "to": {
-            "block": "mark_done",
-            "port": "task"
-          },
-          "label": "passed"
-        },
-        {
-          "from": {
-            "block": "which",
-            "port": "last"
-          },
-          "to": {
-            "block": "failed_task",
-            "port": "value"
-          }
-        },
-        {
-          "from": {
-            "block": "err_text",
-            "port": "out"
-          },
-          "to": {
-            "block": "failed_task",
-            "port": "test"
-          }
-        },
-        {
-          "from": {
-            "block": "failed_task",
-            "port": "yes"
-          },
-          "to": {
-            "block": "mark_failed",
-            "port": "task"
-          },
-          "label": "couldn't finish"
         }
       ],
       "notes": [
         {
           "id": "n1",
-          "text": "The work cycle: Try the task ⇄ Check the tool call ⇄ Run tool, until the model answers. A QUESTION: answer goes to you, then back to the model with your answer.",
+          "text": "The work cycle: Do the step ⇄ Check the tool call ⇄ Run tool, until the model answers. Then Verify checks the result.",
           "position": {
-            "x": 300,
-            "y": -600
+            "x": 0,
+            "y": -350
           },
           "width": 420,
-          "height": 0
-        },
-        {
-          "id": "n2",
-          "text": "Failures don't stop the run: a failed model call becomes “I couldn't finish this task”, and the work moves on.",
-          "position": {
-            "x": 900,
-            "y": 800
-          },
-          "width": 360,
           "height": 0
         }
       ]
     },
     {
-      "id": "break_down",
-      "name": "Plan smaller steps",
-      "description": "Plans 5 or fewer smaller steps for a task that's too big, checks the plan with Verify, and plans once more, with the reason, if it fails.",
+      "id": "do_step",
+      "name": "Do a step",
+      "description": "Up to 5 tries at a step, each with tools and a check. Each try sees what went wrong before. A step that passes is shown, ticked in the plan, added to {{results}}, and the notes are updated. A step that fails all 5 tries gets an explanation from the model, which is shown, and the run stops as failed.",
       "inputs": [
         {
-          "name": "exchange",
-          "label": "Exchange",
+          "name": "step",
+          "label": "Step",
           "to": {
-            "block": "entry",
+            "block": "step",
             "port": "in"
           }
         }
       ],
       "outputs": [
         {
-          "name": "message",
-          "label": "Plan message",
+          "name": "result",
+          "label": "Result",
           "from": {
-            "block": "message",
+            "block": "result",
             "port": "out"
-          }
-        },
-        {
-          "name": "after",
-          "label": "Exchange with plan",
-          "from": {
-            "block": "after",
-            "port": "out"
-          }
-        },
-        {
-          "name": "steps",
-          "label": "Steps",
-          "from": {
-            "block": "parse",
-            "port": "group1"
           }
         }
       ],
       "blocks": [
         {
-          "id": "entry",
+          "id": "step",
           "type": "forward",
-          "label": "Exchange",
+          "label": "The step",
           "position": {
             "x": 0,
             "y": 0
@@ -2517,50 +2894,1133 @@
           "params": {}
         },
         {
-          "id": "which",
-          "type": "read_exchange",
-          "label": "Which task",
+          "id": "working",
+          "type": "outline",
+          "label": "Mark as working",
           "position": {
-            "x": 260,
-            "y": 200
+            "x": 0,
+            "y": -250
           },
           "params": {
-            "role": "user"
-          }
+            "action": "mark",
+            "status": "working"
+          },
+          "comment": "Shows ▸ in {{plan}} while it's being done."
         },
         {
-          "id": "ask",
-          "type": "augment",
-          "label": "Ask for smaller steps",
+          "id": "brief1",
+          "type": "combine",
+          "label": "What to do",
           "position": {
-            "x": 520,
+            "x": 260,
             "y": 0
           },
           "params": {
-            "role": "user",
-            "format": "_INPUT_\n\nThis is too big to do in one go. Break it into 5 or fewer smaller steps, as broad or as narrow as each needs to be. Write only the steps, one per line, numbered like:\n1. First step\n2. Second step"
+            "inputs": 1,
+            "format": "Your step now: _INPUT1_"
           }
         },
         {
-          "id": "sub",
-          "type": "llm",
-          "label": "Plan smaller steps",
+          "id": "try1",
+          "type": "function",
+          "label": "Try 1 of 5",
           "position": {
-            "x": 780,
+            "x": 560,
+            "y": 0
+          },
+          "params": {
+            "function": "try_step"
+          }
+        },
+        {
+          "id": "brief2",
+          "type": "combine",
+          "label": "Add what went wrong (1)",
+          "position": {
+            "x": 710,
+            "y": 200
+          },
+          "params": {
+            "inputs": 2,
+            "format": "_INPUT1_\n\nTry 1 didn't pass: _INPUT2_\nFix that this time."
+          }
+        },
+        {
+          "id": "try2",
+          "type": "function",
+          "label": "Try 2 of 5",
+          "position": {
+            "x": 860,
+            "y": 0
+          },
+          "params": {
+            "function": "try_step"
+          }
+        },
+        {
+          "id": "brief3",
+          "type": "combine",
+          "label": "Add what went wrong (2)",
+          "position": {
+            "x": 1010,
+            "y": 200
+          },
+          "params": {
+            "inputs": 2,
+            "format": "_INPUT1_\n\nTry 2 didn't pass: _INPUT2_\nFix that this time."
+          }
+        },
+        {
+          "id": "try3",
+          "type": "function",
+          "label": "Try 3 of 5",
+          "position": {
+            "x": 1160,
+            "y": 0
+          },
+          "params": {
+            "function": "try_step"
+          }
+        },
+        {
+          "id": "brief4",
+          "type": "combine",
+          "label": "Add what went wrong (3)",
+          "position": {
+            "x": 1310,
+            "y": 200
+          },
+          "params": {
+            "inputs": 2,
+            "format": "_INPUT1_\n\nTry 3 didn't pass: _INPUT2_\nFix that this time."
+          }
+        },
+        {
+          "id": "try4",
+          "type": "function",
+          "label": "Try 4 of 5",
+          "position": {
+            "x": 1460,
+            "y": 0
+          },
+          "params": {
+            "function": "try_step"
+          }
+        },
+        {
+          "id": "brief5",
+          "type": "combine",
+          "label": "Add what went wrong (4)",
+          "position": {
+            "x": 1610,
+            "y": 200
+          },
+          "params": {
+            "inputs": 2,
+            "format": "_INPUT1_\n\nTry 4 didn't pass: _INPUT2_\nFix that this time."
+          }
+        },
+        {
+          "id": "try5",
+          "type": "function",
+          "label": "Try 5 of 5",
+          "position": {
+            "x": 1760,
+            "y": 0
+          },
+          "params": {
+            "function": "try_step"
+          }
+        },
+        {
+          "id": "brief6",
+          "type": "combine",
+          "label": "Add what went wrong (5)",
+          "position": {
+            "x": 1910,
+            "y": 200
+          },
+          "params": {
+            "inputs": 2,
+            "format": "_INPUT1_\n\nTry 5 didn't pass: _INPUT2_"
+          }
+        },
+        {
+          "id": "result",
+          "type": "forward",
+          "label": "Result",
+          "position": {
+            "x": 2000,
+            "y": -300
+          },
+          "params": {}
+        },
+        {
+          "id": "message",
+          "type": "combine",
+          "label": "Result message",
+          "position": {
+            "x": 2300,
+            "y": -450
+          },
+          "params": {
+            "inputs": 2,
+            "format": "**✓ _INPUT1_**\n\n_INPUT2_"
+          }
+        },
+        {
+          "id": "show",
+          "type": "output",
+          "label": "Show the result",
+          "position": {
+            "x": 2600,
+            "y": -450
+          },
+          "params": {}
+        },
+        {
+          "id": "done",
+          "type": "outline",
+          "label": "Mark done",
+          "position": {
+            "x": 2300,
+            "y": -650
+          },
+          "params": {
+            "action": "mark",
+            "status": "done"
+          }
+        },
+        {
+          "id": "add_result",
+          "type": "combine",
+          "label": "Add to the results",
+          "position": {
+            "x": 2300,
+            "y": -300
+          },
+          "params": {
+            "inputs": 2,
+            "format": "{{results}}\n\n✓ _INPUT1_\n_INPUT2_"
+          }
+        },
+        {
+          "id": "results",
+          "type": "store",
+          "label": "Save the results",
+          "position": {
+            "x": 2600,
+            "y": -300
+          },
+          "params": {
+            "key": "results",
+            "max_chars": 4000
+          },
+          "comment": "Keeps the latest 4,000 characters. Read anywhere as {{results}}."
+        },
+        {
+          "id": "what",
+          "type": "combine",
+          "label": "What happened",
+          "position": {
+            "x": 2300,
+            "y": -150
+          },
+          "params": {
+            "inputs": 2,
+            "format": "Finished the step: _INPUT1_\nResult: _INPUT2_"
+          }
+        },
+        {
+          "id": "notes",
+          "type": "function",
+          "label": "Update the notes",
+          "position": {
+            "x": 2600,
+            "y": -150
+          },
+          "params": {
+            "function": "update_notes"
+          }
+        },
+        {
+          "id": "ask_explain",
+          "type": "combine",
+          "label": "Ask why",
+          "position": {
+            "x": 2000,
+            "y": 250
+          },
+          "params": {
+            "inputs": 1,
+            "format": "The user's goal:\n{{goal}}\n\nThis step was tried 5 times and never passed its check:\n_INPUT1_\n\nIn two or three sentences, tell the user why it couldn't be done and what would be needed to do it."
+          }
+        },
+        {
+          "id": "explain",
+          "type": "llm",
+          "label": "Explain why",
+          "position": {
+            "x": 2000,
+            "y": 400
+          },
+          "params": {
+            "temperature": 0.2,
+            "tools": "off"
+          },
+          "comment": "The model tells you why the step couldn't be done."
+        },
+        {
+          "id": "no_explain",
+          "type": "combine",
+          "label": "If that fails too",
+          "position": {
+            "x": 2000,
+            "y": 600
+          },
+          "params": {
+            "inputs": 2,
+            "format": "I tried 5 times and it never passed its check.\n\n_INPUT1_"
+          },
+          "comment": "If the explanation fails, show what went wrong instead."
+        },
+        {
+          "id": "fail_message",
+          "type": "combine",
+          "label": "Failure message",
+          "position": {
+            "x": 2300,
+            "y": 450
+          },
+          "params": {
+            "inputs": 2,
+            "format": "**✗ I couldn't do this step: _INPUT1_**\n\n_INPUT2_\n\nI stopped here, so the rest of the plan wasn't done."
+          }
+        },
+        {
+          "id": "show_fail",
+          "type": "output",
+          "label": "Show the failure",
+          "position": {
+            "x": 2600,
+            "y": 450
+          },
+          "params": {}
+        },
+        {
+          "id": "failed",
+          "type": "outline",
+          "label": "Mark failed",
+          "position": {
+            "x": 2300,
+            "y": 650
+          },
+          "params": {
+            "action": "mark",
+            "status": "failed"
+          }
+        },
+        {
+          "id": "reason",
+          "type": "combine",
+          "label": "The reason",
+          "position": {
+            "x": 2600,
+            "y": 650
+          },
+          "params": {
+            "inputs": 2,
+            "format": "Couldn't do the step “_INPUT1_”. _INPUT2_"
+          }
+        },
+        {
+          "id": "stop",
+          "type": "stop",
+          "label": "Give up",
+          "position": {
+            "x": 2900,
+            "y": 650
+          },
+          "params": {},
+          "comment": "Ends the run as failed, with the reason. Later steps don't run."
+        },
+        {
+          "id": "passed_task",
+          "type": "branch",
+          "label": "On success",
+          "position": {
+            "x": 2000,
+            "y": -650
+          },
+          "params": {
+            "pattern": "(?s)."
+          }
+        },
+        {
+          "id": "failed_task",
+          "type": "branch",
+          "label": "On failure",
+          "position": {
+            "x": 2000,
+            "y": 650
+          },
+          "params": {
+            "pattern": "(?s)."
+          }
+        }
+      ],
+      "links": [
+        {
+          "from": {
+            "block": "step",
+            "port": "out"
+          },
+          "to": {
+            "block": "working",
+            "port": "task"
+          }
+        },
+        {
+          "from": {
+            "block": "step",
+            "port": "out"
+          },
+          "to": {
+            "block": "brief1",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "brief1",
+            "port": "out"
+          },
+          "to": {
+            "block": "try1",
+            "port": "brief"
+          }
+        },
+        {
+          "from": {
+            "block": "step",
+            "port": "out"
+          },
+          "to": {
+            "block": "try1",
+            "port": "step"
+          }
+        },
+        {
+          "from": {
+            "block": "try1",
+            "port": "passed"
+          },
+          "to": {
+            "block": "result",
+            "port": "in"
+          },
+          "label": "passed"
+        },
+        {
+          "from": {
+            "block": "brief1",
+            "port": "out"
+          },
+          "to": {
+            "block": "brief2",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "try1",
+            "port": "failed"
+          },
+          "to": {
+            "block": "brief2",
+            "port": "in2"
+          },
+          "label": "failed"
+        },
+        {
+          "from": {
+            "block": "brief2",
+            "port": "out"
+          },
+          "to": {
+            "block": "try2",
+            "port": "brief"
+          }
+        },
+        {
+          "from": {
+            "block": "step",
+            "port": "out"
+          },
+          "to": {
+            "block": "try2",
+            "port": "step"
+          }
+        },
+        {
+          "from": {
+            "block": "try2",
+            "port": "passed"
+          },
+          "to": {
+            "block": "result",
+            "port": "in"
+          },
+          "label": "passed"
+        },
+        {
+          "from": {
+            "block": "brief2",
+            "port": "out"
+          },
+          "to": {
+            "block": "brief3",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "try2",
+            "port": "failed"
+          },
+          "to": {
+            "block": "brief3",
+            "port": "in2"
+          },
+          "label": "failed"
+        },
+        {
+          "from": {
+            "block": "brief3",
+            "port": "out"
+          },
+          "to": {
+            "block": "try3",
+            "port": "brief"
+          }
+        },
+        {
+          "from": {
+            "block": "step",
+            "port": "out"
+          },
+          "to": {
+            "block": "try3",
+            "port": "step"
+          }
+        },
+        {
+          "from": {
+            "block": "try3",
+            "port": "passed"
+          },
+          "to": {
+            "block": "result",
+            "port": "in"
+          },
+          "label": "passed"
+        },
+        {
+          "from": {
+            "block": "brief3",
+            "port": "out"
+          },
+          "to": {
+            "block": "brief4",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "try3",
+            "port": "failed"
+          },
+          "to": {
+            "block": "brief4",
+            "port": "in2"
+          },
+          "label": "failed"
+        },
+        {
+          "from": {
+            "block": "brief4",
+            "port": "out"
+          },
+          "to": {
+            "block": "try4",
+            "port": "brief"
+          }
+        },
+        {
+          "from": {
+            "block": "step",
+            "port": "out"
+          },
+          "to": {
+            "block": "try4",
+            "port": "step"
+          }
+        },
+        {
+          "from": {
+            "block": "try4",
+            "port": "passed"
+          },
+          "to": {
+            "block": "result",
+            "port": "in"
+          },
+          "label": "passed"
+        },
+        {
+          "from": {
+            "block": "brief4",
+            "port": "out"
+          },
+          "to": {
+            "block": "brief5",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "try4",
+            "port": "failed"
+          },
+          "to": {
+            "block": "brief5",
+            "port": "in2"
+          },
+          "label": "failed"
+        },
+        {
+          "from": {
+            "block": "brief5",
+            "port": "out"
+          },
+          "to": {
+            "block": "try5",
+            "port": "brief"
+          }
+        },
+        {
+          "from": {
+            "block": "step",
+            "port": "out"
+          },
+          "to": {
+            "block": "try5",
+            "port": "step"
+          }
+        },
+        {
+          "from": {
+            "block": "try5",
+            "port": "passed"
+          },
+          "to": {
+            "block": "result",
+            "port": "in"
+          },
+          "label": "passed"
+        },
+        {
+          "from": {
+            "block": "brief5",
+            "port": "out"
+          },
+          "to": {
+            "block": "brief6",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "try5",
+            "port": "failed"
+          },
+          "to": {
+            "block": "brief6",
+            "port": "in2"
+          },
+          "label": "failed"
+        },
+        {
+          "from": {
+            "block": "step",
+            "port": "out"
+          },
+          "to": {
+            "block": "message",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "result",
+            "port": "out"
+          },
+          "to": {
+            "block": "message",
+            "port": "in2"
+          }
+        },
+        {
+          "from": {
+            "block": "message",
+            "port": "out"
+          },
+          "to": {
+            "block": "show",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "step",
+            "port": "out"
+          },
+          "to": {
+            "block": "add_result",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "result",
+            "port": "out"
+          },
+          "to": {
+            "block": "add_result",
+            "port": "in2"
+          }
+        },
+        {
+          "from": {
+            "block": "add_result",
+            "port": "out"
+          },
+          "to": {
+            "block": "results",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "step",
+            "port": "out"
+          },
+          "to": {
+            "block": "what",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "result",
+            "port": "out"
+          },
+          "to": {
+            "block": "what",
+            "port": "in2"
+          }
+        },
+        {
+          "from": {
+            "block": "what",
+            "port": "out"
+          },
+          "to": {
+            "block": "notes",
+            "port": "what"
+          }
+        },
+        {
+          "from": {
+            "block": "brief6",
+            "port": "out"
+          },
+          "to": {
+            "block": "ask_explain",
+            "port": "in1"
+          },
+          "label": "all 5 failed"
+        },
+        {
+          "from": {
+            "block": "ask_explain",
+            "port": "out"
+          },
+          "to": {
+            "block": "explain",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "brief6",
+            "port": "out"
+          },
+          "to": {
+            "block": "no_explain",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "explain",
+            "port": "error"
+          },
+          "to": {
+            "block": "no_explain",
+            "port": "in2"
+          }
+        },
+        {
+          "from": {
+            "block": "step",
+            "port": "out"
+          },
+          "to": {
+            "block": "fail_message",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "explain",
+            "port": "out"
+          },
+          "to": {
+            "block": "fail_message",
+            "port": "in2"
+          }
+        },
+        {
+          "from": {
+            "block": "no_explain",
+            "port": "out"
+          },
+          "to": {
+            "block": "fail_message",
+            "port": "in2"
+          }
+        },
+        {
+          "from": {
+            "block": "fail_message",
+            "port": "out"
+          },
+          "to": {
+            "block": "show_fail",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "step",
+            "port": "out"
+          },
+          "to": {
+            "block": "reason",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "explain",
+            "port": "out"
+          },
+          "to": {
+            "block": "reason",
+            "port": "in2"
+          }
+        },
+        {
+          "from": {
+            "block": "no_explain",
+            "port": "out"
+          },
+          "to": {
+            "block": "reason",
+            "port": "in2"
+          }
+        },
+        {
+          "from": {
+            "block": "reason",
+            "port": "out"
+          },
+          "to": {
+            "block": "stop",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "step",
+            "port": "out"
+          },
+          "to": {
+            "block": "passed_task",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "result",
+            "port": "out"
+          },
+          "to": {
+            "block": "passed_task",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "passed_task",
+            "port": "yes"
+          },
+          "to": {
+            "block": "done",
+            "port": "task"
+          }
+        },
+        {
+          "from": {
+            "block": "step",
+            "port": "out"
+          },
+          "to": {
+            "block": "failed_task",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "fail_message",
+            "port": "out"
+          },
+          "to": {
+            "block": "failed_task",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "failed_task",
+            "port": "yes"
+          },
+          "to": {
+            "block": "failed",
+            "port": "task"
+          }
+        }
+      ],
+      "notes": [
+        {
+          "id": "n1",
+          "text": "Tries run left to right; each later try is told why the earlier ones didn't pass. The first passing try wins; the rest never run.",
+          "position": {
+            "x": 260,
+            "y": -500
+          },
+          "width": 420,
+          "height": 0
+        }
+      ]
+    },
+    {
+      "id": "make_plan",
+      "name": "Write a plan",
+      "description": "The model writes up to 10 specific steps, then checks the plan (does it get there, is every step concrete, no needless tiny steps). A plan that fails its check is written again once, with the problem. The steps go into the plan outline under the task. Failed sends the error if the model call fails.",
+      "inputs": [
+        {
+          "name": "brief",
+          "label": "What to plan",
+          "to": {
+            "block": "brief",
+            "port": "in"
+          }
+        },
+        {
+          "name": "task",
+          "label": "Task in the outline",
+          "to": {
+            "block": "task",
+            "port": "in"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "steps",
+          "label": "Steps",
+          "from": {
+            "block": "parse",
+            "port": "group1"
+          }
+        },
+        {
+          "name": "failed",
+          "label": "Failed",
+          "from": {
+            "block": "failed",
+            "port": "out"
+          }
+        }
+      ],
+      "blocks": [
+        {
+          "id": "brief",
+          "type": "forward",
+          "label": "What to plan",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "params": {}
+        },
+        {
+          "id": "task",
+          "type": "forward",
+          "label": "Task",
+          "position": {
+            "x": 0,
+            "y": 400
+          },
+          "params": {}
+        },
+        {
+          "id": "ask",
+          "type": "combine",
+          "label": "Ask for a plan",
+          "position": {
+            "x": 260,
+            "y": 0
+          },
+          "params": {
+            "inputs": 1,
+            "format": "_INPUT1_\n\nWrite a plan: the steps to do, in order. Rules:\n- Use as few steps as the work needs (often 2 to 5, never more than 10). Don't split anything that can be done in one go.\n- Make every step specific and concrete: say exactly what to do, with which files, names or values, and what it produces. No vague steps like \"research the topic\" or \"finalize\".\n- Each step must make sense on its own, without reading the others.\nWrite only the steps, one per line, numbered like:\n1. First step\n2. Second step"
+          }
+        },
+        {
+          "id": "plan",
+          "type": "llm",
+          "label": "Write the plan",
+          "position": {
+            "x": 520,
             "y": 0
           },
           "params": {
             "temperature": 0.3,
             "tools": "off"
           },
-          "comment": "Sees the running exchange, including the working notes."
+          "comment": "Only plans; nothing is done yet."
         },
         {
-          "id": "plan",
+          "id": "ask_check",
+          "type": "combine",
+          "label": "Ask about the plan",
+          "position": {
+            "x": 780,
+            "y": -200
+          },
+          "params": {
+            "inputs": 2,
+            "format": "_INPUT1_\n\nThe plan:\n_INPUT2_\n\nCheck this plan. Would doing these steps in order get it done, is every step specific and concrete (it says exactly what to do and what it produces), and are there no needless tiny steps? Start with YES or NO, then give one short reason that says what to fix."
+          }
+        },
+        {
+          "id": "check",
+          "type": "llm",
+          "label": "Is the plan good?",
+          "position": {
+            "x": 1040,
+            "y": -200
+          },
+          "params": {
+            "system": "Answer YES or NO first, then give one short reason.",
+            "temperature": 0.0,
+            "tools": "off"
+          },
+          "comment": "Must start with YES or NO."
+        },
+        {
+          "id": "good",
+          "type": "branch",
+          "label": "Good?",
+          "position": {
+            "x": 1300,
+            "y": 0
+          },
+          "params": {
+            "pattern": "(?i)^\\W*yes|^\\s*$"
+          }
+        },
+        {
+          "id": "why",
+          "type": "branch",
+          "label": "Problem if not",
+          "position": {
+            "x": 1300,
+            "y": -200
+          },
+          "params": {
+            "pattern": "(?i)^\\W*yes|^\\s*$"
+          }
+        },
+        {
+          "id": "unchecked",
+          "type": "branch",
+          "label": "Check failed",
+          "position": {
+            "x": 1300,
+            "y": 200
+          },
+          "params": {
+            "pattern": "(?s)."
+          },
+          "comment": "If the check can't run, the plan is used as it is."
+        },
+        {
+          "id": "ask_again",
+          "type": "combine",
+          "label": "Ask again",
+          "position": {
+            "x": 1560,
+            "y": -200
+          },
+          "params": {
+            "inputs": 3,
+            "format": "_INPUT1_\n\nA first plan was:\n_INPUT2_\n\nIts problem: _INPUT3_\n\nWrite a plan: the steps to do, in order. Rules:\n- Use as few steps as the work needs (often 2 to 5, never more than 10). Don't split anything that can be done in one go.\n- Make every step specific and concrete: say exactly what to do, with which files, names or values, and what it produces. No vague steps like \"research the topic\" or \"finalize\".\n- Each step must make sense on its own, without reading the others.\nWrite only the steps, one per line, numbered like:\n1. First step\n2. Second step"
+          }
+        },
+        {
+          "id": "again",
+          "type": "llm",
+          "label": "Write it again",
+          "position": {
+            "x": 1820,
+            "y": -200
+          },
+          "params": {
+            "temperature": 0.3,
+            "tools": "off"
+          },
+          "comment": "Only once, so planning can't loop."
+        },
+        {
+          "id": "final",
           "type": "forward",
           "label": "The plan",
           "position": {
-            "x": 1300,
+            "x": 2080,
             "y": 0
           },
           "params": {}
@@ -2568,179 +4028,238 @@
         {
           "id": "parse",
           "type": "capture",
-          "label": "Steps",
+          "label": "Its steps (1–10)",
           "position": {
-            "x": 1560,
+            "x": 2340,
             "y": 0
           },
           "params": {
-            "pattern": "(?m)^\\s*\\d+[.)]\\s*(.+?)\\s*$"
-          }
-        },
-        {
-          "id": "message",
-          "type": "combine",
-          "label": "Plan message",
-          "position": {
-            "x": 1560,
-            "y": 200
+            "pattern": "(?m)^\\s*(?:10|[1-9])[.)]\\s*(.+?)\\s*$"
           },
-          "params": {
-            "inputs": 2,
-            "format": "**▾ Too big for one go, so I broke it down.** The whole plan now:\n_INPUT2_"
-          },
-          "comment": "Shows the whole plan, indented by level: ✓ done, ✗ failed, ○ to do, ▾ broken down (the task just split). Waits for the task too, so it shows once per plan."
-        },
-        {
-          "id": "after",
-          "type": "augment",
-          "label": "Add the plan",
-          "position": {
-            "x": 1560,
-            "y": -200
-          },
-          "params": {
-            "role": "assistant",
-            "format": "I broke this task into smaller steps:\n_INPUT_"
-          }
-        },
-        {
-          "id": "verify",
-          "type": "function",
-          "label": "Verify the plan",
-          "position": {
-            "x": 1040,
-            "y": 0
-          },
-          "params": {
-            "function": "verify"
-          }
-        },
-        {
-          "id": "with_plan",
-          "type": "augment",
-          "label": "Keep the first plan",
-          "position": {
-            "x": 1040,
-            "y": 250
-          },
-          "params": {
-            "role": "assistant",
-            "format": "_INPUT_"
-          }
-        },
-        {
-          "id": "checked",
-          "type": "branch",
-          "label": "Passed the check?",
-          "position": {
-            "x": 1300,
-            "y": 250
-          },
-          "params": {
-            "pattern": "(?i)^\\W*yes|^\\s*$"
-          }
-        },
-        {
-          "id": "feedback",
-          "type": "augment",
-          "label": "Explain the failed check",
-          "position": {
-            "x": 1300,
-            "y": 450
-          },
-          "params": {
-            "role": "user",
-            "format": "That plan didn't pass this check: _INPUT_\n\nWrite a better plan in the same format."
-          }
-        },
-        {
-          "id": "again",
-          "type": "llm",
-          "label": "Plan again",
-          "position": {
-            "x": 1040,
-            "y": 450
-          },
-          "params": {
-            "temperature": 0.3,
-            "tools": "off"
-          },
-          "comment": "Only once, so a plan can't loop."
+          "comment": "Only steps numbered 1 to 10 count."
         },
         {
           "id": "outline",
           "type": "outline",
-          "label": "Add to the plan outline",
+          "label": "Add to the outline",
           "position": {
-            "x": 1820,
+            "x": 2600,
             "y": 0
           },
           "params": {
             "action": "add_steps",
-            "limit": 5
+            "limit": 10
           },
-          "comment": "Puts the new steps under this task (at most 5, like Up to 5 steps)."
+          "comment": "Puts the steps under the task in {{plan}}."
         },
         {
-          "id": "fail_text",
-          "type": "combine",
-          "label": "Explain the failure",
+          "id": "failed",
+          "type": "forward",
+          "label": "Failed",
           "position": {
             "x": 1040,
-            "y": 700
+            "y": 300
           },
-          "params": {
-            "inputs": 1,
-            "format": "(I couldn't break this task down: _INPUT1_)"
-          },
-          "comment": "If planning fails, say so; no steps are added."
+          "params": {}
         }
       ],
       "links": [
         {
           "from": {
-            "block": "entry",
+            "block": "brief",
             "port": "out"
           },
           "to": {
             "block": "ask",
-            "port": "exchange"
+            "port": "in1"
           }
         },
         {
           "from": {
-            "block": "entry",
+            "block": "ask",
             "port": "out"
           },
           "to": {
-            "block": "which",
+            "block": "plan",
             "port": "in"
           }
         },
         {
           "from": {
-            "block": "which",
-            "port": "last"
+            "block": "brief",
+            "port": "out"
           },
           "to": {
-            "block": "ask",
-            "port": "in"
+            "block": "ask_check",
+            "port": "in1"
           }
         },
         {
           "from": {
-            "block": "ask",
+            "block": "plan",
             "port": "out"
           },
           "to": {
-            "block": "sub",
+            "block": "ask_check",
+            "port": "in2"
+          }
+        },
+        {
+          "from": {
+            "block": "ask_check",
+            "port": "out"
+          },
+          "to": {
+            "block": "check",
             "port": "in"
           }
         },
         {
           "from": {
             "block": "plan",
+            "port": "out"
+          },
+          "to": {
+            "block": "good",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "check",
+            "port": "out"
+          },
+          "to": {
+            "block": "good",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "good",
+            "port": "yes"
+          },
+          "to": {
+            "block": "final",
+            "port": "in"
+          },
+          "label": "good"
+        },
+        {
+          "from": {
+            "block": "check",
+            "port": "out"
+          },
+          "to": {
+            "block": "why",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "check",
+            "port": "out"
+          },
+          "to": {
+            "block": "why",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "brief",
+            "port": "out"
+          },
+          "to": {
+            "block": "ask_again",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "plan",
+            "port": "out"
+          },
+          "to": {
+            "block": "ask_again",
+            "port": "in2"
+          }
+        },
+        {
+          "from": {
+            "block": "why",
+            "port": "no"
+          },
+          "to": {
+            "block": "ask_again",
+            "port": "in3"
+          },
+          "label": "the problem"
+        },
+        {
+          "from": {
+            "block": "ask_again",
+            "port": "out"
+          },
+          "to": {
+            "block": "again",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "again",
+            "port": "out"
+          },
+          "to": {
+            "block": "final",
+            "port": "in"
+          },
+          "label": "the new plan"
+        },
+        {
+          "from": {
+            "block": "plan",
+            "port": "out"
+          },
+          "to": {
+            "block": "unchecked",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "check",
+            "port": "error"
+          },
+          "to": {
+            "block": "unchecked",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "unchecked",
+            "port": "yes"
+          },
+          "to": {
+            "block": "final",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "again",
+            "port": "error"
+          },
+          "to": {
+            "block": "unchecked",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "final",
             "port": "out"
           },
           "to": {
@@ -2750,148 +4269,8 @@
         },
         {
           "from": {
-            "block": "plan",
+            "block": "task",
             "port": "out"
-          },
-          "to": {
-            "block": "after",
-            "port": "in"
-          }
-        },
-        {
-          "from": {
-            "block": "which",
-            "port": "last"
-          },
-          "to": {
-            "block": "message",
-            "port": "in1"
-          }
-        },
-        {
-          "from": {
-            "block": "entry",
-            "port": "out"
-          },
-          "to": {
-            "block": "after",
-            "port": "exchange"
-          }
-        },
-        {
-          "from": {
-            "block": "which",
-            "port": "last"
-          },
-          "to": {
-            "block": "verify",
-            "port": "request"
-          }
-        },
-        {
-          "from": {
-            "block": "sub",
-            "port": "out"
-          },
-          "to": {
-            "block": "verify",
-            "port": "answer"
-          }
-        },
-        {
-          "from": {
-            "block": "verify",
-            "port": "passed"
-          },
-          "to": {
-            "block": "plan",
-            "port": "in"
-          }
-        },
-        {
-          "from": {
-            "block": "ask",
-            "port": "out"
-          },
-          "to": {
-            "block": "with_plan",
-            "port": "exchange"
-          }
-        },
-        {
-          "from": {
-            "block": "sub",
-            "port": "out"
-          },
-          "to": {
-            "block": "with_plan",
-            "port": "in"
-          }
-        },
-        {
-          "from": {
-            "block": "with_plan",
-            "port": "out"
-          },
-          "to": {
-            "block": "checked",
-            "port": "value"
-          }
-        },
-        {
-          "from": {
-            "block": "verify",
-            "port": "verdict"
-          },
-          "to": {
-            "block": "checked",
-            "port": "test"
-          }
-        },
-        {
-          "from": {
-            "block": "checked",
-            "port": "no"
-          },
-          "to": {
-            "block": "feedback",
-            "port": "exchange"
-          }
-        },
-        {
-          "from": {
-            "block": "verify",
-            "port": "failed"
-          },
-          "to": {
-            "block": "feedback",
-            "port": "in"
-          }
-        },
-        {
-          "from": {
-            "block": "feedback",
-            "port": "out"
-          },
-          "to": {
-            "block": "again",
-            "port": "in"
-          }
-        },
-        {
-          "from": {
-            "block": "again",
-            "port": "out"
-          },
-          "to": {
-            "block": "plan",
-            "port": "in"
-          }
-        },
-        {
-          "from": {
-            "block": "which",
-            "port": "last"
           },
           "to": {
             "block": "outline",
@@ -2910,55 +4289,691 @@
         },
         {
           "from": {
-            "block": "outline",
-            "port": "out"
-          },
-          "to": {
-            "block": "message",
-            "port": "in2"
-          },
-          "label": "the whole plan"
-        },
-        {
-          "from": {
-            "block": "sub",
+            "block": "plan",
             "port": "error"
           },
           "to": {
-            "block": "fail_text",
-            "port": "in1"
+            "block": "failed",
+            "port": "in"
           },
-          "label": "planning failed"
-        },
+          "label": "couldn't plan"
+        }
+      ]
+    },
+    {
+      "id": "plan_step",
+      "name": "Plan a step",
+      "description": "The model says whether this step can be done in one go. If it can, the step is added to the steps to do ({{steps}}). If not, it gets its own plan of up to 10 steps, and those are added instead. A failed judgement or plan keeps the step as it is.",
+      "inputs": [
         {
-          "from": {
-            "block": "again",
-            "port": "error"
-          },
+          "name": "step",
+          "label": "Step",
           "to": {
-            "block": "fail_text",
-            "port": "in1"
+            "block": "step",
+            "port": "in"
+          }
+        }
+      ],
+      "outputs": [],
+      "blocks": [
+        {
+          "id": "step",
+          "type": "forward",
+          "label": "Step",
+          "position": {
+            "x": 0,
+            "y": 0
           },
-          "label": "planning failed"
+          "params": {}
         },
         {
+          "id": "ask",
+          "type": "combine",
+          "label": "Ask about the step",
+          "position": {
+            "x": 260,
+            "y": -200
+          },
+          "params": {
+            "inputs": 1,
+            "format": "The user's goal:\n{{goal}}\n\nThe whole plan:\n{{plan}}\n\nOne step of it: _INPUT1_\n\nCould you do this step in one go: one answer, using tools if needed? Most steps can. Only if it clearly needs several separate pieces of work, say BREAK DOWN. Reply with only ONE GO or BREAK DOWN, then one short reason."
+          }
+        },
+        {
+          "id": "judge",
+          "type": "llm",
+          "label": "One go?",
+          "position": {
+            "x": 520,
+            "y": -200
+          },
+          "params": {
+            "system": "Reply ONE GO or BREAK DOWN, then one short reason.",
+            "temperature": 0.0,
+            "tools": "off"
+          },
+          "comment": "A blank answer counts as one go."
+        },
+        {
+          "id": "one_go",
+          "type": "branch",
+          "label": "One go",
+          "position": {
+            "x": 780,
+            "y": 0
+          },
+          "params": {
+            "pattern": "(?i)^\\W*one\\s*-?\\s*go|^\\s*$"
+          }
+        },
+        {
+          "id": "judge_failed",
+          "type": "branch",
+          "label": "Judgement failed",
+          "position": {
+            "x": 780,
+            "y": 200
+          },
+          "params": {
+            "pattern": "(?s)."
+          },
+          "comment": "If the model call fails, keep the step as it is."
+        },
+        {
+          "id": "sub_brief",
+          "type": "combine",
+          "label": "Plan this step",
+          "position": {
+            "x": 1040,
+            "y": -200
+          },
+          "params": {
+            "inputs": 1,
+            "format": "The user's goal:\n{{goal}}\n\nThe whole plan so far:\n{{plan}}\n\nThis step of the plan is too big for one go, so plan it in smaller steps: _INPUT1_"
+          }
+        },
+        {
+          "id": "sub",
+          "type": "function",
+          "label": "Write a plan",
+          "position": {
+            "x": 1300,
+            "y": -200
+          },
+          "params": {
+            "function": "make_plan"
+          },
+          "comment": "One level down: these steps aren't broken down again."
+        },
+        {
+          "id": "joined",
+          "type": "join",
+          "label": "One per line",
+          "position": {
+            "x": 1560,
+            "y": -200
+          },
+          "params": {
+            "separator": "\\n"
+          }
+        },
+        {
+          "id": "any",
+          "type": "branch",
+          "label": "Any steps?",
+          "position": {
+            "x": 1820,
+            "y": -200
+          },
+          "params": {
+            "pattern": "\\S"
+          }
+        },
+        {
+          "id": "none",
+          "type": "branch",
+          "label": "No steps",
+          "position": {
+            "x": 1820,
+            "y": 0
+          },
+          "params": {
+            "pattern": "\\S"
+          },
+          "comment": "A plan with no numbered steps keeps the step as it is."
+        },
+        {
+          "id": "plan_failed",
+          "type": "branch",
+          "label": "Plan failed",
+          "position": {
+            "x": 1560,
+            "y": 100
+          },
+          "params": {
+            "pattern": "(?s)."
+          }
+        },
+        {
+          "id": "add",
+          "type": "combine",
+          "label": "Add to the steps",
+          "position": {
+            "x": 2080,
+            "y": 0
+          },
+          "params": {
+            "inputs": 1,
+            "format": "{{steps}}\n_INPUT1_"
+          }
+        },
+        {
+          "id": "save",
+          "type": "store",
+          "label": "Save the steps",
+          "position": {
+            "x": 2340,
+            "y": 0
+          },
+          "params": {
+            "key": "steps",
+            "max_chars": 50000
+          },
+          "comment": "The steps to do, one per line, in order."
+        }
+      ],
+      "links": [
+        {
           "from": {
-            "block": "fail_text",
+            "block": "step",
             "port": "out"
           },
           "to": {
-            "block": "message",
-            "port": "in2"
+            "block": "ask",
+            "port": "in1"
           }
         },
         {
           "from": {
-            "block": "fail_text",
+            "block": "ask",
             "port": "out"
           },
           "to": {
-            "block": "after",
+            "block": "judge",
             "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "step",
+            "port": "out"
+          },
+          "to": {
+            "block": "one_go",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "judge",
+            "port": "out"
+          },
+          "to": {
+            "block": "one_go",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "one_go",
+            "port": "yes"
+          },
+          "to": {
+            "block": "add",
+            "port": "in1"
+          },
+          "label": "one go: do it as it is"
+        },
+        {
+          "from": {
+            "block": "step",
+            "port": "out"
+          },
+          "to": {
+            "block": "judge_failed",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "judge",
+            "port": "error"
+          },
+          "to": {
+            "block": "judge_failed",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "judge_failed",
+            "port": "yes"
+          },
+          "to": {
+            "block": "add",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "one_go",
+            "port": "no"
+          },
+          "to": {
+            "block": "sub_brief",
+            "port": "in1"
+          },
+          "label": "break down"
+        },
+        {
+          "from": {
+            "block": "sub_brief",
+            "port": "out"
+          },
+          "to": {
+            "block": "sub",
+            "port": "brief"
+          }
+        },
+        {
+          "from": {
+            "block": "one_go",
+            "port": "no"
+          },
+          "to": {
+            "block": "sub",
+            "port": "task"
+          }
+        },
+        {
+          "from": {
+            "block": "sub",
+            "port": "steps"
+          },
+          "to": {
+            "block": "joined",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "joined",
+            "port": "out"
+          },
+          "to": {
+            "block": "any",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "joined",
+            "port": "out"
+          },
+          "to": {
+            "block": "any",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "any",
+            "port": "yes"
+          },
+          "to": {
+            "block": "add",
+            "port": "in1"
+          },
+          "label": "its steps"
+        },
+        {
+          "from": {
+            "block": "one_go",
+            "port": "no"
+          },
+          "to": {
+            "block": "none",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "joined",
+            "port": "out"
+          },
+          "to": {
+            "block": "none",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "none",
+            "port": "no"
+          },
+          "to": {
+            "block": "add",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "one_go",
+            "port": "no"
+          },
+          "to": {
+            "block": "plan_failed",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "sub",
+            "port": "failed"
+          },
+          "to": {
+            "block": "plan_failed",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "plan_failed",
+            "port": "yes"
+          },
+          "to": {
+            "block": "add",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "add",
+            "port": "out"
+          },
+          "to": {
+            "block": "save",
+            "port": "in"
+          }
+        }
+      ]
+    },
+    {
+      "id": "full_plan",
+      "name": "Make the full plan",
+      "description": "Plans the goal in up to 10 steps, then goes through them in order: each step the model can't do in one go gets its own plan right away (depth first, at most two levels). Nothing is done yet. The steps to do end up in {{steps}}, one per line, and the outline in {{plan}}. Planned fires once, when all of it is finished.",
+      "inputs": [
+        {
+          "name": "goal",
+          "label": "Goal",
+          "to": {
+            "block": "goal",
+            "port": "in"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "planned",
+          "label": "Planned",
+          "from": {
+            "block": "goal",
+            "port": "out"
+          }
+        }
+      ],
+      "blocks": [
+        {
+          "id": "goal",
+          "type": "forward",
+          "label": "Goal",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "params": {}
+        },
+        {
+          "id": "brief",
+          "type": "combine",
+          "label": "What to plan",
+          "position": {
+            "x": 260,
+            "y": 0
+          },
+          "params": {
+            "inputs": 1,
+            "format": "Recent conversation:\n{{conversation}}\n\nThe user's goal:\n_INPUT1_\n\nYour working notes:\n{{notes}}"
+          }
+        },
+        {
+          "id": "plan",
+          "type": "function",
+          "label": "Write a plan",
+          "position": {
+            "x": 520,
+            "y": 0
+          },
+          "params": {
+            "function": "make_plan"
+          }
+        },
+        {
+          "id": "each",
+          "type": "for_each",
+          "label": "Each step, in order",
+          "position": {
+            "x": 780,
+            "y": 0
+          },
+          "params": {
+            "limit": 10
+          }
+        },
+        {
+          "id": "step",
+          "type": "function",
+          "label": "Plan a step",
+          "position": {
+            "x": 1040,
+            "y": 0
+          },
+          "params": {
+            "function": "plan_step"
+          },
+          "comment": "Runs once per step, finishing each (and its own plan) before the next: depth first."
+        },
+        {
+          "id": "failed",
+          "type": "store",
+          "label": "Note the failure",
+          "position": {
+            "x": 780,
+            "y": 250
+          },
+          "params": {
+            "key": "plan_error",
+            "max_chars": 1000
+          },
+          "comment": "If planning fails, there are no steps and the goal is done as one step."
+        }
+      ],
+      "links": [
+        {
+          "from": {
+            "block": "goal",
+            "port": "out"
+          },
+          "to": {
+            "block": "brief",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "brief",
+            "port": "out"
+          },
+          "to": {
+            "block": "plan",
+            "port": "brief"
+          }
+        },
+        {
+          "from": {
+            "block": "goal",
+            "port": "out"
+          },
+          "to": {
+            "block": "plan",
+            "port": "task"
+          }
+        },
+        {
+          "from": {
+            "block": "plan",
+            "port": "steps"
+          },
+          "to": {
+            "block": "each",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "each",
+            "port": "out"
+          },
+          "to": {
+            "block": "step",
+            "port": "step"
+          },
+          "label": "each step"
+        },
+        {
+          "from": {
+            "block": "plan",
+            "port": "failed"
+          },
+          "to": {
+            "block": "failed",
+            "port": "in"
+          }
+        }
+      ]
+    },
+    {
+      "id": "carry_out",
+      "name": "Carry out the plan",
+      "description": "Does the steps to do one at a time, in order, each with Do a step. Finished fires once, after the last step. If a step fails all its tries, the run stops there.",
+      "inputs": [
+        {
+          "name": "steps",
+          "label": "Steps (one per line)",
+          "to": {
+            "block": "steps",
+            "port": "in"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "finished",
+          "label": "Finished",
+          "from": {
+            "block": "steps",
+            "port": "out"
+          }
+        }
+      ],
+      "blocks": [
+        {
+          "id": "steps",
+          "type": "forward",
+          "label": "Steps",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "params": {}
+        },
+        {
+          "id": "lines",
+          "type": "regex",
+          "label": "One per line",
+          "position": {
+            "x": 260,
+            "y": 0
+          },
+          "params": {
+            "pattern": "[^\\n]*\\S[^\\n]*"
+          }
+        },
+        {
+          "id": "each",
+          "type": "for_each",
+          "label": "Each step, in order",
+          "position": {
+            "x": 520,
+            "y": 0
+          },
+          "params": {
+            "limit": 0
+          }
+        },
+        {
+          "id": "do",
+          "type": "function",
+          "label": "Do a step",
+          "position": {
+            "x": 780,
+            "y": 0
+          },
+          "params": {
+            "function": "do_step"
+          },
+          "comment": "Each step finishes (result, notes) before the next starts."
+        }
+      ],
+      "links": [
+        {
+          "from": {
+            "block": "steps",
+            "port": "out"
+          },
+          "to": {
+            "block": "lines",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "lines",
+            "port": "out"
+          },
+          "to": {
+            "block": "each",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "each",
+            "port": "out"
+          },
+          "to": {
+            "block": "do",
+            "port": "step"
           }
         }
       ]
@@ -2967,23 +4982,13 @@
   "notes": [
     {
       "id": "n1",
-      "text": "Chummy assistant\n\n1. Clarify: one question to you if the request is unclear.\n2. Attempt: try each task now, with checked tool calls; ask you if stuck.\n3. Plan: tasks that are too big become up to 5 steps, done breadth-first.\n4. Notes: after every result and plan, the model updates its working notes ({{notes}}).\n5. Plan outline: the whole plan, nested and ticked as tasks finish, is shown after every breakdown ({{plan}}).\n\nDouble-click a function block to see inside.",
+      "text": "Chummy assistant\n\n1. Clarify: one question to you if the request is unclear.\n2. One go? If the model can do it all at once, it tries (twice at most, each result checked). If that fails, it plans.\n3. Plan: the whole plan first, nothing done yet. Up to 10 specific steps, checked; each step too big for one go gets its own plan, depth first, two levels at most.\n4. Carry out: each step in order, up to 5 tries, every tool call and result checked. A step that fails all 5 is explained, and the run stops.\n5. Context: {{goal}}, {{plan}}, {{notes}} (rewritten by the model after the plan and each step) and {{results}}.\n\nDouble-click a function block to see inside.",
       "position": {
         "x": 0,
         "y": 500
       },
-      "width": 440,
-      "height": 230
-    },
-    {
-      "id": "n2",
-      "text": "Each task pairs with the running exchange at Next task, so the model always sees the goal and everything done so far.",
-      "position": {
-        "x": 1200,
-        "y": -450
-      },
-      "width": 380,
-      "height": 0
+      "width": 460,
+      "height": 300
     }
   ]
 }

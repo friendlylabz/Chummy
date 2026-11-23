@@ -30,6 +30,23 @@ pub fn valid_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+/// Fingerprints of built-in loops that have since been replaced. A saved
+/// copy that still matches one exactly was never edited, so it's upgraded.
+/// Add the old built-in's fingerprint here whenever a built-in changes.
+const RETIRED: &[&str] = &[
+    // Chummy assistant, format 3, before "one go, or plan fully first" (Nov 2026).
+    "824d111054b29bc81b7a6d16b6d33e77050c8cac08f12df830ade4a77d54a8f2",
+];
+
+/// A loop's content as a SHA-256 hex string.
+pub fn fingerprint(l: &LoopFile) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(l.to_json().as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 impl Library {
     pub fn new(dir: &Path) -> Self {
         Self {
@@ -37,12 +54,16 @@ impl Library {
         }
     }
 
-    /// Copies of the built-in loops saved before loop format 3 are replaced
-    /// by the current built-in, keeping their id (so agents keep using them).
-    /// Format 3 made blocks inherit the agent's tools and the model's
-    /// settings, and fixed blank clarifying questions. Other loops are only
-    /// upgraded as they're read (see `LoopFile::from_json`).
+    /// Saved copies of built-in loops that are out of date are replaced by
+    /// the current built-in with the same name, keeping their id (so agents
+    /// keep using them): copies saved before loop format 3, and unedited
+    /// copies of a retired version (see [`RETIRED`]). Edited copies of
+    /// format 3 or later are left alone.
     pub fn upgrade_builtins(&self) -> Vec<String> {
+        self.upgrade_builtins_with(RETIRED)
+    }
+
+    fn upgrade_builtins_with(&self, retired_prints: &[&str]) -> Vec<String> {
         let builtins = chummy_flow::templates();
         let mut done = Vec::new();
         for e in std::fs::read_dir(&self.dir).into_iter().flatten().flatten() {
@@ -56,13 +77,18 @@ impl Library {
             let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) else {
                 continue;
             };
-            if json.get("version").and_then(|v| v.as_u64()).unwrap_or(0) >= 3 {
-                continue;
-            }
             let name = json.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let Some(t) = builtins.iter().find(|t| t.file.name == name) else {
                 continue;
             };
+            let old_format = json.get("version").and_then(|v| v.as_u64()).unwrap_or(0) < 3;
+            let retired = || {
+                LoopFile::from_json(&raw)
+                    .is_ok_and(|l| retired_prints.contains(&fingerprint(&l).as_str()))
+            };
+            if !old_format && !retired() {
+                continue;
+            }
             if std::fs::write(&p, t.file.to_json()).is_ok() {
                 done.push(name.to_string());
             }
@@ -231,5 +257,40 @@ mod tests {
             other
         );
         assert!(lib.upgrade_builtins().is_empty(), "only once");
+    }
+
+    #[test]
+    fn unedited_copies_of_retired_built_ins_are_replaced() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = Library::new(tmp.path());
+        let current = chummy_flow::templates()
+            .into_iter()
+            .find(|t| t.id == chummy_flow::ASSISTANT)
+            .unwrap()
+            .file;
+        // Stand-ins for an old version, and for an edited copy of it.
+        let mut old = current.clone();
+        old.description = "An older version.".into();
+        let mut edited = old.clone();
+        edited.limits.max_steps = 123;
+        std::fs::write(tmp.path().join("old.json"), old.to_json()).unwrap();
+        std::fs::write(tmp.path().join("edited.json"), edited.to_json()).unwrap();
+        let print = fingerprint(&old);
+        assert_eq!(
+            lib.upgrade_builtins_with(&[print.as_str()]),
+            std::slice::from_ref(&current.name)
+        );
+        assert_eq!(lib.load("old").unwrap(), current);
+        assert_eq!(lib.load("edited").unwrap(), edited, "edits are kept");
+        // The real list holds proper fingerprints.
+        assert!(
+            RETIRED
+                .iter()
+                .all(|p| p.len() == 64 && p.chars().all(|c| c.is_ascii_hexdigit()))
+        );
+        assert!(
+            !RETIRED.contains(&fingerprint(&current).as_str()),
+            "the current one isn't retired"
+        );
     }
 }

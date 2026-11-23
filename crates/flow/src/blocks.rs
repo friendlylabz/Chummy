@@ -562,6 +562,8 @@ pub enum BlockKind {
     History(HistoryParams),
     Fixed(FixedParams),
     Output(Empty),
+    /// Ends the run as failed, with its input as the reason.
+    Stop(Empty),
     Llm(LlmParams),
     Combine(CombineParams),
     Forward(Empty),
@@ -613,6 +615,7 @@ impl BlockKind {
         match self {
             Input(_) | History(_) | Fixed(_) | Function(_) => vec![],
             Output(_) | Split(_) | Regex(_) | Capture(_) => vec![port("in", "In", Text)],
+            Stop(_) => vec![port("in", "Reason", Text)],
             Llm(_) | AskUser(_) => vec![port("in", "In", Any)],
             DeclineCalls(_) => vec![
                 port("in", "Tool call", ValueKind::Exchange),
@@ -653,7 +656,7 @@ impl BlockKind {
         use BlockKind::*;
         use ValueKind::*;
         match self {
-            Output(_) | Function(_) => vec![],
+            Output(_) | Stop(_) | Function(_) => vec![],
             Llm(p) => {
                 let mut v = vec![port("out", "Answer", Text)];
                 if p.tools.any() && p.tool_mode != ToolMode::Off {
@@ -716,6 +719,7 @@ impl BlockKind {
             History(_) => "history",
             Fixed(_) => "fixed",
             Output(_) => "output",
+            Stop(_) => "stop",
             Llm(_) => "llm",
             Combine(_) => "combine",
             Forward(_) => "forward",
@@ -1400,6 +1404,14 @@ pub fn catalog() -> Vec<BlockInfo> {
             "Reply",
             Finish,
             "Sends its input to the chat as the agent's reply. If it runs more than once, each part is added to the reply.",
+            vec![],
+            json!({}),
+        ),
+        info(
+            "stop",
+            "Stop with error",
+            Finish,
+            "Ends the whole run as failed, with its input as the reason. Anything still waiting is dropped. Use it after a Reply that explains what went wrong.",
             vec![],
             json!({}),
         ),

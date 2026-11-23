@@ -339,7 +339,7 @@
           },
           "params": {
             "inputs": 2,
-            "format": "(?i)^\\W*question\\s*:\\s*\\S"
+            "format": "Request: _INPUT1_\n\nAnswer: _INPUT2_\n\nWrite one yes-or-no question that checks this answer against the request, such as \"Does this answer make sense given the request?\" Write only the question."
           }
         },
         {

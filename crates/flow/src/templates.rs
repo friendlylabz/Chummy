@@ -177,7 +177,7 @@ pub fn templates() -> Vec<Template> {
         Template {
             id: ASSISTANT,
             name: "Chummy assistant",
-            description: "The default: asks if your request is unclear, tries it with tools (each call checked first), breaks anything too big into steps, checks every result and plan, keeps working notes, and carries on past failures.",
+            description: "The default: asks if your request is unclear, does it in one go if it can, otherwise plans everything first (checked, specific steps), then does each step with up to 5 checked tries. Every tool call is checked, and it keeps working notes. Stops with a reason if a step can't be done.",
             file: assistant,
         },
         Template {
@@ -502,130 +502,6 @@ mod tests {
         assert_eq!(out.waiting, vec!["pair"]);
     }
 
-    #[tokio::test]
-    async fn the_assistant_one_shots_with_a_checked_tool_call() {
-        let host = Planner::default();
-        let out = plan_run(ASSISTANT, &host, "What's the date?").await;
-        assert_eq!(out.status, RunStatus::Completed, "{out:?}");
-        assert_eq!(
-            out.replies,
-            ["**✓ Task: What's the date?**\n\nDone: Monday"]
-        );
-        assert_eq!(*host.tools_run.lock().unwrap(), ["current_time"]);
-        // The notes were rewritten after the result.
-        assert_eq!(*host.notes_updates.lock().unwrap(), 1);
-        assert!(
-            host.asked.lock().unwrap().is_empty(),
-            "a clear request asks nothing"
-        );
-    }
-
-    #[tokio::test]
-    async fn the_assistant_plans_and_keeps_notes() {
-        let host = Planner::default();
-        let out = plan_run(ASSISTANT, &host, "Write about today").await;
-        assert_eq!(out.status, RunStatus::Completed, "{out:?}");
-        let r = &out.replies;
-        // Every breakdown shows the whole plan, nested, with finished tasks
-        // ticked.
-        assert_eq!(
-            r[0],
-            "**▾ Too big for one go, so I broke it down.** The whole plan now:\n\
-             ▾ 1. Write about today\n    ○ 1.1. Find today's date\n    ○ 1.2. Pick a topic\n    ○ 1.3. Write a summary"
-        );
-        assert_eq!(r[1], "**✓ Task: Find today's date**\n\nDone: Monday");
-        let second = r
-            .iter()
-            .find(|m| m.contains("▾ 1.3. Write a summary"))
-            .unwrap();
-        assert!(
-            second.ends_with(
-                "✓ 1.1. Find today's date\n    ✓ 1.2. Pick a topic\n    ▾ 1.3. Write a summary\n        \
-                 ○ 1.3.1. Gather notes\n        ○ 1.3.2. Write two lines"
-            ),
-            "{second}"
-        );
-        // The model sees the plan too.
-        assert!(
-            host.systems
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|s| s.contains("○ 1.3. Write a summary"))
-        );
-        // Notes: written after every result and plan, and seen afterwards.
-        let updates = *host.notes_updates.lock().unwrap() as usize;
-        assert_eq!(updates, r.len());
-        let systems = host.systems.lock().unwrap();
-        assert!(systems.iter().any(|s| s.contains("(nothing yet)")));
-        assert!(
-            systems
-                .iter()
-                .any(|s| s.contains(&format!("- update {}", updates - 1)))
-        );
-    }
-
-    #[tokio::test]
-    async fn the_assistant_asks_when_unclear_or_stuck() {
-        // Unclear: one question first, and the answer joins the request.
-        let host = Planner {
-            picky: true,
-            ..Default::default()
-        };
-        host.answers.lock().unwrap().push("Gardening".into());
-        let out = plan_run(ASSISTANT, &host, "Write a line about it").await;
-        assert_eq!(out.status, RunStatus::Completed, "{out:?}");
-        assert_eq!(*host.asked.lock().unwrap(), ["Which topic do you mean?"]);
-        // The heading shows the request's first line; the model sees the
-        // answer too.
-        assert_eq!(
-            out.replies[0],
-            "**✓ Task: Write a line about it**\n\ndid it"
-        );
-        assert!(
-            host.lasts
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|m| m.contains("The user answered: Gardening"))
-        );
-
-        // Stuck: the model asks a QUESTION mid-task and goes on with the answer.
-        let host = Planner::default();
-        host.answers.lock().unwrap().push("Blue".into());
-        let out = plan_run(ASSISTANT, &host, "Paint it, ask me first").await;
-        assert_eq!(out.status, RunStatus::Completed, "{out:?}");
-        assert_eq!(*host.asked.lock().unwrap(), ["QUESTION: Which colour?"]);
-        assert_eq!(
-            out.replies,
-            ["**✓ Task: Paint it, ask me first**\n\ndid it"]
-        );
-
-        // Nobody to ask: it carries on with its best judgement.
-        let host = Planner::default();
-        let out = plan_run(ASSISTANT, &host, "Paint it, ask me first").await;
-        assert_eq!(out.status, RunStatus::Completed, "{out:?}");
-        assert_eq!(out.replies.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn blank_judges_never_ask_or_block() {
-        // A thinking model's judge reply can be empty once its thinking is
-        // removed: that counts as clear, approved and passed.
-        let host = Planner {
-            blank: true,
-            ..Default::default()
-        };
-        let out = plan_run(ASSISTANT, &host, "What's the date?").await;
-        assert_eq!(out.status, RunStatus::Completed, "{out:?}");
-        assert!(host.asked.lock().unwrap().is_empty(), "no empty question");
-        assert_eq!(*host.tools_run.lock().unwrap(), ["current_time"]);
-        assert_eq!(
-            out.replies,
-            ["**✓ Task: What's the date?**\n\nDone: Monday"]
-        );
-    }
-
     #[test]
     fn only_the_working_blocks_get_tools() {
         use crate::blocks::{BlockKind, Switch};
@@ -656,69 +532,544 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn the_assistant_declines_bad_tool_calls() {
-        let host = Planner {
-            decline: true,
+    // ------------------------------------------------------------------
+    // The Chummy assistant: one go, or plan fully first, then carry out.
+
+    /// A scripted model for the assistant. It recognises each kind of call by
+    /// its prompt and answers as set up.
+    #[derive(Default)]
+    struct Scripted {
+        /// The one-go judge says ONE GO.
+        one_go: bool,
+        /// The plan for the goal (numbered lines).
+        plan: &'static str,
+        /// Steps the step judge says are too big, with their own plans.
+        big: Vec<(&'static str, &'static str)>,
+        /// The first plan check says NO (too vague); the plan written again is this.
+        vague_first: Option<&'static str>,
+        /// Results for anything containing the key fail their check this many
+        /// times (u32::MAX: always).
+        failing: Mutex<Vec<(&'static str, u32)>>,
+        /// Tool-call checks say no.
+        decline: bool,
+        /// Judges and checks answer with nothing.
+        blank: bool,
+        /// Requests mentioning "about it" are unclear.
+        picky: bool,
+        /// Model calls whose messages contain any of these fail.
+        fail_on: Vec<&'static str>,
+        answers: Mutex<Vec<String>>,
+        asked: Mutex<Vec<String>>,
+        tools_run: Mutex<Vec<String>>,
+        /// Each kind of call, in order: clarify, one_go, plan, plan_check,
+        /// judge, work, tool_check, question, check, notes, explain, final.
+        kinds: Mutex<Vec<&'static str>>,
+        /// The brief of every work call.
+        briefs: Mutex<Vec<String>>,
+        /// Every system message sent to a work call.
+        systems: Mutex<Vec<String>>,
+        notes_updates: Mutex<u32>,
+    }
+
+    /// The text after `marker` on its line, in the original case.
+    fn after(text: &str, marker: &str) -> String {
+        let i = text.to_lowercase().find(marker).expect(marker) + marker.len();
+        text[i..]
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    }
+
+    impl Scripted {
+        fn kinds(&self) -> Vec<&'static str> {
+            self.kinds.lock().unwrap().clone()
+        }
+        /// The step each first try worked on, in order.
+        fn worked(&self) -> Vec<String> {
+            let mut out: Vec<String> = Vec::new();
+            for b in self.briefs.lock().unwrap().iter() {
+                let lower = b.to_lowercase();
+                let marker = if lower.contains("your step now: ") {
+                    "your step now: "
+                } else {
+                    "your task now: "
+                };
+                if !b.contains("didn't pass") {
+                    let s = after(b, marker);
+                    if out.last() != Some(&s) {
+                        out.push(s);
+                    }
+                }
+            }
+            out
+        }
+        fn fails(&self, request: &str) -> bool {
+            let mut f = self.failing.lock().unwrap();
+            for (key, n) in f.iter_mut() {
+                if request.contains(&key.to_lowercase()) && *n > 0 {
+                    *n = n.saturating_sub(if *n == u32::MAX { 0 } else { 1 });
+                    return true;
+                }
+            }
+            false
+        }
+    }
+
+    impl Host for Scripted {
+        async fn llm(
+            &self,
+            call: LlmCall,
+            _: &mut (dyn FnMut(&str) + Send),
+        ) -> Result<LlmAnswer, String> {
+            let all = call
+                .messages
+                .iter()
+                .map(|m| m.text.to_lowercase())
+                .collect::<Vec<_>>()
+                .join("\n");
+            if let Some(f) = self.fail_on.iter().find(|f| all.contains(*f)) {
+                return Err(format!("the model server failed on “{f}”"));
+            }
+            let last = call.messages.last().unwrap();
+            let user_msg = call
+                .messages
+                .iter()
+                .rev()
+                .find(|m| m.role == Role::User)
+                .map(|m| m.text.clone())
+                .unwrap_or_default();
+            let user = user_msg.to_lowercase();
+            let text = |t: &str| {
+                Ok(LlmAnswer {
+                    text: t.into(),
+                    ..Default::default()
+                })
+            };
+            let kind = |k: &'static str| self.kinds.lock().unwrap().push(k);
+            let blank = |t: &str| if self.blank { "" } else { t }.to_string();
+
+            if user.contains("clear enough to act on") {
+                kind("clarify");
+                let q = self.picky && user.contains("about it");
+                return text(&blank(if q {
+                    "Which topic do you mean?"
+                } else {
+                    "CLEAR"
+                }));
+            }
+            if user.contains("whole goal in one go") {
+                kind("one_go");
+                return text(&blank(if self.one_go {
+                    "ONE GO: it's simple."
+                } else {
+                    "PLAN: it has parts."
+                }));
+            }
+            if user.contains("check this plan.") {
+                kind("plan_check");
+                let vague = self.vague_first.is_some() && !self.kinds().contains(&"replan");
+                return text(&blank(if vague {
+                    "NO, step 1 is too vague."
+                } else {
+                    "YES, it's concrete."
+                }));
+            }
+            if user.contains("write a plan: the steps to do") {
+                if user.contains("a first plan was") {
+                    kind("replan");
+                    return text(self.vague_first.unwrap());
+                }
+                kind("plan");
+                if user.contains("plan it in smaller steps: ") {
+                    let step = after(&user_msg, "plan it in smaller steps: ");
+                    let sub = self
+                        .big
+                        .iter()
+                        .find(|(s, _)| *s == step)
+                        .expect("planned a small step");
+                    return text(sub.1);
+                }
+                return text(self.plan);
+            }
+            if user.contains("one step of it: ") {
+                kind("judge");
+                let step = after(&user_msg, "one step of it: ");
+                let big = self.big.iter().any(|(s, _)| *s == step);
+                return text(&blank(if big {
+                    "BREAK DOWN: several parts."
+                } else {
+                    "ONE GO"
+                }));
+            }
+            if user.contains("sensible and safe") {
+                kind("tool_check");
+                return text(&blank(if self.decline {
+                    "NO, the date isn't needed."
+                } else {
+                    "YES, it fits."
+                }));
+            }
+            if user.contains("rewrite the working notes") {
+                kind("notes");
+                let mut n = self.notes_updates.lock().unwrap();
+                *n += 1;
+                return text(&format!("- update {n}"));
+            }
+            if user.contains("tried 5 times") {
+                kind("explain");
+                return text("The report needs figures I couldn't find.");
+            }
+            if user.contains("write the final reply to the user") {
+                kind("final");
+                return text("Everything is done.");
+            }
+            if user.contains("write one yes-or-no question") {
+                kind("question");
+                return text(&blank("Does this answer do what was asked?"));
+            }
+            if user.contains("start with yes or no") {
+                kind("check");
+                let request = user.split("\n\nanswer:").next().unwrap_or_default();
+                return text(&blank(if self.fails(request) {
+                    "NO, it's wrong."
+                } else {
+                    "YES, it fits."
+                }));
+            }
+            assert!(!call.tools.is_empty(), "an unexpected call: {user}");
+            kind("work");
+            if let Some(sys) = call.messages.iter().find(|m| m.role == Role::System) {
+                self.systems.lock().unwrap().push(sys.text.clone());
+            }
+            if last.role == Role::Tool {
+                return text(&if last.text.starts_with("Not run") {
+                    "I'll do without the tool: Sunday, probably.".to_string()
+                } else {
+                    format!("Done: {}", last.text)
+                });
+            }
+            self.briefs.lock().unwrap().push(user_msg.clone());
+            let marker = if user.contains("your step now: ") {
+                "your step now: "
+            } else {
+                "your task now: "
+            };
+            let step = after(&user_msg, marker);
+            if step.to_lowercase().contains("date") {
+                return Ok(LlmAnswer {
+                    calls: vec![ToolCall {
+                        id: "t1".into(),
+                        name: "current_time".into(),
+                        arguments: json!({}),
+                        network: crate::blocks::Switch::Off,
+                    }],
+                    ..Default::default()
+                });
+            }
+            text(&format!("Did: {step}"))
+        }
+        fn tool_names(&self) -> Vec<String> {
+            vec!["current_time".into()]
+        }
+        fn tool_info(&self, name: &str) -> Option<ToolInfo> {
+            (name == "current_time").then(|| ToolInfo {
+                name: name.into(),
+                description: "Time.".into(),
+                parameters: json!({ "type": "object", "properties": {} }),
+            })
+        }
+        async fn run_tool(
+            &self,
+            name: &str,
+            _: Json,
+            _: crate::blocks::Switch,
+        ) -> Result<ToolOutput, String> {
+            self.tools_run.lock().unwrap().push(name.into());
+            Ok(ToolOutput {
+                text: "Monday".into(),
+                is_error: false,
+            })
+        }
+        fn read_file(&self, _: &str) -> Result<String, String> {
+            Err("no".into())
+        }
+        fn write_file(&self, _: &str, _: &str, _: bool) -> Result<(), String> {
+            Err("no".into())
+        }
+        fn list_files(&self, _: &str) -> Result<Vec<String>, String> {
+            Err("no".into())
+        }
+        async fn ask(&self, a: crate::Ask) -> Result<crate::Answer, String> {
+            self.asked.lock().unwrap().push(a.text);
+            self.answers
+                .lock()
+                .unwrap()
+                .pop()
+                .map(crate::Answer::Text)
+                .ok_or_else(|| "nobody to ask".into())
+        }
+    }
+
+    async fn assist(host: &Scripted, message: &str) -> crate::engine::RunOutcome {
+        let t = templates().into_iter().find(|t| t.id == ASSISTANT).unwrap();
+        let inputs = RunInputs {
+            message: message.into(),
             ..Default::default()
         };
-        let out = plan_run(ASSISTANT, &host, "What's the date?").await;
+        run(&t.file, host, &inputs, &AtomicBool::new(false), |_| {}).await
+    }
+
+    const REPORT_PLAN: &str = "1. Collect the facts\n2. Draft the report\n3. Send the summary";
+
+    #[tokio::test]
+    async fn one_go_with_a_checked_tool_call() {
+        let host = Scripted {
+            one_go: true,
+            ..Default::default()
+        };
+        let out = assist(&host, "What's the date?").await;
         assert_eq!(out.status, RunStatus::Completed, "{out:?}");
+        assert_eq!(out.replies, ["Done: Monday"]);
+        assert_eq!(*host.tools_run.lock().unwrap(), ["current_time"]);
+        let kinds = host.kinds();
+        assert!(kinds.contains(&"tool_check") && kinds.contains(&"check"));
+        assert!(!kinds.contains(&"plan"), "nothing was planned: {kinds:?}");
+    }
+
+    #[tokio::test]
+    async fn plans_fully_first_then_carries_out_depth_first() {
+        let host = Scripted {
+            plan: REPORT_PLAN,
+            big: vec![(
+                "Collect the facts",
+                "1. List the sources\n2. Note three facts",
+            )],
+            ..Default::default()
+        };
+        let out = assist(&host, "Write a report").await;
+        assert_eq!(out.status, RunStatus::Completed, "{out:?}");
+        // Big steps are planned in place (depth first), then the steps are done in that order.
+        assert_eq!(
+            host.worked(),
+            [
+                "List the sources",
+                "Note three facts",
+                "Draft the report",
+                "Send the summary"
+            ]
+        );
+        // Nothing is done while planning.
+        let kinds = host.kinds();
+        let last_planning = kinds
+            .iter()
+            .rposition(|k| matches!(*k, "plan" | "plan_check" | "judge"))
+            .unwrap();
+        let first_work = kinds.iter().position(|k| *k == "work").unwrap();
+        assert!(last_planning < first_work, "{kinds:?}");
+        // Only top-level steps are judged: two levels at most.
+        assert_eq!(kinds.iter().filter(|k| **k == "judge").count(), 3);
+        // The whole plan is shown, nested, before any result.
         assert!(
-            host.tools_run.lock().unwrap().is_empty(),
-            "the declined call never ran"
+            out.replies[0].starts_with("**▾ Here's the plan:**"),
+            "{:?}",
+            out.replies
+        );
+        assert!(
+            out.replies[0].contains("○ 1.1.1. List the sources"),
+            "{}",
+            out.replies[0]
         );
         assert_eq!(
-            out.replies,
-            ["**✓ Task: What's the date?**\n\nI'll do without the tool: Sunday, probably."]
+            out.replies[1],
+            "**✓ List the sources**\n\nDid: List the sources"
+        );
+        assert_eq!(
+            out.replies.len(),
+            6,
+            "plan, four results, final: {:?}",
+            out.replies
+        );
+        assert_eq!(out.replies[5], "**Done.** Everything is done.");
+        // Notes: after the plan and after each step; every step sees them, and the results so far.
+        assert_eq!(*host.notes_updates.lock().unwrap(), 5);
+        let systems = host.systems.lock().unwrap();
+        assert!(
+            systems[0].contains("Your working notes:\n- update 1"),
+            "{}",
+            systems[0]
+        );
+        assert!(
+            systems[0]
+                .contains("    ▾ 1.1. Collect the facts\n        ▸ 1.1.1. List the sources\n")
+        );
+        assert!(
+            systems
+                .last()
+                .unwrap()
+                .contains("✓ Draft the report\nDid: Draft the report")
         );
     }
 
     #[tokio::test]
-    async fn the_assistant_carries_on_past_failures() {
-        // Clarifying, checking calls, verifying and updating notes all fail:
-        // the work still gets done.
-        let host = Planner {
-            fail_on: vec![
-                "clear enough",
-                "sensible and safe",
-                "yes-or-no question",
-                "start with yes",
-                "rewrite the working notes",
-            ],
+    async fn vague_plans_are_written_again() {
+        let host = Scripted {
+            plan: "1. Do the work",
+            vague_first: Some("1. Write the intro to intro.md\n2. Write the ending to end.md"),
             ..Default::default()
         };
-        let out = plan_run(ASSISTANT, &host, "What's the date?").await;
+        let out = assist(&host, "Write a story").await;
         assert_eq!(out.status, RunStatus::Completed, "{out:?}");
         assert_eq!(
+            host.worked(),
+            ["Write the intro to intro.md", "Write the ending to end.md"]
+        );
+    }
+
+    #[tokio::test]
+    async fn one_go_falls_back_to_a_plan() {
+        let host = Scripted {
+            one_go: true,
+            plan: "1. Pick a topic\n2. Write four lines",
+            failing: Mutex::new(vec![("write a poem", 2)]),
+            ..Default::default()
+        };
+        let out = assist(&host, "Write a poem").await;
+        assert_eq!(out.status, RunStatus::Completed, "{out:?}");
+        assert_eq!(
+            host.worked(),
+            ["Write a poem", "Pick a topic", "Write four lines"]
+        );
+        assert!(out.replies[0].starts_with("↻ That didn't work in one go"));
+        assert!(*host.notes_updates.lock().unwrap() >= 1);
+    }
+
+    #[tokio::test]
+    async fn steps_get_five_tries_then_the_run_stops_with_a_reason() {
+        // Passes on the third try.
+        let host = Scripted {
+            plan: REPORT_PLAN,
+            failing: Mutex::new(vec![("draft the report", 2)]),
+            ..Default::default()
+        };
+        let out = assist(&host, "Write a report").await;
+        assert_eq!(out.status, RunStatus::Completed, "{out:?}");
+        let briefs = host.briefs.lock().unwrap().clone();
+        let drafts: Vec<_> = briefs
+            .iter()
+            .filter(|b| b.contains("Draft the report"))
+            .collect();
+        assert_eq!(drafts.len(), 3);
+        assert!(drafts[2].contains("Try 1 didn't pass: NO, it's wrong.\nFix that this time."));
+        assert!(drafts[2].contains("Try 2 didn't pass"));
+
+        // Never passes: five tries, an explanation, and the run stops there.
+        let host = Scripted {
+            plan: REPORT_PLAN,
+            failing: Mutex::new(vec![("draft the report", u32::MAX)]),
+            ..Default::default()
+        };
+        let out = assist(&host, "Write a report").await;
+        let briefs = host.briefs.lock().unwrap();
+        assert_eq!(
+            briefs
+                .iter()
+                .filter(|b| b.contains("Draft the report"))
+                .count(),
+            5
+        );
+        assert!(
+            !briefs.iter().any(|b| b.contains("Send the summary")),
+            "later steps don't run"
+        );
+        assert!(host.kinds().contains(&"explain"));
+        let last = out.replies.last().unwrap();
+        assert!(
+            last.starts_with("**✗ I couldn't do this step: Draft the report**"),
+            "{last}"
+        );
+        assert!(last.contains("figures I couldn't find"));
+        assert!(
+            matches!(&out.status, RunStatus::Failed { error, .. }
+                if error.contains("Couldn't do the step “Draft the report”") && error.contains("figures")),
+            "{:?}",
+            out.status
+        );
+    }
+
+    #[tokio::test]
+    async fn blank_judges_never_ask_or_block() {
+        // A thinking model's judge reply can be empty once its thinking is
+        // removed: that counts as clear, one go, approved and passed.
+        let host = Scripted {
+            blank: true,
+            picky: true,
+            ..Default::default()
+        };
+        let out = assist(&host, "What's the date about it?").await;
+        assert_eq!(out.status, RunStatus::Completed, "{out:?}");
+        assert!(host.asked.lock().unwrap().is_empty(), "no empty question");
+        assert_eq!(*host.tools_run.lock().unwrap(), ["current_time"]);
+        assert_eq!(out.replies, ["Done: Monday"]);
+    }
+
+    #[tokio::test]
+    async fn unclear_requests_get_one_question() {
+        let host = Scripted {
+            one_go: true,
+            picky: true,
+            answers: Mutex::new(vec!["Cats".into()]),
+            ..Default::default()
+        };
+        let out = assist(&host, "Write about it").await;
+        assert_eq!(*host.asked.lock().unwrap(), ["Which topic do you mean?"]);
+        assert!(host.briefs.lock().unwrap()[0].contains("The user answered: Cats"));
+        assert_eq!(out.status, RunStatus::Completed, "{out:?}");
+    }
+
+    #[tokio::test]
+    async fn bad_tool_calls_are_declined() {
+        let host = Scripted {
+            one_go: true,
+            decline: true,
+            ..Default::default()
+        };
+        let out = assist(&host, "What's the date?").await;
+        assert!(host.tools_run.lock().unwrap().is_empty());
+        assert_eq!(out.replies, ["I'll do without the tool: Sunday, probably."]);
+    }
+
+    #[tokio::test]
+    async fn failed_planning_does_the_goal_as_one_step() {
+        let host = Scripted {
+            fail_on: vec!["write a plan: the steps"],
+            ..Default::default()
+        };
+        let out = assist(&host, "Write a report").await;
+        assert_eq!(out.status, RunStatus::Completed, "{out:?}");
+        assert_eq!(host.worked(), ["Write a report"]);
+        assert_eq!(
             out.replies,
-            ["**✓ Task: What's the date?**\n\nDone: Monday"]
+            [
+                "▾ I couldn't break this into steps, so I'll do it as one.",
+                "**✓ Write a report**\n\nDid: Write a report"
+            ]
         );
-        // The attempt itself fails: a short message instead of a stopped run.
-        let host = Planner {
-            fail_on: vec!["do the user's latest task"],
+        // The goal is ticked in the plan outline.
+        assert!(host.systems.lock().unwrap()[0].contains("▸ 1. Write a report"));
+    }
+
+    #[tokio::test]
+    async fn failed_notes_dont_stop_the_work() {
+        let host = Scripted {
+            plan: REPORT_PLAN,
+            fail_on: vec!["rewrite the working notes"],
             ..Default::default()
         };
-        let out = plan_run(ASSISTANT, &host, "What's the date?").await;
+        let out = assist(&host, "Write a report").await;
         assert_eq!(out.status, RunStatus::Completed, "{out:?}");
-        assert_eq!(out.replies.len(), 1);
-        assert!(
-            out.replies[0].contains("I couldn't finish this task"),
-            "{:?}",
-            out.replies
-        );
-        // Planning fails too: said once, no steps.
-        let host = Planner {
-            fail_on: vec!["too big to do in one go"],
-            ..Default::default()
-        };
-        let out = plan_run(ASSISTANT, &host, "Write about today").await;
-        assert_eq!(out.status, RunStatus::Completed, "{out:?}");
-        assert!(
-            out.replies[0].contains("couldn't break this task down"),
-            "{:?}",
-            out.replies
-        );
+        assert_eq!(host.worked().len(), 3);
     }
 
     #[test]

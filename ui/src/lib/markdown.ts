@@ -94,6 +94,17 @@ function link(url: string, text: string): string {
   return `<a class="md-link" href="#" data-href="${escapeHtml(u)}" title="${escapeHtml(u)}">${text}</a>`;
 }
 
+/**
+ * A paragraph line, keeping its leading indentation (HTML would collapse it),
+ * so nested text such as a plan outline stays nested. Tabs count as 4.
+ */
+function indented(line: string, opts: FormatOptions): string {
+  const lead = /^[ \t]+/.exec(line);
+  if (!lead) return inline(line, opts);
+  const n = lead[0].replace(/\t/g, "    ").length;
+  return "&nbsp;".repeat(n) + inline(line.slice(lead[0].length), opts);
+}
+
 export function inline(raw: string, opts: FormatOptions, stash = new Stash()): string {
   let s = raw.replace(/\u0000/g, "");
   // Code first: nothing inside it is formatted.
@@ -219,7 +230,7 @@ function blocks(text: string, opts: FormatOptions): string {
   const out: string[] = [];
   let para: string[] = [];
   const flush = () => {
-    if (para.length) out.push(`<p>${para.map((l) => inline(l, opts)).join("<br>")}</p>`);
+    if (para.length) out.push(`<p>${para.map((l) => indented(l, opts)).join("<br>")}</p>`);
     para = [];
   };
   for (let i = 0; i < lines.length; i++) {

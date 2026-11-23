@@ -926,6 +926,16 @@ impl<'a, H: Host> Runner<'a, H> {
                 on_event(Event::Reply { block: path, text });
                 Ok(vec![])
             }
+            BlockKind::Stop(_) => {
+                // No Failed output, so this always ends the run.
+                let reason = arg(0).as_text();
+                let reason = reason.trim();
+                Err(BlockErr::Failed(if reason.is_empty() {
+                    "the loop stopped here".into()
+                } else {
+                    reason.to_string()
+                }))
+            }
             BlockKind::Llm(p) => {
                 // Tools are only offered when the Tool output goes somewhere, so a
                 // block that inherits the agent's tools without a Run tool after it
@@ -3123,6 +3133,35 @@ mod tests {
         assert!(
             matches!(o.status, RunStatus::Failed { ref error, .. } if error.contains("within 5 minutes")),
             "{o:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_with_error_ends_the_run() {
+        let l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b("say", "output", json!({})),
+                b("stop", "stop", json!({})),
+                b("later", "output", json!({})),
+            ],
+            vec![
+                ln("in", "out", "say", "in"),
+                ln("in", "out", "stop", "in"),
+                ln("in", "out", "later", "in"),
+            ],
+        );
+        let host = Fake::default();
+        let (out, _) = go(&l, &host, "it can't be done").await;
+        assert_eq!(
+            out.replies,
+            ["it can't be done"],
+            "blocks queued after it don't run"
+        );
+        assert!(
+            matches!(&out.status, RunStatus::Failed { error, .. } if error.contains("it can't be done")),
+            "{:?}",
+            out.status
         );
     }
 

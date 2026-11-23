@@ -137,6 +137,11 @@ impl Outline {
     /// Adds `steps` under `task` and marks it split. A task that isn't in the
     /// outline is added at the top level first.
     pub fn add_steps(&mut self, task: &str, steps: &[String]) {
+        // No steps changes nothing: the task stays as it was, so it can
+        // still be worked on and marked.
+        if steps.is_empty() {
+            return;
+        }
         let path = match self.find(task) {
             Some(p) => p,
             None => {
@@ -206,6 +211,16 @@ impl Outline {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adding_no_steps_leaves_the_task_alone() {
+        let mut o = Outline::default();
+        o.start("Goal");
+        o.add_steps("Goal", &[]);
+        assert_eq!(o.render(), "○ 1. Goal");
+        assert!(o.mark("Goal", TaskStatus::Done));
+        assert_eq!(o.render(), "✓ 1. Goal");
+    }
 
     #[test]
     fn nests_and_marks_in_working_order() {

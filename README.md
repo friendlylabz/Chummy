@@ -100,13 +100,16 @@ until you say so.
   become one block whose ports are exactly the inputs and outputs you left
   open. Double-click to edit inside. Functions are saved in the loop file.
 - **Chummy assistant (the default).** Asks you one question if your request
-  is unclear, tries it with tools (the model checks each call before it
-  runs), breaks anything too big into steps, checks every result and plan,
-  keeps working notes, asks you when it's stuck, and carries on past
-  failures. Each result is shown as it's done, and each breakdown shows
-  **the whole plan**, nested by level with finished tasks ticked (a **Plan
-  outline** block keeps it, and the model sees it as `{{plan}}`). Onboarding offers it with one click, and a first agent gets it
-  automatically.
+  is unclear. If the model can do it in one go, it does, and checks the
+  result. Otherwise it makes **the whole plan first**, doing nothing yet: up
+  to 10 specific steps, checked for being concrete, with any step too big for
+  one go planned again (depth first, two levels at most). Then it does the
+  steps in order, each with up to 5 checked tries; the model checks every
+  tool call before it runs and keeps working notes as it goes. The plan is
+  shown nested with ticks (a **Plan outline** block keeps it, and the model
+  sees it as `{{plan}}`). If a step fails all its tries, the model explains
+  why and the run stops. Onboarding offers it with one click, and a first
+  agent gets it automatically.
 - **Templates.** Chummy assistant, Blank, Simple chat, Draft and self-check, **5 step
   recursive plan** and **5 step recursive plan verify**. The planner tries
   your goal straight away (by writing or with tools); anything too big is
@@ -339,7 +342,10 @@ OpenAI-compatible endpoint (127.0.0.1, random bearer token, offline).
    inherit / on / off override per block; answer length and temperature
    follow the model unless a block sets them. Blank clarifying questions
    fixed.** Done.
-10. **chummyd.** An optional, separately installed background service for jobs,
+10. **A new default assistant: one go if it can, otherwise the whole plan
+    first (depth first, two levels, 10 steps), then each step with 5 checked
+    tries, stopping with a reason if one can't be done.** Done.
+11. **chummyd.** An optional, separately installed background service for jobs,
    with an authenticated API, configured from the app. See
    [docs/chummyd-plan.md](docs/chummyd-plan.md).
 

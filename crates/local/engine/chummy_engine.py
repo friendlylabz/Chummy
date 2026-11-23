@@ -328,6 +328,16 @@ class FakeBackend:
 
         if messages and messages[-1]["role"] == "tool":
             text = "Done: " + (messages[-1].get("content") or "")[:150]
+        elif "clear enough to act on" in low and low.rstrip().endswith("most need answered."):
+            text = "CLEAR"
+        elif "whole goal in one go" in low:
+            goal = low.split("the user's goal:")[-1]
+            text = "ONE GO" if ("date" in goal or "time" in goal) else "PLAN: it has several parts."
+        elif "one step of it:" in low:
+            step = low.split("one step of it:")[1].split("\n")[0]
+            text = "BREAK DOWN: it has parts." if "summary" in step else "ONE GO"
+        elif "tried 5 times" in low:
+            text = "Every try was judged incomplete, so it needs more to go on."
         elif "current_time" in names and ("date" in low or "time" in low):
             text = call("current_time", {})
         elif "calculator" in names and ("work out" in low or "calculate" in low):

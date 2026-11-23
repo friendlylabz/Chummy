@@ -33,6 +33,12 @@ test("headings, lists, quotes, tables, code", () => {
   }
 });
 
+test("nested lines keep their indentation", () => {
+  const h = format("**Plan:**\n▾ 1. Goal\n    ○ 1.1. Step\n        ○ 1.1.1. Sub <b>", on);
+  assert(h.includes("<br>&nbsp;&nbsp;&nbsp;&nbsp;○ 1.1. Step<br>"), h);
+  assert(h.includes("&nbsp;".repeat(8) + "○ 1.1.1. Sub &lt;b&gt;"), h);
+});
+
 test("money isn't math", () => {
   assert.equal(hasMath("It costs $5 and $10."), false);
   assert.equal(hasMath("so $x+1$ is"), true);

@@ -118,6 +118,19 @@ class SplitterTests(unittest.TestCase):
         self.assertEqual(list(gen), [])
 
 
+    def test_fake_backend_answers_the_assistants_judges(self):
+        def say(prompt):
+            gen = ce.FakeBackend(ce.PARSERS["hermes"]).generate(
+                [{"role": "user", "content": prompt}], [], 100, None, None)
+            return "".join(gen)
+        self.assertEqual(say("Hi\n\nIs the user's latest request clear enough to act on? If it is, reply with only: CLEAR\n"
+                             "If not, reply with the one short question you most need answered."), "CLEAR")
+        self.assertEqual(say("What's the date?\nCould you do this whole goal in one go"), "ONE GO")
+        self.assertTrue(say("A report\nCould you do this whole goal in one go").startswith("PLAN"))
+        self.assertEqual(say("One step of it: Find the date\nCould you do this step in one go"), "ONE GO")
+        self.assertTrue(say("One step of it: Write a short summary\nOne go?").startswith("BREAK DOWN"))
+
+
 def free_port():
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
