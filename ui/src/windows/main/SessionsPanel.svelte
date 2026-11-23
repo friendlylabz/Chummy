@@ -12,8 +12,9 @@
   const agents = $derived(settings.current.agents);
 
   // Runs change many times a second (each block that starts or ends). The
-  // panel shows a snapshot taken once a second instead, so it doesn't
-  // flicker as blocks race by or as a run finishes.
+  // panel never follows them directly: every half second it reads the queued
+  // status updates (runs.takeStatus) and redraws only what changed, so it
+  // doesn't flicker as blocks race by or as a run finishes.
   interface Row {
     id: string;
     title: string;
@@ -26,14 +27,17 @@
   let active = $state<Row[]>([]);
   let busyAgents = $state<string[]>([]);
 
+  const stepText = (s: string) => (s === "Waiting for you" ? s : `${s}…`);
+
   function snapshot() {
+    const status = runs.takeStatus(500);
     const next: Row[] = runs.active.map((r) => ({
       id: r.info.run_id,
       title: `${r.info.source === "job" ? "Job: " : ""}${r.info.title}`,
       chat: r.info.chat_title ?? "",
       agent: r.info.agent_id,
       chatId: r.info.chat_id ?? null,
-      step: r.waitingForYou ? "Waiting for you" : r.currentLabel || "Working…",
+      step: stepText(status.get(r.info.run_id) ?? "Working"),
     }));
     if (JSON.stringify(next) !== JSON.stringify(active)) active = next;
     const busy = agents.filter((a) => runs.forAgent(a.id)).map((a) => a.id);
@@ -49,7 +53,7 @@
 
   onMount(() => {
     snapshot();
-    const t = setInterval(snapshot, 1000);
+    const t = setInterval(snapshot, 500);
     return () => clearInterval(t);
   });
 </script>

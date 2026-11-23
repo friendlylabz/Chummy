@@ -27,9 +27,23 @@ export interface RunView {
   entries: LogEntry[];
 }
 
+/** A block that started (and maybe finished), queued for the Sessions panel. */
+interface StatusUpdate {
+  run: string;
+  block: string;
+  label: string;
+  start: number;
+  end?: number;
+}
+
 class RunsStore {
   runs = $state<Record<string, RunView>>({});
   private started = false;
+  /** Status updates for the Sessions panel. Not reactive on purpose: block
+   *  events only add here, and the panel reads it on its own clock. */
+  private statusQueue: StatusUpdate[] = [];
+  /** What the panel was last told for each run. */
+  private shown = new Map<string, string>();
 
   async init() {
     if (this.started) return;
@@ -44,6 +58,7 @@ class RunsStore {
       switch (event.type) {
         case "block_state":
           r.blocks[event.block] = event.state;
+          this.queueStatus(run_id, event.block, event.state === "running" ? event.label : null);
           if (event.state === "running") {
             r.current = event.block;
             r.currentLabel = event.label;
@@ -103,6 +118,49 @@ class RunsStore {
       waitingForYou: false,
       entries: [],
     };
+  }
+
+  private queueStatus(run: string, block: string, label: string | null) {
+    const now = performance.now();
+    if (label !== null) {
+      this.statusQueue.push({ run, block, label, start: now });
+      return;
+    }
+    for (let i = this.statusQueue.length - 1; i >= 0; i--) {
+      const u = this.statusQueue[i];
+      if (u.run === run && u.block === block && u.end === undefined) {
+        u.end = now;
+        break;
+      }
+    }
+  }
+
+  /**
+   * Reads the queued status updates (the Sessions panel calls this every
+   * half second): for each working run, the step that ran longest in the
+   * last `windowMs`. Blocks that come and go in a moment never show, and a
+   * run between steps keeps its last status, so the panel stays calm.
+   */
+  takeStatus(windowMs = 500): Map<string, string> {
+    const now = performance.now();
+    const from = now - windowMs;
+    const best = new Map<string, { label: string; time: number }>();
+    for (const u of this.statusQueue) {
+      const running = u.end === undefined;
+      const time = Math.min(u.end ?? now, now) - Math.max(u.start, from);
+      if (!running && time < 50) continue;
+      const b = best.get(u.run);
+      if (!b || time >= b.time) best.set(u.run, { label: u.label, time });
+    }
+    this.statusQueue = this.statusQueue.filter((u) => (u.end === undefined || u.end > from) && this.runs[u.run]);
+    const out = new Map<string, string>();
+    for (const r of this.active) {
+      const id = r.info.run_id;
+      const label = r.waitingForYou ? "Waiting for you" : (best.get(id)?.label ?? this.shown.get(id) ?? "Working");
+      out.set(id, label);
+    }
+    this.shown = new Map([...out].filter(([, l]) => l !== "Waiting for you"));
+    return out;
   }
 
   get active(): RunView[] {

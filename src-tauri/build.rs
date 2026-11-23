@@ -47,6 +47,7 @@ fn main() {
             "new_chat",
             "set_active_chat",
             "delete_chat",
+            "delete_chat_message",
             "send_message",
             "test_run",
             "stop_run",

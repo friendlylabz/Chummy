@@ -21,6 +21,8 @@ pub const RUN_EVENT: &str = "run:event";
 pub const RUN_FINISHED: &str = "run:finished";
 /// Payload: `ChatMessageEvent`.
 pub const CHAT_MESSAGE: &str = "chat:message";
+/// Payload: `ChatMessageDeleted`.
+pub const CHAT_MESSAGE_DELETED: &str = "chat:message_deleted";
 /// Payload: `ChatsChanged` (an agent's chat list or open chat changed).
 pub const CHATS_CHANGED: &str = "chats:changed";
 /// Payload: `ToolsStatus`.

@@ -26,6 +26,10 @@ class ChatStore {
       if (e.agent_id !== this.agentId || e.chat_id !== this.chatId) return;
       if (!this.messages.some((m) => m.id === e.message.id)) this.messages.push(e.message);
     });
+    await events.onChatMessageDeleted((e) => {
+      if (e.agent_id !== this.agentId || e.chat_id !== this.chatId) return;
+      this.messages = this.messages.filter((m) => m.id !== e.message_id);
+    });
     await events.onChatsChanged((e) => {
       if (e.agent_id !== this.agentId) return;
       this.chats = e.index.chats;
@@ -82,6 +86,17 @@ class ChatStore {
     if (!this.agentId) return;
     try {
       await commands.deleteChat(this.agentId, chatId);
+    } catch (e) {
+      this.error = errorText(e);
+    }
+  }
+
+  /** Deletes a message from the open chat (and from what the agent sees). */
+  async deleteMessage(id: string) {
+    if (!this.agentId || !this.chatId) return;
+    this.error = "";
+    try {
+      await commands.deleteChatMessage(this.agentId, this.chatId, id);
     } catch (e) {
       this.error = errorText(e);
     }

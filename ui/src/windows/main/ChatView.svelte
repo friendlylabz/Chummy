@@ -10,8 +10,9 @@
   import AskCard from "$lib/components/AskCard.svelte";
   import MessageSteps from "./MessageSteps.svelte";
   import type { ChatMessage } from "$lib/ipc";
+  import type { Snippet } from "svelte";
 
-  let { agent }: { agent: Agent } = $props();
+  let { agent, footer }: { agent: Agent; footer?: Snippet } = $props();
 
   let scroller: HTMLDivElement;
   const run = $derived(runs.forChat(chat.chatId));
@@ -64,39 +65,52 @@
     {/if}
 
     {#each chat.messages as m (m.id)}
-      {#if m.role === "user"}
-        <div class="msg user"><div class="bubble" data-selectable>{m.text}</div></div>
-      {:else if m.role === "assistant"}
-        <div class="msg assistant">
-          <div class="avatar"><Icon name="bot" size={15} /></div>
-          <div class="body">
-            <Formatted text={m.text} />
+      <div class="item" class:mine={m.role === "user" || m.role === "answer"} class:plain={m.role === "notice"}>
+        {#if m.role === "user"}
+          <div class="msg user"><div class="bubble" data-selectable>{m.text}</div></div>
+        {:else if m.role === "assistant"}
+          <div class="msg assistant">
+            <div class="avatar"><Icon name="bot" size={15} /></div>
+            <div class="body">
+              <Formatted text={m.text} />
+              {#if m.run?.run_id && lastOfRun.has(m.id)}
+                <MessageSteps runId={m.run.run_id} summary={counts(m.run)} />
+              {:else if m.run}<div class="meta">{counts(m.run)}</div>{/if}
+            </div>
+          </div>
+        {:else if m.role === "question"}
+          <div class="msg assistant asked">
+            <div class="avatar"><Icon name="ask" size={15} /></div>
+            <div class="body">
+              {#if m.from}<div class="from">{m.from} asked</div>{/if}
+              <Formatted text={m.text} />
+            </div>
+          </div>
+        {:else if m.role === "answer"}
+          <div class="msg user"><div class="bubble answer" data-selectable>{m.text}</div></div>
+        {:else}
+          <div class="notice-wrap">
+            <div class="msg notice">
+              <Icon name={m.run?.status === "stopped" ? "stop" : "alert"} size={14} />
+              <span data-selectable>{m.text}</span>
+            </div>
             {#if m.run?.run_id && lastOfRun.has(m.id)}
               <MessageSteps runId={m.run.run_id} summary={counts(m.run)} />
-            {:else if m.run}<div class="meta">{counts(m.run)}</div>{/if}
+            {/if}
           </div>
-        </div>
-      {:else if m.role === "question"}
-        <div class="msg assistant asked">
-          <div class="avatar"><Icon name="ask" size={15} /></div>
-          <div class="body">
-            {#if m.from}<div class="from">{m.from} asked</div>{/if}
-            <Formatted text={m.text} />
-          </div>
-        </div>
-      {:else if m.role === "answer"}
-        <div class="msg user"><div class="bubble answer" data-selectable>{m.text}</div></div>
-      {:else}
-        <div class="notice-wrap">
-          <div class="msg notice">
-            <Icon name={m.run?.status === "stopped" ? "stop" : "alert"} size={14} />
-            <span data-selectable>{m.text}</span>
-          </div>
-          {#if m.run?.run_id && lastOfRun.has(m.id)}
-            <MessageSteps runId={m.run.run_id} summary={counts(m.run)} />
-          {/if}
-        </div>
-      {/if}
+        {/if}
+        {#if !run}
+          <button
+            type="button"
+            class="trash"
+            title="Delete this message (the agent won't see it either)"
+            aria-label="Delete message"
+            onclick={() => chat.deleteMessage(m.id)}
+          >
+            <Icon name="trash" size={13} />
+          </button>
+        {/if}
+      </div>
     {/each}
 
     {#if run}
@@ -127,15 +141,63 @@
       <AskCard pending={p} showOrigin={p.origin.kind === "job"} answerHere={p.id !== composerAsk?.id} />
     {/each}
   </div>
+  {#if footer}<div class="footer">{@render footer()}</div>{/if}
 </div>
 
 <style>
+  /* The message box sits inside the scroller (sticky at the bottom), so the
+     scroll bar runs the full height and messages scroll under the box. */
   .scroller {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+  }
+  .footer {
+    position: sticky;
+    bottom: 0;
+    margin-top: auto;
+    padding: var(--space-4) var(--space-5) var(--space-5);
+    background: linear-gradient(to bottom, transparent, var(--bg) var(--space-4));
+  }
+  .item {
+    position: relative;
+  }
+  .trash {
+    position: absolute;
+    top: 100%;
+    left: 40px;
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 16px;
+    padding: 0;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--text-faint);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity var(--dur-fast) var(--ease);
+  }
+  .item.plain .trash {
+    left: 0;
+  }
+  .item.mine .trash {
+    left: auto;
+    right: 0;
+  }
+  .item:hover .trash,
+  .trash:focus-visible {
+    opacity: 1;
+  }
+  .trash:hover {
+    color: var(--danger);
+    background: var(--surface-2);
   }
   .thread {
+    flex: 1 0 auto;
     width: min(760px, 100%);
     margin: 0 auto;
     padding: var(--space-5) var(--space-5) var(--space-3);

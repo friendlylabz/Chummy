@@ -106,6 +106,7 @@ pub fn run() {
             chat::new_chat,
             chat::set_active_chat,
             chat::delete_chat,
+            chat::delete_chat_message,
             chat::send_message,
             chat::test_run,
             chat::stop_run,

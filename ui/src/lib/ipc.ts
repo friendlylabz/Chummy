@@ -851,6 +851,8 @@ export const commands = {
   newChat: (agentId: string) => call<ChatMeta>("new_chat", { agentId }),
   setActiveChat: (agentId: string, chatId: string) => call<void>("set_active_chat", { agentId, chatId }),
   deleteChat: (agentId: string, chatId: string) => call<boolean>("delete_chat", { agentId, chatId }),
+  deleteChatMessage: (agentId: string, chatId: string, messageId: string) =>
+    call<void>("delete_chat_message", { agentId, chatId, messageId }),
   getChat: (agentId: string, chatId: string) => call<ChatMessage[]>("get_chat", { agentId, chatId }, () => []),
   sendMessage: (agentId: string, chatId: string, text: string) =>
     call<string>("send_message", { agentId, chatId, text }),
@@ -952,6 +954,8 @@ export const events = {
     on("run:finished", cb),
   onChatMessage: (cb: (e: { agent_id: string; chat_id: string; message: ChatMessage }) => void) =>
     on("chat:message", cb),
+  onChatMessageDeleted: (cb: (e: { agent_id: string; chat_id: string; message_id: string }) => void) =>
+    on("chat:message_deleted", cb),
   onChatsChanged: (cb: (e: { agent_id: string; index: ChatIndex }) => void) => on("chats:changed", cb),
   onToolsChanged: (cb: (s: ToolsStatus) => void) => on("tools:changed", cb),
   onToolsProgress: (cb: (p: ToolsProgress) => void) => on("tools:progress", cb),

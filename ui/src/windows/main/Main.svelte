@@ -65,15 +65,17 @@
 
     <main class="chat">
       {#if setup.loaded && setup.ready && agent}
-        <ChatView {agent} />
+        <ChatView {agent}>
+          {#snippet footer()}<Composer />{/snippet}
+        </ChatView>
       {:else}
         <div class="transcript">
           {#if setup.loaded}<Onboarding />{/if}
         </div>
+        <div class="composer-wrap">
+          <Composer />
+        </div>
       {/if}
-      <div class="composer-wrap">
-        <Composer />
-      </div>
     </main>
   </div>
 

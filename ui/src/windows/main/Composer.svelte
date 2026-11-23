@@ -37,17 +37,11 @@
   async function send() {
     const msg = text.trim();
     if (question && msg) {
-      if (await asks.answer(question.id, { kind: "text", text: msg })) {
-        text = "";
-        resize();
-      }
+      if (await asks.answer(question.id, { kind: "text", text: msg })) text = "";
       return;
     }
     if (disabled || !msg || run) return;
-    if (await chat.send(msg)) {
-      text = "";
-      resize();
-    }
+    if (await chat.send(msg)) text = "";
   }
 
   function onKeydown(e: KeyboardEvent) {
@@ -56,6 +50,13 @@
       send();
     }
   }
+
+  // Fit the box to its text, also after it's cleared on send (the DOM value
+  // only changes after this runs, so measuring right away kept it tall).
+  $effect(() => {
+    void text;
+    resize();
+  });
 
   function resize() {
     if (!input) return;

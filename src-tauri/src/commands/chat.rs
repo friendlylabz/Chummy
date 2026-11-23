@@ -34,6 +34,13 @@ pub struct ChatMessageEvent {
 }
 
 #[derive(Clone, Serialize)]
+pub struct ChatMessageDeleted {
+    pub agent_id: String,
+    pub chat_id: String,
+    pub message_id: String,
+}
+
+#[derive(Clone, Serialize)]
 pub struct ChatsChanged {
     pub agent_id: String,
     pub index: ChatIndex,
@@ -168,6 +175,33 @@ pub async fn delete_chat(
     let index = chats::delete(&state.dirs.chats, &agent_id, &chat_id)?;
     emit_index(&app, &agent_id, index);
     Ok(true)
+}
+
+/// Deletes one message from a chat at the user's request. It's gone from the
+/// chat and from what the agent's loop sees next time. Not while the chat is
+/// working, since that run already has the history.
+#[tauri::command]
+pub fn delete_chat_message(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    agent_id: String,
+    chat_id: String,
+    message_id: String,
+) -> CmdResult<()> {
+    if chat_busy(&state, &chat_id) {
+        return Err("Wait until this chat is done, then delete the message.".into());
+    }
+    let index = chats::delete_message(&state.dirs.chats, &agent_id, &chat_id, &message_id)?;
+    let _ = app.emit(
+        events::CHAT_MESSAGE_DELETED,
+        ChatMessageDeleted {
+            agent_id: agent_id.clone(),
+            chat_id,
+            message_id,
+        },
+    );
+    emit_index(&app, &agent_id, index);
+    Ok(())
 }
 
 #[tauri::command]

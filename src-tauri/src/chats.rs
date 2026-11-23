@@ -325,6 +325,32 @@ pub fn append(
     save_index(root, agent, ix)
 }
 
+/// Deletes one message from a chat, so it's gone from the history the loop
+/// sees too. Returns the updated index.
+pub fn delete_message(
+    root: &Path,
+    agent: &str,
+    chat: &str,
+    message: &str,
+) -> Result<ChatIndex, String> {
+    let _g = lock();
+    let mut ix = index_locked(root, agent)?;
+    let Some(meta) = ix.chats.iter_mut().find(|c| c.id == chat) else {
+        return Err("That chat no longer exists.".into());
+    };
+    let doc = chat_doc(root, agent, chat)?;
+    let mut log = doc.load(|v| v).map_err(|e| e.to_string())?.value;
+    let before = log.messages.len();
+    log.messages.retain(|m| m.id != message);
+    if log.messages.len() == before {
+        return Err("That message is already gone.".into());
+    }
+    log.version = 2;
+    doc.save(&log).map_err(|e| e.to_string())?;
+    meta.messages = log.messages.len() as u32;
+    save_index(root, agent, ix)
+}
+
 /// Renames a chat. Returns the updated index.
 pub fn rename(root: &Path, agent: &str, chat: &str, title: &str) -> Result<ChatIndex, String> {
     let _g = lock();
@@ -431,6 +457,25 @@ mod tests {
         assert!(load(&root, "a1", "../x").is_err());
         assert!(load(&root, "../a", &first).is_err());
         assert!(append(&root, "a1", "c-gone", &msg("user", "x")).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn deleting_one_message() {
+        let root = tmp();
+        let c = index(&root, "a1").unwrap().chats[0].id.clone();
+        let (a, b) = (msg("user", "keep me"), msg("assistant", "drop me"));
+        append(&root, "a1", &c, &a).unwrap();
+        append(&root, "a1", &c, &b).unwrap();
+        let ix = delete_message(&root, "a1", &c, &b.id).unwrap();
+        assert_eq!(ix.chats[0].messages, 1);
+        assert_eq!(load(&root, "a1", &c).unwrap(), vec![a.clone()]);
+        assert!(
+            delete_message(&root, "a1", &c, &b.id).is_err(),
+            "already gone"
+        );
+        assert!(delete_message(&root, "a1", "c-gone", &a.id).is_err());
+        assert!(delete_message(&root, "a1", "../x", &a.id).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 
