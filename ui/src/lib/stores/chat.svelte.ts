@@ -5,6 +5,9 @@
  */
 import { commands, events, errorText, type ChatMessage, type ChatMeta } from "$lib/ipc";
 
+/** How long Undo stays offered after the last delete. */
+const UNDO_MS = 20_000;
+
 class ChatStore {
   agentId = $state<string | null>(null);
   chatId = $state<string | null>(null);
@@ -29,6 +32,13 @@ class ChatStore {
     await events.onChatMessageDeleted((e) => {
       if (e.agent_id !== this.agentId || e.chat_id !== this.chatId) return;
       this.messages = this.messages.filter((m) => m.id !== e.message_id);
+    });
+    await events.onChatMessageRestored((e) => {
+      if (e.agent_id !== this.agentId || e.chat_id !== this.chatId) return;
+      if (this.messages.some((m) => m.id === e.message.id)) return;
+      const next = [...this.messages];
+      next.splice(Math.min(e.position, next.length), 0, e.message);
+      this.messages = next;
     });
     await events.onChatsChanged((e) => {
       if (e.agent_id !== this.agentId) return;
@@ -56,6 +66,7 @@ class ChatStore {
   private async open(chatId: string) {
     const agentId = this.agentId;
     if (!agentId) return;
+    if (chatId !== this.chatId) this.forgetUndo();
     this.chatId = chatId;
     this.error = "";
     const n = ++this.loading;
@@ -91,19 +102,52 @@ class ChatStore {
     }
   }
 
+  /** Messages deleted from the open chat that Undo can bring back, newest
+   *  last. Cleared when another chat opens, a message is sent, or after a
+   *  while (`UNDO_MS` after the last delete). */
+  undoable = $state<string[]>([]);
+  private undoTimer: ReturnType<typeof setTimeout> | undefined;
+
+  private forgetUndo() {
+    clearTimeout(this.undoTimer);
+    this.undoable = [];
+  }
+
   /** Deletes a message from the open chat (and from what the agent sees). */
   async deleteMessage(id: string) {
     if (!this.agentId || !this.chatId) return;
     this.error = "";
     try {
       await commands.deleteChatMessage(this.agentId, this.chatId, id);
+      this.undoable = [...this.undoable, id];
+      clearTimeout(this.undoTimer);
+      this.undoTimer = setTimeout(() => this.forgetUndo(), UNDO_MS);
     } catch (e) {
       this.error = errorText(e);
     }
   }
 
+  /** Puts the most recently deleted message back where it was. */
+  async undoDelete() {
+    const id = this.undoable.at(-1);
+    if (!id || !this.agentId || !this.chatId) return;
+    this.error = "";
+    try {
+      await commands.restoreChatMessage(this.agentId, this.chatId, id);
+      this.undoable = this.undoable.slice(0, -1);
+      if (!this.undoable.length) this.forgetUndo();
+    } catch (e) {
+      this.error = errorText(e);
+    }
+  }
+
+  dismissUndo() {
+    this.forgetUndo();
+  }
+
   async send(text: string) {
     if (!this.agentId || !this.chatId) return false;
+    this.forgetUndo();
     this.error = "";
     try {
       await commands.sendMessage(this.agentId, this.chatId, text);

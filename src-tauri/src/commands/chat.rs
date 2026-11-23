@@ -41,6 +41,26 @@ pub struct ChatMessageDeleted {
 }
 
 #[derive(Clone, Serialize)]
+pub struct ChatMessageRestored {
+    pub agent_id: String,
+    pub chat_id: String,
+    pub message: ChatMessage,
+    pub position: usize,
+}
+
+/// Messages deleted while the app runs, newest last, so Undo can put them
+/// back. Kept here (not sent to the window and back) so Undo can only
+/// restore what was really deleted. Gone when the app quits.
+struct Deleted {
+    agent: String,
+    chat: String,
+    message: ChatMessage,
+    position: usize,
+}
+static DELETED: std::sync::Mutex<Vec<Deleted>> = std::sync::Mutex::new(Vec::new());
+const DELETED_KEPT: usize = 50;
+
+#[derive(Clone, Serialize)]
 pub struct ChatsChanged {
     pub agent_id: String,
     pub index: ChatIndex,
@@ -177,9 +197,10 @@ pub async fn delete_chat(
     Ok(true)
 }
 
-/// Deletes one message from a chat at the user's request. It's gone from the
-/// chat and from what the agent's loop sees next time. Not while the chat is
-/// working, since that run already has the history.
+/// Deletes one message from a chat at the user's request (the window asks
+/// first). It's gone from the chat and from what the agent's loop sees next
+/// time. Not while the chat is working, since that run already has the
+/// history. Returns what Undo needs to put it back.
 #[tauri::command]
 pub fn delete_chat_message(
     app: AppHandle,
@@ -191,13 +212,72 @@ pub fn delete_chat_message(
     if chat_busy(&state, &chat_id) {
         return Err("Wait until this chat is done, then delete the message.".into());
     }
-    let index = chats::delete_message(&state.dirs.chats, &agent_id, &chat_id, &message_id)?;
+    let (index, message, position) =
+        chats::delete_message(&state.dirs.chats, &agent_id, &chat_id, &message_id)?;
+    {
+        let mut kept = lock(&DELETED);
+        kept.push(Deleted {
+            agent: agent_id.clone(),
+            chat: chat_id.clone(),
+            message,
+            position,
+        });
+        if kept.len() > DELETED_KEPT {
+            kept.remove(0);
+        }
+    }
     let _ = app.emit(
         events::CHAT_MESSAGE_DELETED,
         ChatMessageDeleted {
             agent_id: agent_id.clone(),
             chat_id,
             message_id,
+        },
+    );
+    emit_index(&app, &agent_id, index);
+    Ok(())
+}
+
+/// Undo for `delete_chat_message`: puts the message back where it was.
+#[tauri::command]
+pub fn restore_chat_message(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    agent_id: String,
+    chat_id: String,
+    message_id: String,
+) -> CmdResult<()> {
+    if chat_busy(&state, &chat_id) {
+        return Err("Wait until this chat is done, then undo.".into());
+    }
+    let d = {
+        let mut kept = lock(&DELETED);
+        let i = kept
+            .iter()
+            .rposition(|d| d.agent == agent_id && d.chat == chat_id && d.message.id == message_id)
+            .ok_or("That message can't be brought back any more.")?;
+        kept.remove(i)
+    };
+    let (index, position) = match chats::restore_message(
+        &state.dirs.chats,
+        &agent_id,
+        &chat_id,
+        d.message.clone(),
+        d.position,
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            lock(&DELETED).push(d);
+            return Err(e);
+        }
+    };
+    let _ = app.emit(
+        events::CHAT_MESSAGE_RESTORED,
+        ChatMessageRestored {
+            agent_id: agent_id.clone(),
+            chat_id,
+            message: d.message,
+            position,
         },
     );
     emit_index(&app, &agent_id, index);

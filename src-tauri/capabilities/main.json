@@ -22,6 +22,7 @@
     "allow-set-active-chat",
     "allow-delete-chat",
     "allow-delete-chat-message",
+    "allow-restore-chat-message",
     "allow-send-message",
     "allow-stop-run",
     "allow-list-runs",

@@ -326,13 +326,14 @@ pub fn append(
 }
 
 /// Deletes one message from a chat, so it's gone from the history the loop
-/// sees too. Returns the updated index.
+/// sees too. Returns the updated index, the message and where it was, so it
+/// can be put back (`restore_message`).
 pub fn delete_message(
     root: &Path,
     agent: &str,
     chat: &str,
     message: &str,
-) -> Result<ChatIndex, String> {
+) -> Result<(ChatIndex, ChatMessage, usize), String> {
     let _g = lock();
     let mut ix = index_locked(root, agent)?;
     let Some(meta) = ix.chats.iter_mut().find(|c| c.id == chat) else {
@@ -340,15 +341,41 @@ pub fn delete_message(
     };
     let doc = chat_doc(root, agent, chat)?;
     let mut log = doc.load(|v| v).map_err(|e| e.to_string())?.value;
-    let before = log.messages.len();
-    log.messages.retain(|m| m.id != message);
-    if log.messages.len() == before {
+    let Some(pos) = log.messages.iter().position(|m| m.id == message) else {
         return Err("That message is already gone.".into());
-    }
+    };
+    let removed = log.messages.remove(pos);
     log.version = 2;
     doc.save(&log).map_err(|e| e.to_string())?;
     meta.messages = log.messages.len() as u32;
-    save_index(root, agent, ix)
+    Ok((save_index(root, agent, ix)?, removed, pos))
+}
+
+/// Puts a deleted message back where it was (undo). `position` is clamped to
+/// the chat's length. Returns the updated index and the position used.
+pub fn restore_message(
+    root: &Path,
+    agent: &str,
+    chat: &str,
+    message: ChatMessage,
+    position: usize,
+) -> Result<(ChatIndex, usize), String> {
+    let _g = lock();
+    let mut ix = index_locked(root, agent)?;
+    let Some(meta) = ix.chats.iter_mut().find(|c| c.id == chat) else {
+        return Err("That chat no longer exists.".into());
+    };
+    let doc = chat_doc(root, agent, chat)?;
+    let mut log = doc.load(|v| v).map_err(|e| e.to_string())?.value;
+    if log.messages.iter().any(|m| m.id == message.id) {
+        return Err("That message is already back.".into());
+    }
+    let pos = position.min(log.messages.len());
+    log.messages.insert(pos, message);
+    log.version = 2;
+    doc.save(&log).map_err(|e| e.to_string())?;
+    meta.messages = log.messages.len() as u32;
+    Ok((save_index(root, agent, ix)?, pos))
 }
 
 /// Renames a chat. Returns the updated index.
@@ -467,15 +494,29 @@ mod tests {
         let (a, b) = (msg("user", "keep me"), msg("assistant", "drop me"));
         append(&root, "a1", &c, &a).unwrap();
         append(&root, "a1", &c, &b).unwrap();
-        let ix = delete_message(&root, "a1", &c, &b.id).unwrap();
-        assert_eq!(ix.chats[0].messages, 1);
-        assert_eq!(load(&root, "a1", &c).unwrap(), vec![a.clone()]);
+        let (ix, gone, pos) = delete_message(&root, "a1", &c, &a.id).unwrap();
+        assert_eq!((ix.chats[0].messages, pos), (1, 0));
+        assert_eq!(gone, a);
+        assert_eq!(load(&root, "a1", &c).unwrap(), vec![b.clone()]);
         assert!(
-            delete_message(&root, "a1", &c, &b.id).is_err(),
+            delete_message(&root, "a1", &c, &a.id).is_err(),
             "already gone"
         );
-        assert!(delete_message(&root, "a1", "c-gone", &a.id).is_err());
-        assert!(delete_message(&root, "a1", "../x", &a.id).is_err());
+        assert!(delete_message(&root, "a1", "c-gone", &b.id).is_err());
+        assert!(delete_message(&root, "a1", "../x", &b.id).is_err());
+        // Undo puts it back where it was, once.
+        let (ix, pos) = restore_message(&root, "a1", &c, gone.clone(), 0).unwrap();
+        assert_eq!((ix.chats[0].messages, pos), (2, 0));
+        assert_eq!(load(&root, "a1", &c).unwrap(), vec![a.clone(), b.clone()]);
+        assert!(
+            restore_message(&root, "a1", &c, gone, 0).is_err(),
+            "already back"
+        );
+        // A position past the end is clamped.
+        let (_, gone, _) = delete_message(&root, "a1", &c, &b.id).unwrap();
+        let (_, pos) = restore_message(&root, "a1", &c, gone, 99).unwrap();
+        assert_eq!(pos, 1);
+        assert_eq!(load(&root, "a1", &c).unwrap(), vec![a, b]);
         std::fs::remove_dir_all(root).unwrap();
     }
 

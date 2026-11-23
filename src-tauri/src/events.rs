@@ -23,6 +23,8 @@ pub const RUN_FINISHED: &str = "run:finished";
 pub const CHAT_MESSAGE: &str = "chat:message";
 /// Payload: `ChatMessageDeleted`.
 pub const CHAT_MESSAGE_DELETED: &str = "chat:message_deleted";
+/// Payload: `ChatMessageRestored` (a deleted message put back by Undo).
+pub const CHAT_MESSAGE_RESTORED: &str = "chat:message_restored";
 /// Payload: `ChatsChanged` (an agent's chat list or open chat changed).
 pub const CHATS_CHANGED: &str = "chats:changed";
 /// Payload: `ToolsStatus`.

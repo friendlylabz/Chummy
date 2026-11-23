@@ -48,6 +48,7 @@ fn main() {
             "set_active_chat",
             "delete_chat",
             "delete_chat_message",
+            "restore_chat_message",
             "send_message",
             "test_run",
             "stop_run",

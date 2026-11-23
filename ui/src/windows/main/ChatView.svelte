@@ -14,6 +14,14 @@
 
   let { agent, footer }: { agent: Agent; footer?: Snippet } = $props();
 
+  /** The message whose trash can was clicked: it asks "Delete?" first. */
+  let confirming = $state<string | null>(null);
+
+  function confirmDelete(id: string) {
+    confirming = null;
+    chat.deleteMessage(id);
+  }
+
   let scroller: HTMLDivElement;
   const run = $derived(runs.forChat(chat.chatId));
   const jobRun = $derived(runs.jobForAgent(agent.id));
@@ -65,7 +73,15 @@
     {/if}
 
     {#each chat.messages as m (m.id)}
-      <div class="item" class:mine={m.role === "user" || m.role === "answer"} class:plain={m.role === "notice"}>
+      <!-- svelte-ignore a11y_no_static_element_interactions (hover only: leaving cancels "Delete?") -->
+      <div
+        class="item"
+        class:mine={m.role === "user" || m.role === "answer"}
+        class:plain={m.role === "notice"}
+        onmouseleave={() => {
+          if (confirming === m.id) confirming = null;
+        }}
+      >
         {#if m.role === "user"}
           <div class="msg user"><div class="bubble" data-selectable>{m.text}</div></div>
         {:else if m.role === "assistant"}
@@ -99,13 +115,28 @@
             {/if}
           </div>
         {/if}
-        {#if !run}
+        {#if !run && confirming === m.id}
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions (Escape cancels) -->
+          <div
+            class="confirm"
+            role="group"
+            aria-label="Delete this message?"
+            onkeydown={(e) => {
+              if (e.key === "Escape") confirming = null;
+            }}
+          >
+            <span>Delete this message?</span>
+            <!-- svelte-ignore a11y_autofocus -->
+            <button type="button" class="danger" autofocus onclick={() => confirmDelete(m.id)}>Delete</button>
+            <button type="button" onclick={() => (confirming = null)}>Cancel</button>
+          </div>
+        {:else if !run}
           <button
             type="button"
             class="trash"
             title="Delete this message (the agent won't see it either)"
             aria-label="Delete message"
-            onclick={() => chat.deleteMessage(m.id)}
+            onclick={() => (confirming = m.id)}
           >
             <Icon name="trash" size={13} />
           </button>
@@ -141,7 +172,24 @@
       <AskCard pending={p} showOrigin={p.origin.kind === "job"} answerHere={p.id !== composerAsk?.id} />
     {/each}
   </div>
-  {#if footer}<div class="footer">{@render footer()}</div>{/if}
+  {#if footer}
+    <div class="footer">
+      {#if chat.undoable.length}
+        <div class="undo" role="status">
+          <span>
+            {chat.undoable.length === 1 ? "Message deleted." : `${chat.undoable.length} messages deleted.`}
+          </span>
+          <button type="button" class="link" onclick={() => chat.undoDelete()}>
+            {chat.undoable.length === 1 ? "Undo" : "Undo last"}
+          </button>
+          <button type="button" class="close" aria-label="Dismiss" onclick={() => chat.dismissUndo()}>
+            <Icon name="close" size={12} />
+          </button>
+        </div>
+      {/if}
+      {@render footer()}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -180,6 +228,71 @@
     cursor: pointer;
     opacity: 0;
     transition: opacity var(--dur-fast) var(--ease);
+  }
+  .confirm {
+    position: absolute;
+    top: calc(100% - 2px);
+    left: 40px;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 3px 4px 3px var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    box-shadow: var(--shadow-sm);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  .item.mine .confirm {
+    left: auto;
+    right: 0;
+  }
+  .item.plain .confirm {
+    left: 0;
+  }
+  .confirm button,
+  .undo button {
+    padding: 2px var(--space-2);
+    border: none;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+  }
+  .confirm button:hover,
+  .undo button:hover {
+    background: var(--surface-2);
+  }
+  .confirm button.danger {
+    color: var(--danger);
+    font-weight: 600;
+  }
+  .undo {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: fit-content;
+    margin: 0 auto var(--space-2);
+    padding: 4px 4px 4px var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    box-shadow: var(--shadow-sm);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+  }
+  .undo button.link {
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .undo button.close {
+    display: grid;
+    place-items: center;
+    color: var(--text-faint);
   }
   .item.plain .trash {
     left: 0;
