@@ -40,7 +40,7 @@ pub use format::{
     Position, VERSION,
 };
 pub use log::{LoggedValue, ModelLog, PortLog, StepLog, StepStatus};
-pub use templates::{ASSISTANT, Template, templates};
+pub use templates::{ASSISTANT, ASSISTANT2, Template, templates};
 pub use validate::{Analysis, BlockPorts, FunctionPorts, Issue, Severity, analyze};
 
 #[derive(Debug, thiserror::Error)]

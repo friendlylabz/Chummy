@@ -130,6 +130,17 @@ class SplitterTests(unittest.TestCase):
         self.assertEqual(say("One step of it: Find the date\nCould you do this step in one go"), "ONE GO")
         self.assertTrue(say("One step of it: Write a short summary\nOne go?").startswith("BREAK DOWN"))
 
+    def test_fake_backend_plays_assistant_2(self):
+        tools = [{"type": "function", "function": {"name": "current_time", "parameters": {}}}]
+        def say(prompt):
+            gen = ce.FakeBackend(ce.PARSERS["hermes"]).generate(
+                [{"role": "user", "content": prompt}], tools, 100, None, None)
+            return "".join(gen)
+        first = say("Find the date, step by step")
+        self.assertIn("- [ ] Find the date", first)
+        self.assertIn('"name": "current_time"', first)
+        self.assertTrue(say("But your to-do list still has unchecked steps:\n- [ ] Tell you").startswith("- [x]"))
+
 
 def free_port():
     s = socket.socket()

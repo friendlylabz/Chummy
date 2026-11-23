@@ -110,7 +110,14 @@ until you say so.
   sees it as `{{plan}}`). If a step fails all its tries, the model explains
   why and the run stops. Onboarding offers it with one click, and a first
   agent gets it automatically.
-- **Templates.** Chummy assistant, Blank, Simple chat, Draft and self-check, **5 step
+- **Chummy assistant 2 (a candidate default).** One agent loop, like a
+  coding agent's: the model works with tools, call after call, until it
+  answers without one. It says what it's doing as it goes, keeps its own
+  to-do list (a checklist it rewrites as it works) for bigger jobs, reads
+  `CHUMMY.md` from the agent's folder for your instructions, and summarises
+  the conversation when it gets long. If it stops with steps unchecked or
+  with an empty answer, it's sent back to finish (twice at most).
+- **Templates.** Chummy assistant, Chummy assistant 2, Blank, Simple chat, Draft and self-check, **5 step
   recursive plan** and **5 step recursive plan verify**. The planner tries
   your goal straight away (by writing or with tools); anything too big is
   broken into 5 or fewer steps, and each step is tried the same way,
@@ -265,7 +272,7 @@ crates/          Pure Rust libraries, no Tauri dependency, tested on their own
     engine/      chummy_engine.py: the OpenAI-compatible transformers server
   store/         Chummy folder layout, atomic versioned JSON, keychain secrets
   flow/          Loop format, block catalog, validation, the loop engine, templates
-    templates/   Template loop files (the 5 step recursive plan)
+    templates/   Template loop files and their generators (make_templates.py, assistant2.py)
   tools/         Python tools as WebAssembly: format, locks, installer, sandbox host
     builtin/     The built-in tools and their pylock files
     support/     The in-sandbox runner and the `chummy` helper module

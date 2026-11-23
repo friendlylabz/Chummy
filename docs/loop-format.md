@@ -267,7 +267,7 @@ Ports are written `name: kind`.
 | `ask_user` | Ask me | `in: any` | `out: text`, `error: text` | `prompt` ("_INPUT_"; `_INPUT_` is replaced by the input, or the input is added after it), `timeout_minutes` (0 = wait as long as it takes; at most 10080), `default_answer` (""). Asks the user and sends the answer on. If the wait times out, `default_answer` is used, or the run stops if it's empty. |
 | `exchange` | Start exchange | `in: any` | `out: exchange` | `system` (""), `roles` (["user"]). Text becomes one message with the first role; a list becomes one message per item, with the roles in turn. |
 | `augment` | Add to exchange | `exchange: exchange`, `in: any` | `out: exchange` | `role` ("user"), `format` ("_INPUT_"). Adds the text as a message (`_INPUT_` replaced by it); a list adds one message per item. |
-| `read_exchange` | Read exchange | `in: exchange` | `last: text`, `all: text`, `calls: text` | `role` ("assistant"; or "user", "tool", "system", "any"). `last` is the last message from that role, `all` the transcript, `calls` the pending tool calls described for people (empty if none). |
+| `read_exchange` | Read exchange | `in: exchange` | `last: text`, `all: text`, `calls: text`, `newest: text` | `role` ("assistant"; or "user", "tool", "system", "any"). `last` is the last message from that role with any text (messages that only call tools are skipped), `newest` the newest message from that role even if it only calls tools (then it's empty), `all` the transcript, `calls` the pending tool calls described for people (empty if none). |
 | `decline_calls` | Decline tool calls | `in: exchange`, `reason: text` | `out: exchange` | none. Answers each pending tool call with "Not run" and the reason, without running it. |
 | `find_call` | Find tool call | `exchange: exchange`, `in: text` | `call: exchange`, `none: text` | `tools` ("inherit"), `network` ("inherit"), as in Tool switches. Finds tool calls in the text and adds them to the exchange for *Run tool*. Only tools the block offers count; text without a usable call goes out of `none`. |
 | `outline` | Plan outline | `in: text` (start), `task: text` and `steps: list` (add steps), or `task: text` (mark) | `out: text` | `action` ("start", "add_steps" or "mark"), `status` ("done"), `limit` (5; 0 = all), `key` ("plan"). See *Plan outline*. |
@@ -499,3 +499,50 @@ passed; an empty work answer never passes; failed checks let the work
 through; failed model calls and tools count as a failed try; failed note
 updates keep the old notes and the work goes on; limits are 10,000 steps,
 400 model calls and 120 tool calls per run.
+
+## Example: Chummy assistant 2 (one agent loop)
+
+[`assistant2.chummy.json`](../crates/flow/templates/assistant2.chummy.json)
+(written by `make_templates.py` from `assistant2.py`) takes the opposite
+approach to the Chummy assistant: no separate judges or planners, just one
+model working with tools until it's done, the way a coding agent's core loop
+does (it's modelled on the basic behaviour of Claude Code's query loop).
+It's a candidate default, offered next to the Chummy assistant.
+
+1. **Get ready.** Saves the request (`{{request}}`) and the conversation
+   before it (`{{conversation}}`), reads `CHUMMY.md` from the top of the
+   agent's folder into `{{instructions}}` (your instructions for this
+   folder, like a project instruction file), lists the folder's top level
+   (first 60 entries) into `{{folder}}`, and starts `{{todos}}` and
+   `{{progress}}`.
+2. **Agent loop.** The exchange holds only your message; the *Work* block's
+   system message tells the model how to work (say what you're about to do,
+   read before changing, don't repeat refused calls, ask before anything
+   hard to undo, ask one question if unclear, check your work, report
+   honestly) and holds the to-do list, folder, instructions and
+   conversation, filled in fresh at every call. Each answer with tool calls
+   goes through *Show what it says* (the text next to the calls is shown to
+   you, using Read exchange's **Newest message** so older text isn't
+   repeated), *Run tool* (your approvals apply; errors and refusals go back
+   to the model) and *Make room*, then back to *Work*.
+3. **Planning** is the model's own checklist. Whenever it writes lines like
+   `- [ ] step` / `- [x] step`, *Keep the to-do list* saves them as
+   `{{todos}}`, replacing the old list; the model sees the current list in
+   every call. Simple requests skip it.
+4. **Make room.** After each round of tool results the transcript is saved
+   as `{{progress}}` (newest 8,000 characters). If it has grown past about
+   20,000 characters (it's cut into 2,000-character chunks and the cuts are
+   counted, since a regular expression can't count that many characters),
+   the model summarises it, you see a short note, and the work carries on
+   in a fresh exchange from the summary.
+5. **Done?** An answer without tool calls ends the loop: one that ends with
+   a question waits for your reply (the run ends; your next message carries
+   on); an empty one, or one given while `{{todos}}` still has unchecked
+   steps, is shown and the model is sent back to carry on (in a fresh
+   exchange with the request, `{{progress}}` and the list), twice at most
+   per message; otherwise it's the final answer. Delete *Done?* to get the
+   plain "stop when the model stops" behaviour.
+
+A model call that fails (after the engine's bad-call retries) is shown as
+"I couldn't finish: …" and *Stop with error* ends the run as failed. Limits
+are 10,000 steps, 200 model calls and 150 tool calls per run.

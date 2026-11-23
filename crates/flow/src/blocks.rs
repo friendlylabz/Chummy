@@ -682,6 +682,7 @@ impl BlockKind {
                 port("last", "Last message", Text),
                 port("all", "Transcript", Text),
                 port("calls", "Tool calls", Text),
+                port("newest", "Newest message", Text),
             ],
             Input(_) | History(_) | Fixed(_) | Combine(_) | ForEach(_) | Join(_) => {
                 vec![port("out", "Out", Text)]
@@ -1210,7 +1211,7 @@ pub fn catalog() -> Vec<BlockInfo> {
             "read_exchange",
             "Read exchange",
             Exchange,
-            "Gets text out of an exchange: the last message (from a chosen role), the whole transcript, and the tool calls waiting at its end (for checking them before they run).",
+            "Gets text out of an exchange: the last message (from a chosen role), the whole transcript, and the tool calls waiting at its end (for checking them before they run). Last message skips messages that only call tools; Newest message doesn't, so it's empty when the newest message from that role only calls tools (handy for showing what the model says before its tool calls, without repeating older text).",
             vec![p(
                 "role",
                 "Last message from",

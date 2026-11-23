@@ -1243,6 +1243,13 @@ impl<'a, H: Host> Runner<'a, H> {
                     .find(|m| p.role.matches(m.role) && !(m.text.is_empty() && !m.calls.is_empty()))
                     .map(|m| m.text.clone())
                     .unwrap_or_default();
+                let newest = ex
+                    .messages
+                    .iter()
+                    .rev()
+                    .find(|m| p.role.matches(m.role))
+                    .map(|m| m.text.clone())
+                    .unwrap_or_default();
                 let calls = ex
                     .pending_calls()
                     .iter()
@@ -1253,6 +1260,7 @@ impl<'a, H: Host> Runner<'a, H> {
                     ("last".into(), Value::Text(last)),
                     ("all".into(), Value::Text(ex.transcript())),
                     ("calls".into(), Value::Text(calls)),
+                    ("newest".into(), Value::Text(newest)),
                 ])
             }
             BlockKind::Function(p) => {
@@ -2568,6 +2576,44 @@ mod tests {
                 (Role::Assistant, "Noted: Be brief."),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn read_exchange_newest_includes_messages_that_only_call_tools() {
+        // An earlier assistant message, then a model turn that only calls a
+        // tool: Last message skips the call-only message, Newest doesn't.
+        let l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b("start", "exchange", json!({})),
+                b(
+                    "add",
+                    "augment",
+                    json!({ "role": "assistant", "format": "Earlier words" }),
+                ),
+                b("m", "llm", json!({ "tools": ["echo"] })),
+                b("read", "read_exchange", json!({ "role": "assistant" })),
+                b(
+                    "both",
+                    "combine",
+                    json!({ "inputs": 2, "format": "[_INPUT1_|_INPUT2_]" }),
+                ),
+                b("o", "output", json!({})),
+            ],
+            vec![
+                ln("in", "out", "start", "in"),
+                ln("start", "out", "add", "exchange"),
+                ln("in", "out", "add", "in"),
+                ln("add", "out", "m", "in"),
+                ln("m", "tool", "read", "in"),
+                ln("read", "newest", "both", "in1"),
+                ln("read", "last", "both", "in2"),
+                ln("both", "out", "o", "in"),
+            ],
+        );
+        let host = Fake::script(vec![calls("echo", json!({ "text": "x" }))]);
+        let (o, _) = go(&l, &host, "hello").await;
+        assert_eq!(o.replies, vec!["[|Earlier words\n\nhello]"], "{o:?}");
     }
 
     fn func(

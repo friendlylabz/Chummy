@@ -27,6 +27,12 @@ once, with the reason.
 
 import json
 import os
+import sys
+
+sys.dont_write_bytecode = True  # no __pycache__ next to the templates
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from loopkit import b, l, note, fn, tidy  # noqa: E402
+from assistant2 import assistant2  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -53,39 +59,6 @@ CHECK = (
     "Request: _INPUT1_\n\nAnswer: _INPUT2_\n\nQuestion: _INPUT3_\n\nAnswer the question about the answer above. "
     "Start with YES or NO, then give one short reason."
 )
-
-
-def b(id, type, label, x, y, params=None, comment=""):
-    out = {"id": id, "type": type, "label": label, "position": {"x": x, "y": y}, "params": params or {}}
-    if comment:
-        out["comment"] = comment
-    return out
-
-
-def l(a, ap, c, cp, label=""):
-    out = {"from": {"block": a, "port": ap}, "to": {"block": c, "port": cp}}
-    if label:
-        out["label"] = label
-    return out
-
-
-def note(id, x, y, text, w=320, h=0):
-    return {"id": id, "text": text, "position": {"x": x, "y": y}, "width": w, "height": h}
-
-
-def fn(id, name, description, inputs, outputs, blocks, links, notes=None):
-    out = {
-        "id": id,
-        "name": name,
-        "description": description,
-        "inputs": [{"name": n, "label": lab, "to": {"block": blk, "port": p}} for n, lab, blk, p in inputs],
-        "outputs": [{"name": n, "label": lab, "from": {"block": blk, "port": p}} for n, lab, blk, p in outputs],
-        "blocks": blocks,
-        "links": links,
-    }
-    if notes:
-        out["notes"] = notes
-    return out
 
 
 def verify_fn():
@@ -955,26 +928,11 @@ def assistant():
         ],
     }
 
-def tidy(loop):
-    """Model blocks that do the work inherit the agent's tools and every model setting;
-    the others (judges, checks, plans, notes) never get tools."""
-    def walk(blocks):
-        for blk in blocks:
-            if blk["type"] != "llm":
-                continue
-            p = blk.setdefault("params", {})
-            p.pop("max_tokens", None)
-            if blk["id"] != "work":
-                p["tools"] = "off"
-    walk(loop["blocks"])
-    for f in loop.get("functions", []):
-        walk(f["blocks"])
-    return loop
-
-
 for verify, file in [(False, "five-step-plan.chummy.json"), (True, "five-step-plan-verify.chummy.json")]:
     with open(os.path.join(HERE, file), "w", encoding="utf-8") as f:
         f.write(json.dumps(tidy(planner(verify)), indent=2, ensure_ascii=False) + "\n")
 with open(os.path.join(HERE, "assistant.chummy.json"), "w", encoding="utf-8") as f:
     f.write(json.dumps(tidy(assistant()), indent=2, ensure_ascii=False) + "\n")
-print("wrote the planner templates and the Chummy assistant")
+with open(os.path.join(HERE, "assistant2.chummy.json"), "w", encoding="utf-8") as f:
+    f.write(json.dumps(tidy(assistant2()), indent=2, ensure_ascii=False) + "\n")
+print("wrote the planner templates, the Chummy assistant and Chummy assistant 2")
