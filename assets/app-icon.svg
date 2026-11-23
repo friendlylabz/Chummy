@@ -19,8 +19,5 @@
   <circle cx="420" cy="500" r="40" fill="#1D3A2C"/>
   <circle cx="604" cy="500" r="40" fill="#1D3A2C"/>
   <path d="M410 612c58 56 146 56 204 0" fill="none" stroke="#1D3A2C" stroke-width="32" stroke-linecap="round"/>
-  <!-- cheeks -->
-  <circle cx="352" cy="594" r="26" fill="#9ED8BC"/>
-  <circle cx="672" cy="594" r="26" fill="#9ED8BC"/>
   </g>
 </svg>
