@@ -53,7 +53,7 @@ pub struct RunFinished {
     pub outcome: RunOutcome,
 }
 
-fn emit_index(app: &AppHandle, agent_id: &str, index: ChatIndex) {
+pub fn emit_index(app: &AppHandle, agent_id: &str, index: ChatIndex) {
     let _ = app.emit(
         events::CHATS_CHANGED,
         ChatsChanged {
@@ -546,6 +546,10 @@ fn start(
         model,
         message: inputs.message.clone(),
     };
+    // A chat's first message: once answered, the chat may be named by the
+    // model (only with "Use model within app" on; see crate::in_app).
+    let first = chat_id.is_some() && inputs.history.is_empty();
+    let first_message = inputs.message.clone();
     let guard = track(app, state, info, meta);
     let app = app.clone();
     let id = run_id;
@@ -558,6 +562,15 @@ fn start(
         if let (Some(agent), Some(chat)) = (&agent, &chat_id) {
             for m in messages_for(&outcome, &id, &end) {
                 let _ = append(&app, &state, &agent.id, chat, m);
+            }
+            if first && !outcome.replies.is_empty() {
+                tauri::async_runtime::spawn(crate::in_app::title_chat(
+                    app.clone(),
+                    agent.id.clone(),
+                    chat.clone(),
+                    first_message,
+                    outcome.replies.join("\n\n"),
+                ));
             }
         }
         let _ = app.emit(

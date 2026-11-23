@@ -22,6 +22,7 @@ pub mod outline;
 pub mod prompted;
 mod templates;
 mod text;
+pub use text::strip_thinking;
 mod validate;
 
 pub use blocks::{

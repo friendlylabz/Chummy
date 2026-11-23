@@ -806,6 +806,7 @@ mod tests {
             context_max: None,
             context_tokens: None,
             compact_at: None,
+            use_in_app: false,
         };
         let ledger = Arc::new(usage::UsageLedger::in_memory());
         let mut s = setup(None);

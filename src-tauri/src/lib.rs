@@ -9,6 +9,7 @@ mod commands;
 mod dialogs;
 mod events;
 mod host;
+mod in_app;
 mod library;
 mod notify;
 mod settings;

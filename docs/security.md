@@ -227,6 +227,17 @@ without noticing.
 - Reported lengths are only used as numbers (capped at `u32`), and a user
   setting can lower but not raise them.
 
+## Model use outside loops
+
+A model connection is only called by the user's loops, unless its **Use model
+within app** switch is on (off by default; `ProviderConfig::use_in_app`).
+Every model call that doesn't come from a loop goes through
+`Settings::in_app_model` (`src-tauri/src/in_app.rs`); today that's naming a
+chat after its first reply. Those calls check the daily token limit first and
+are counted in it. Test connection is an explicit user action and isn't
+gated. Context-length detection reads the server's model metadata only and
+makes no model calls.
+
 ## Known risks and what to do next
 
 In rough order of importance:

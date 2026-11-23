@@ -75,6 +75,7 @@
   const windowNow = $derived(contextWindow(effective));
   const compactNow = $derived(compactThreshold(effective));
   const fmt = (n: number) => n.toLocaleString("en-US");
+  let useInApp = $state(start?.use_in_app ?? false);
   let removeKey = $state(false);
   const kind = start?.kind ?? p0?.kind ?? "open_ai_compatible";
   const needsKey = p0?.needs_key ?? (start ? start.has_key : false);
@@ -103,6 +104,7 @@
       context_max: contextMax,
       context_tokens: contextBad ? null : contextValue,
       compact_at: compactBad ? null : compactValue,
+      use_in_app: useInApp,
     };
   }
 
@@ -281,6 +283,14 @@
       {#if limitBad}At least 1,000 tokens.
       {:else}Counts what every agent and job sends to and gets from this model, and resets at midnight. When it runs out,
         each model block waits, stops, or asks you for more, as set in the block. Turn it off for no limit.{/if}
+    </span>
+  </div>
+
+  <div class="field">
+    <label class="inline first"><input type="checkbox" bind:checked={useInApp} /> Use model within app</label>
+    <span class="hint">
+      Off: this model only answers your agents' loops. On: Chummy also uses it for small jobs of its own outside the
+      loops, like naming chats from their first reply. Those calls count toward the daily limit.
     </span>
   </div>
 

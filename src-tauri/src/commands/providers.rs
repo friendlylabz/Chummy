@@ -349,6 +349,7 @@ mod tests {
             context_max: None,
             context_tokens: None,
             compact_at: None,
+            use_in_app: false,
         };
         assert!(validate(&c).is_err());
         c.base_url = "http://localhost:8080/v1".into();

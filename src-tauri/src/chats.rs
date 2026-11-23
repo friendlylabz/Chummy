@@ -325,6 +325,17 @@ pub fn append(
     save_index(root, agent, ix)
 }
 
+/// Renames a chat. Returns the updated index.
+pub fn rename(root: &Path, agent: &str, chat: &str, title: &str) -> Result<ChatIndex, String> {
+    let _g = lock();
+    let mut ix = index_locked(root, agent)?;
+    let Some(meta) = ix.chats.iter_mut().find(|c| c.id == chat) else {
+        return Err("That chat no longer exists.".into());
+    };
+    meta.title = title_from(title);
+    save_index(root, agent, ix)
+}
+
 /// Deletes a chat. If it was the last one, a new empty chat takes its place.
 pub fn delete(root: &Path, agent: &str, chat: &str) -> Result<ChatIndex, String> {
     let _g = lock();

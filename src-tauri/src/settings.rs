@@ -280,6 +280,14 @@ impl Settings {
     }
 
     /// The model an agent uses: its own choice if that still exists, else the default.
+    /// The agent's model, if Chummy may use it for its own small jobs
+    /// outside loops ("Use model within app", off by default). **Every model
+    /// call that doesn't come from a loop must go through this** (see
+    /// `crate::in_app`).
+    pub fn in_app_model(&self, agent: &Agent) -> Option<&ProviderConfig> {
+        self.agent_model(agent).filter(|p| p.use_in_app)
+    }
+
     pub fn agent_model(&self, agent: &Agent) -> Option<&ProviderConfig> {
         agent
             .model
@@ -541,6 +549,27 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(s.theme, Theme::Dark);
+    }
+
+    #[test]
+    fn models_are_used_in_app_only_when_switched_on() {
+        let s: Settings = serde_json::from_value(serde_json::json!({
+            "version": VERSION,
+            "providers": [{ "id": "m", "name": "M", "kind": "open_ai_compatible",
+                            "base_url": "http://localhost:1/v1", "model": "x" }],
+            "default_provider": "m",
+            "agents": [{ "id": "a", "name": "A", "loop_id": "l", "model": null,
+                         "workspace": { "path": "/tmp/w", "confirmed_at": 1 }, "created_at": 1 }]
+        }))
+        .unwrap();
+        let agent = s.agent("a").unwrap().clone();
+        // Off by default, and missing in older files means off.
+        assert!(!s.providers[0].use_in_app);
+        assert!(s.agent_model(&agent).is_some());
+        assert!(s.in_app_model(&agent).is_none());
+        let mut s = s;
+        s.providers[0].use_in_app = true;
+        assert!(s.in_app_model(&agent).is_some());
     }
 
     #[test]

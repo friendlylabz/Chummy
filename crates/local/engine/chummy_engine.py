@@ -354,6 +354,9 @@ class FakeBackend:
             text = "BREAK DOWN: it has parts." if "summary" in step else "ONE GO"
         elif "tried 5 times" in low:
             text = "Every try was judged incomplete, so it needs more to go on."
+        elif low.rstrip().endswith("title for this conversation:"):
+            # Chummy naming a chat ("Use model within app").
+            text = "A Friendly Greeting"
         elif "still has unchecked steps" in low:
             # The Chummy assistant sends the model back to finish its to-do list.
             text = "- [x] Find the date\n- [x] Tell you\n\nAll done: the date is in the tool's result above."

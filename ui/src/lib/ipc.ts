@@ -49,6 +49,8 @@ export interface ProviderConfig {
   context_tokens?: number | null;
   /** When loops make room, in tokens (`null`: 80% of the context). */
   compact_at?: number | null;
+  /** "Use model within app": Chummy may use it outside loops (chat titles…). Off by default. */
+  use_in_app?: boolean;
 }
 
 export const DEFAULT_CONTEXT = 8192;

@@ -140,6 +140,7 @@ class SplitterTests(unittest.TestCase):
         self.assertIn("- [ ] Find the date", first)
         self.assertIn('"name": "current_time"', first)
         self.assertTrue(say("But your to-do list still has unchecked steps:\n- [ ] Tell you").startswith("- [x]"))
+        self.assertEqual(say("The user wrote:\nhi\n\nTitle for this conversation:"), "A Friendly Greeting")
 
 
 def free_port():

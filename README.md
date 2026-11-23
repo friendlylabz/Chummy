@@ -160,7 +160,10 @@ until you say so.
   report it; OpenAI's own API doesn't). Each connection has a context length
   (the reported one, or less if you set it) and a *Make room at* point (80%
   of the context by default), where the Chummy assistant summarises a long
-  conversation.
+  conversation. **Use model within app** (off by default) is the only way
+  Chummy calls a model outside your loops: with it on, Chummy also uses that
+  model for small jobs of its own, like naming chats from their first reply;
+  with it off, chats are named from your first message.
 - **Turn figures.** Under each reply: model calls, tool calls and steps, then
   the tokens the turn added to context, how full the context is, and how
   much of the model's daily token limit is used (all estimates).

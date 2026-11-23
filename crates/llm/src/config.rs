@@ -105,6 +105,15 @@ pub struct ProviderConfig {
     /// [`DEFAULT_COMPACT_PERCENT`] of the context). Capped at the context.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compact_at: Option<u32>,
+    /// "Use model within app": Chummy may use this model for its own small
+    /// jobs outside loops (chat titles and the like). Off by default: the
+    /// model is the user's, for their loops.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub use_in_app: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// Context length assumed when neither the server nor the user says.
@@ -329,6 +338,7 @@ mod tests {
             context_max: None,
             context_tokens: None,
             compact_at: None,
+            use_in_app: false,
         };
         // Nothing known: the default, made room for at 80%.
         assert_eq!(p.context_window(), DEFAULT_CONTEXT);
@@ -369,6 +379,7 @@ mod tests {
             context_max: None,
             context_tokens: None,
             compact_at: None,
+            use_in_app: false,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         assert!(json.contains("\"kind\":\"ollama\""));
