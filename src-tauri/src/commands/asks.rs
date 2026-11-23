@@ -49,9 +49,15 @@ pub fn answer_ask(
             .map(|f| f.to_uppercase().chain(c).collect())
             .unwrap_or(e)
     })?;
-    // Keep a record in the agent's chat. Test runs aren't part of a chat.
+    // Keep a record in the run's chat (a job's questions go to the agent's
+    // open chat). Test runs aren't part of a chat.
     if pending.origin.kind != RunKind::Test
         && let Some(agent) = &pending.origin.agent_id
+        && let Some(chat) = pending
+            .origin
+            .chat_id
+            .clone()
+            .or_else(|| super::chat::active_chat(&state, agent).ok())
     {
         let from = (pending.origin.kind == RunKind::Job).then(|| pending.origin.title.clone());
         let question = pending.ask.text.clone();
@@ -60,6 +66,7 @@ pub fn answer_ask(
                 &app,
                 &state,
                 agent,
+                &chat,
                 ChatMessage {
                     id: msg_id(),
                     role: role.into(),

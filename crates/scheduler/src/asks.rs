@@ -38,6 +38,9 @@ pub struct Origin {
     pub kind: RunKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
+    /// The chat a chat run belongs to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job_id: Option<String>,
     /// For people: the agent's or job's name.
@@ -260,6 +263,7 @@ mod tests {
             run_id: run.into(),
             kind: RunKind::Job,
             agent_id: Some("a".into()),
+            chat_id: None,
             job_id: Some("j".into()),
             title: "Digest".into(),
         }

@@ -4,6 +4,7 @@
 //! windows. All real logic lives in the `chummy-*` crates, which have no Tauri
 //! dependency and are tested on their own.
 
+mod chats;
 mod commands;
 mod dialogs;
 mod events;
@@ -99,7 +100,10 @@ pub fn run() {
             loops::import_loop,
             loops::export_loop,
             chat::get_chat,
-            chat::clear_chat,
+            chat::list_chats,
+            chat::new_chat,
+            chat::set_active_chat,
+            chat::delete_chat,
             chat::send_message,
             chat::test_run,
             chat::stop_run,

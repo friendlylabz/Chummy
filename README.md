@@ -130,6 +130,13 @@ until you say so.
   switches**, and **Agent Loop Configuration** changes any block's settings
   for that agent alone, without touching the loop file. Those settings can be
   exported and imported as `chummy.loopconfig` files.
+- **Chats.** Each agent has as many chats as you like, saved as they happen.
+  The chat picker next to the agent picker starts a **New chat** or opens an
+  earlier one (newest first; a dot marks chats that are working). An agent's
+  chats run side by side, one message at a time each; a scheduled job or a
+  test run of the same agent waits for them, and they wait for it. The
+  Sessions panel shows which chat each run belongs to, and clicking it opens
+  that chat. A new agent starts with an empty chat.
 - **Workspace jail.** Each agent is locked to its folder, which you pick and
   confirm in a native dialog. Whole drives, your home folder, system folders, hidden
   settings folders (`.ssh`, `.config`, …) and Chummy's own folder are always
@@ -196,8 +203,8 @@ until you say so.
 | Windows | `%LOCALAPPDATA%\com.friendlylabz.chummy`                |
 
 It holds `settings.json` (versioned, written atomically, with a `.bak`
-backup), `loops/` (your loops, one JSON file each), `chats/` (chat history,
-one file per agent), `jobs/` (scheduled jobs, their state and run history),
+backup), `loops/` (your loops, one JSON file each), `chats/` (chat history:
+a folder per agent with an index and one file per chat), `jobs/` (scheduled jobs, their state and run history),
 `usage.json` (tokens used per model per day, kept 31 days), `logs/system/`
 (the system log, one file a day) and `logs/runs/` (one log per run, by day),
 `models/`,
@@ -285,7 +292,7 @@ ui/              Svelte 5 frontend, one Vite page per window
 checked → its workspace is opened as a `Jail` → `chummy_flow::run` executes the
 blocks, calling models through the model pipeline and touching files only
 through the jail → `run:*` events stream to every window → the replies are
-saved to the agent's chat history. Block ports come from the Rust catalog; the
+saved to the chat the message came from. Block ports come from the Rust catalog; the
 editor asks Rust for them (`analyze_loop`), so there's a single source of truth.
 
 **Job pipeline:** `chummy_scheduler::Manager` checks schedules and watched

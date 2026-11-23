@@ -55,6 +55,7 @@ impl JobRunner for AppJobs {
             run_id: req.run_id.clone(),
             kind: RunKind::Job,
             agent_id: Some(agent.id.clone()),
+            chat_id: None,
             job_id: Some(job.id.clone()),
             title: job.name.clone(),
         };
@@ -72,6 +73,8 @@ impl JobRunner for AppJobs {
             RunInfo {
                 run_id: req.run_id.clone(),
                 agent_id: Some(agent.id.clone()),
+                chat_id: None,
+                chat_title: None,
                 title: job.name.clone(),
                 source: "job",
                 job_id: Some(job.id.clone()),
@@ -97,6 +100,7 @@ impl JobRunner for AppJobs {
                 RunFinished {
                     run_id: req.run_id.clone(),
                     agent_id: Some(agent.id.clone()),
+                    chat_id: None,
                     outcome,
                 },
             );

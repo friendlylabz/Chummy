@@ -11,7 +11,7 @@
   let input: HTMLTextAreaElement;
 
   const agent = $derived(settings.current.agents.find((a) => a.id === settings.current.active_agent) ?? null);
-  const run = $derived(agent ? runs.forAgent(agent.id) : undefined);
+  const run = $derived(agent ? runs.forChat(chat.chatId) : undefined);
   const jobRun = $derived(agent ? runs.jobForAgent(agent.id) : undefined);
   /** The chat run is waiting for an answer, which this box sends. */
   const question = $derived(

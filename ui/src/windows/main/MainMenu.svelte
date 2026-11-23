@@ -2,6 +2,7 @@
   import { commands } from "$lib/ipc";
   import { setup } from "$lib/stores/setup.svelte";
   import { settings } from "$lib/stores/settings.svelte";
+  import { chat } from "$lib/stores/chat.svelte";
   import Icon, { type IconName } from "$lib/components/Icon.svelte";
   import ThemeSwitch from "$lib/components/ThemeSwitch.svelte";
 
@@ -24,7 +25,7 @@
           label: "New chat",
           icon: "plus",
           disabled: !setup.ready || !settings.current.active_agent,
-          run: () => settings.current.active_agent && commands.clearChat(settings.current.active_agent),
+          run: () => chat.create(),
         },
       ],
     },

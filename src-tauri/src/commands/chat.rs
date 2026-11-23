@@ -1,11 +1,11 @@
-//! Chat and loop runs.
+//! Chats and loop runs.
 //!
 //! Sending a message runs the agent's loop with the agent's model, inside the
 //! agent's workspace. Progress streams to every window as `run:*` events; the
-//! reply is saved to `chats/<agent id>.json`.
+//! reply is saved to the chat it was sent from (see [`crate::chats`]). Each
+//! chat runs one message at a time; an agent's chats can run at once.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -14,81 +14,29 @@ use chummy_log::runs::{RunEnd, RunHeader, RunLog};
 use chummy_log::system::{self as syslog, Level};
 use chummy_sandbox::Jail;
 use chummy_scheduler::{Origin, RunKind};
-use chummy_store::JsonDoc;
-use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, State};
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
 use super::{CmdResult, err, now};
+use crate::chats;
 use crate::events;
 use crate::host::{AppHost, agent_host};
 use crate::settings::{Agent, Settings};
 use crate::state::{AppState, RunInfo, lock};
 
-/// Chat history kept per agent; older messages are dropped.
-const MAX_CHAT_MESSAGES: usize = 2000;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct RunSummary {
-    /// The run's log (Logs window, and the step view under the message).
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub run_id: String,
-    pub status: String,
-    pub steps: u32,
-    pub llm_calls: u32,
-    #[serde(default)]
-    pub tool_calls: u32,
-    /// Estimated tokens this turn added to context.
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub tokens: u64,
-    /// Estimated tokens in the context at the end, and the model's context
-    /// length (0: unknown).
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub context_tokens: u64,
-    #[serde(default, skip_serializing_if = "is_zero32")]
-    pub context_window: u32,
-    /// The model's tokens used today when the reply came, and today's
-    /// allowance (`None`: no daily limit).
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub daily_used: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub daily_allowed: Option<u64>,
-}
-
-fn is_zero(n: &u64) -> bool {
-    *n == 0
-}
-
-fn is_zero32(n: &u32) -> bool {
-    *n == 0
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ChatMessage {
-    pub id: String,
-    /// "user", "assistant", "notice" (errors, stops, limits), or
-    /// "question" / "answer" (something a run asked, and the reply). Only
-    /// "user" and "assistant" messages are the conversation the loop sees.
-    pub role: String,
-    pub text: String,
-    pub at: u64,
-    /// Who asked a question when it wasn't this chat (a job's name).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub from: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run: Option<RunSummary>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct ChatLog {
-    pub version: u32,
-    pub messages: Vec<ChatMessage>,
-}
+pub use crate::chats::{ChatIndex, ChatMessage, ChatMeta, RunSummary};
 
 #[derive(Clone, Serialize)]
 pub struct ChatMessageEvent {
     pub agent_id: String,
+    pub chat_id: String,
     pub message: ChatMessage,
+}
+
+#[derive(Clone, Serialize)]
+pub struct ChatsChanged {
+    pub agent_id: String,
+    pub index: ChatIndex,
 }
 
 #[derive(Clone, Serialize)]
@@ -101,47 +49,47 @@ pub struct RunEvent {
 pub struct RunFinished {
     pub run_id: String,
     pub agent_id: Option<String>,
+    pub chat_id: Option<String>,
     pub outcome: RunOutcome,
 }
 
-pub fn chat_path(state: &AppState, agent_id: &str) -> CmdResult<PathBuf> {
-    if !crate::library::valid_id(agent_id) {
-        return Err("Invalid agent id.".into());
-    }
-    Ok(state.dirs.chats.join(format!("{agent_id}.json")))
+fn emit_index(app: &AppHandle, agent_id: &str, index: ChatIndex) {
+    let _ = app.emit(
+        events::CHATS_CHANGED,
+        ChatsChanged {
+            agent_id: agent_id.into(),
+            index,
+        },
+    );
 }
 
-fn chat_doc(state: &AppState, agent_id: &str) -> CmdResult<JsonDoc<ChatLog>> {
-    Ok(JsonDoc::new(chat_path(state, agent_id)?))
-}
-
-fn load_chat(state: &AppState, agent_id: &str) -> CmdResult<ChatLog> {
-    Ok(chat_doc(state, agent_id)?.load(|v| v).map_err(err)?.value)
-}
-
+/// Adds a message to one of an agent's chats and tells every window.
 pub fn append(
     app: &AppHandle,
     state: &AppState,
     agent_id: &str,
+    chat_id: &str,
     message: ChatMessage,
 ) -> CmdResult<()> {
-    let doc = chat_doc(state, agent_id)?;
-    let mut log = doc.load(|v| v).map_err(err)?.value;
-    log.version = 1;
-    log.messages.push(message.clone());
-    if log.messages.len() > MAX_CHAT_MESSAGES {
-        let extra = log.messages.len() - MAX_CHAT_MESSAGES;
-        log.messages.drain(..extra);
-    }
-    doc.save(&log).map_err(err)?;
+    let index = chats::append(&state.dirs.chats, agent_id, chat_id, &message)?;
     let _ = app.emit(
         events::CHAT_MESSAGE,
         ChatMessageEvent {
             agent_id: agent_id.into(),
+            chat_id: chat_id.into(),
             message,
         },
     );
+    emit_index(app, agent_id, index);
     Ok(())
+}
+
+/// The chat open for an agent (for questions from jobs, which have no chat
+/// of their own).
+pub fn active_chat(state: &AppState, agent_id: &str) -> CmdResult<String> {
+    chats::index(&state.dirs.chats, agent_id)?
+        .active
+        .ok_or_else(|| "That agent has no chat.".into())
 }
 
 pub fn msg_id() -> String {
@@ -150,21 +98,85 @@ pub fn msg_id() -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
+/// An agent's chats (at least one) and which is open.
 #[tauri::command]
-pub fn get_chat(state: State<'_, AppState>, agent_id: String) -> CmdResult<Vec<ChatMessage>> {
-    Ok(load_chat(&state, &agent_id)?.messages)
+pub fn list_chats(state: State<'_, AppState>, agent_id: String) -> CmdResult<ChatIndex> {
+    chats::index(&state.dirs.chats, &agent_id)
+}
+
+/// Starts a new chat with an agent and opens it.
+#[tauri::command]
+pub fn new_chat(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    agent_id: String,
+) -> CmdResult<ChatMeta> {
+    if state.settings().agent(&agent_id).is_none() {
+        return Err("That agent no longer exists.".into());
+    }
+    let (chat, index) = chats::create(&state.dirs.chats, &agent_id)?;
+    emit_index(&app, &agent_id, index);
+    Ok(chat)
+}
+
+/// Opens one of an agent's chats.
+#[tauri::command]
+pub fn set_active_chat(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    agent_id: String,
+    chat_id: String,
+) -> CmdResult<()> {
+    let index = chats::set_active(&state.dirs.chats, &agent_id, &chat_id)?;
+    emit_index(&app, &agent_id, index);
+    Ok(())
+}
+
+/// Deletes a chat that isn't working on a message, after asking if it has
+/// any messages. Returns whether it was deleted.
+#[tauri::command]
+pub async fn delete_chat(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    agent_id: String,
+    chat_id: String,
+) -> CmdResult<bool> {
+    if chat_busy(&state, &chat_id) {
+        return Err("That chat is still working. Stop it first.".into());
+    }
+    let index = chats::index(&state.dirs.chats, &agent_id)?;
+    let Some(chat) = index.chats.iter().find(|c| c.id == chat_id) else {
+        return Ok(false);
+    };
+    if chat.messages > 0
+        && !crate::dialogs::confirm(
+            &app,
+            window.label(),
+            "Delete this chat?",
+            &format!(
+                "“{}” and its {} messages will be deleted. Run logs are kept.",
+                chat.title, chat.messages
+            ),
+            "Delete chat",
+            true,
+        )
+        .await
+    {
+        return Ok(false);
+    }
+    let index = chats::delete(&state.dirs.chats, &agent_id, &chat_id)?;
+    emit_index(&app, &agent_id, index);
+    Ok(true)
 }
 
 #[tauri::command]
-pub fn clear_chat(app: AppHandle, state: State<'_, AppState>, agent_id: String) -> CmdResult<()> {
-    let path = chat_path(&state, &agent_id)?;
-    let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_file(path.with_extension("json.bak"));
-    let _ = app.emit(
-        events::CHAT_MESSAGE,
-        serde_json::json!({ "agent_id": agent_id, "cleared": true }),
-    );
-    Ok(())
+pub fn get_chat(
+    state: State<'_, AppState>,
+    agent_id: String,
+    chat_id: String,
+) -> CmdResult<Vec<ChatMessage>> {
+    chats::load(&state.dirs.chats, &agent_id, &chat_id)
 }
 
 #[tauri::command]
@@ -197,16 +209,29 @@ pub fn stop_all_runs(state: &AppState) {
     }
 }
 
-/// What, if anything, is using an agent right now, in words.
-pub fn agent_busy_with(state: &AppState, agent_id: &str) -> Option<String> {
+/// What, if anything, is using an agent right now, in words. With
+/// `for_chat`, the agent's other chats don't count: chats run side by side,
+/// but not alongside a job or a test run of the same agent.
+pub fn agent_busy_with(state: &AppState, agent_id: &str, for_chat: bool) -> Option<String> {
     lock(&state.runs)
         .values()
+        .filter(|r| !(for_chat && r.source == "chat"))
         .find(|r| r.agent_id.as_deref() == Some(agent_id))
         .map(|r| match r.source {
             "job" => format!("the job “{}”", r.title),
             "test" => "a test run in the loop editor".to_string(),
-            _ => "the last message".to_string(),
+            _ => match &r.chat_title {
+                Some(t) => format!("the chat “{t}”"),
+                None => "a chat".to_string(),
+            },
         })
+}
+
+/// Whether a chat is working on a message.
+pub fn chat_busy(state: &AppState, chat_id: &str) -> bool {
+    lock(&state.runs)
+        .values()
+        .any(|r| r.chat_id.as_deref() == Some(chat_id))
 }
 
 fn new_run_id() -> String {
@@ -260,6 +285,7 @@ pub fn send_message(
     app: AppHandle,
     state: State<'_, AppState>,
     agent_id: String,
+    chat_id: String,
     text: String,
 ) -> CmdResult<String> {
     let text = text.trim().to_string();
@@ -271,13 +297,19 @@ pub fn send_message(
         .agent(&agent_id)
         .cloned()
         .ok_or("That agent no longer exists.")?;
-    if let Some(what) = agent_busy_with(&state, &agent_id) {
+    let index = chats::index(&state.dirs.chats, &agent_id)?;
+    let Some(chat) = index.chats.iter().find(|c| c.id == chat_id).cloned() else {
+        return Err("That chat no longer exists.".into());
+    };
+    if chat_busy(&state, &chat_id) {
+        return Err("This chat is still working on the last message.".into());
+    }
+    if let Some(what) = agent_busy_with(&state, &agent_id, true) {
         return Err(format!("{} is busy with {what}.", agent.name));
     }
     let (file, jail) = prepare(&state, &s, &agent, None)?;
 
-    let history: Vec<ChatTurn> = load_chat(&state, &agent_id)?
-        .messages
+    let history: Vec<ChatTurn> = chats::load(&state.dirs.chats, &agent_id, &chat_id)?
         .into_iter()
         .filter(|m| m.role == "user" || m.role == "assistant")
         .map(|m| ChatTurn {
@@ -289,6 +321,7 @@ pub fn send_message(
         &app,
         &state,
         &agent_id,
+        &chat_id,
         ChatMessage {
             id: msg_id(),
             role: "user".into(),
@@ -299,6 +332,11 @@ pub fn send_message(
         },
     )?;
 
+    let title = if chat.title == chats::NEW_CHAT {
+        chats::title_from(&text)
+    } else {
+        chat.title.clone()
+    };
     let inputs = RunInputs {
         message: text,
         history,
@@ -309,8 +347,9 @@ pub fn send_message(
         run_id: run_id.clone(),
         kind: RunKind::Chat,
         agent_id: Some(agent.id.clone()),
+        chat_id: Some(chat_id.clone()),
         job_id: None,
-        title: agent.name.clone(),
+        title: format!("{} · {title}", agent.name),
     };
     let model = s.agent_model(&agent).cloned();
     let model_name = model.as_ref().map(|m| m.name.clone());
@@ -323,6 +362,7 @@ pub fn send_message(
         host,
         inputs,
         Some(agent),
+        Some((chat_id, title)),
         "chat",
         model_name,
     );
@@ -348,7 +388,7 @@ pub fn test_run(
                 .agent(&id)
                 .cloned()
                 .ok_or("That agent no longer exists.")?;
-            if let Some(what) = agent_busy_with(&state, &id) {
+            if let Some(what) = agent_busy_with(&state, &id, false) {
                 return Err(format!(
                     "{} is busy with {what}; test without an agent, or wait.",
                     agent.name
@@ -373,6 +413,7 @@ pub fn test_run(
         run_id: run_id.clone(),
         kind: RunKind::Test,
         agent_id: agent.as_ref().map(|a| a.id.clone()),
+        chat_id: None,
         job_id: None,
         title: format!("Test: {}", file.name),
     };
@@ -386,6 +427,7 @@ pub fn test_run(
         host,
         inputs,
         agent,
+        None,
         "test",
         model_name,
     );
@@ -476,13 +518,17 @@ fn start(
     host: AppHost,
     inputs: RunInputs,
     agent: Option<Agent>,
+    chat: Option<(String, String)>,
     source: &'static str,
     model: Option<String>,
 ) {
     let cancel = Arc::new(AtomicBool::new(false));
+    let (chat_id, chat_title) = chat.unzip();
     let info = RunInfo {
         run_id: run_id.clone(),
         agent_id: agent.as_ref().map(|a| a.id.clone()),
+        chat_id: chat_id.clone(),
+        chat_title,
         title: agent
             .as_ref()
             .map(|a| a.name.clone())
@@ -509,11 +555,9 @@ fn start(
 
         let state = app.state::<AppState>();
         lock(&state.runs).remove(&id);
-        if source == "chat"
-            && let Some(agent) = &agent
-        {
+        if let (Some(agent), Some(chat)) = (&agent, &chat_id) {
             for m in messages_for(&outcome, &id, &end) {
-                let _ = append(&app, &state, &agent.id, m);
+                let _ = append(&app, &state, &agent.id, chat, m);
             }
         }
         let _ = app.emit(
@@ -521,6 +565,7 @@ fn start(
             RunFinished {
                 run_id: id,
                 agent_id: agent.map(|a| a.id),
+                chat_id,
                 outcome,
             },
         );

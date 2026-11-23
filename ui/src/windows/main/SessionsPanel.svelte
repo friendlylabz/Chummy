@@ -17,6 +17,10 @@
   interface Row {
     id: string;
     title: string;
+    /** The chat, for chat runs. */
+    chat: string;
+    agent: string | null;
+    chatId: string | null;
     step: string;
   }
   let active = $state<Row[]>([]);
@@ -26,11 +30,21 @@
     const next: Row[] = runs.active.map((r) => ({
       id: r.info.run_id,
       title: `${r.info.source === "job" ? "Job: " : ""}${r.info.title}`,
+      chat: r.info.chat_title ?? "",
+      agent: r.info.agent_id,
+      chatId: r.info.chat_id ?? null,
       step: r.waitingForYou ? "Waiting for you" : r.currentLabel || "Working…",
     }));
     if (JSON.stringify(next) !== JSON.stringify(active)) active = next;
     const busy = agents.filter((a) => runs.forAgent(a.id)).map((a) => a.id);
     if (busy.join() !== busyAgents.join()) busyAgents = busy;
+  }
+
+  /** Opens a chat (and its agent). */
+  async function openChat(agentId: string | null | undefined, chatId: string | null | undefined) {
+    if (!agentId) return;
+    if (chatId) await commands.setActiveChat(agentId, chatId).catch(() => {});
+    if (agentId !== settings.current.active_agent) await commands.setActiveAgent(agentId);
   }
 
   onMount(() => {
@@ -60,7 +74,7 @@
             onclick={() =>
               p.origin.kind === "test"
                 ? commands.openWindow("editor")
-                : p.origin.agent_id && commands.setActiveAgent(p.origin.agent_id)}
+                : openChat(p.origin.agent_id, p.origin.chat_id)}
           >
             <Icon name={p.ask.kind === "tool_approval" ? "shield" : p.ask.kind === "budget" ? "gauge" : "ask"} size={15} />
             <span class="w-text">
@@ -81,10 +95,11 @@
       {#each active as r (r.id)}
         <div class="run">
           <span class="pulse"></span>
-          <div class="run-text">
+          <button class="run-text" type="button" disabled={!r.chatId} title={r.chatId ? "Open this chat" : undefined} onclick={() => openChat(r.agent, r.chatId)}>
             <div class="run-title">{r.title}</div>
+            {#if r.chat}<div class="run-chat"><Icon name="chat" size={12} /><span>{r.chat}</span></div>{/if}
             <div class="run-step">{r.step}</div>
-          </div>
+          </button>
           <button class="icon-btn" type="button" aria-label="Stop" title="Stop" onclick={() => commands.stopRun(r.id)}>
             <Icon name="stop" size={14} />
           </button>
@@ -177,6 +192,31 @@
   .run-text {
     flex: 1;
     min-width: 0;
+    padding: 0;
+    border: none;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+  }
+  .run-text:not(:disabled) {
+    cursor: pointer;
+  }
+  .run-text:not(:disabled):hover .run-title {
+    color: var(--accent);
+  }
+  .run-chat {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    min-width: 0;
+  }
+  .run-chat span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .run-title {
     font-size: var(--text-sm);
@@ -257,6 +297,9 @@
   }
   .waiting {
     align-items: flex-start;
+    height: auto;
+    padding-top: 5px;
+    padding-bottom: 5px;
   }
   .waiting :global(svg) {
     margin-top: 2px;
@@ -268,6 +311,9 @@
     text-align: left;
   }
   .w-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-weight: 550;
   }
   .w-sub {

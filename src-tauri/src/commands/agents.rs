@@ -211,6 +211,8 @@ pub fn save_agent(
             s.active_agent = Some(id.clone());
         }
     })?;
+    // Every agent starts with a chat, ready to type into.
+    crate::chats::index(&state.dirs.chats, &id)?;
     Ok(id)
 }
 
@@ -244,9 +246,7 @@ pub async fn delete_agent(
         return Ok(false);
     }
     crate::commands::chat::stop_agent_runs(&state, &id);
-    let chat = crate::commands::chat::chat_path(&state, &id)?;
-    let _ = std::fs::remove_file(&chat);
-    let _ = std::fs::remove_file(chat.with_extension("json.bak"));
+    crate::chats::delete_agent(&state.dirs.chats, &id)?;
     state.update(&app, |s| {
         s.agents.retain(|a| a.id != id);
         if s.active_agent.as_deref() == Some(id.as_str()) {

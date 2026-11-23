@@ -846,6 +846,7 @@ mod tests {
                 run_id: "r".into(),
                 kind: RunKind::Chat,
                 agent_id: None,
+                chat_id: None,
                 job_id: None,
                 title: "t".into(),
             },

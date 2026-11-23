@@ -114,8 +114,15 @@ class RunsStore {
     return Object.values(this.runs).find((r) => r.info.agent_id === agentId && r.info.source === "job" && !r.outcome);
   }
 
+  /** A chat of this agent that's working, if any. */
   forAgent(agentId: string | null): RunView | undefined {
     return Object.values(this.runs).find((r) => r.info.agent_id === agentId && r.info.source === "chat" && !r.outcome);
+  }
+
+  /** The run of this chat, if it's working. */
+  forChat(chatId: string | null): RunView | undefined {
+    if (!chatId) return undefined;
+    return Object.values(this.runs).find((r) => r.info.chat_id === chatId && !r.outcome);
   }
 }
 

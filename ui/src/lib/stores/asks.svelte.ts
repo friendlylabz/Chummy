@@ -22,6 +22,11 @@ class AsksStore {
     return this.pending.filter((p) => p.origin.agent_id === agentId && p.origin.kind !== "test");
   }
 
+  /** Questions to show in one chat: its own runs', and the agent's jobs'. */
+  forChat(agentId: string | null, chatId: string | null): Pending[] {
+    return this.forAgent(agentId).filter((p) => !p.origin.chat_id || p.origin.chat_id === chatId);
+  }
+
   forRun(runId: string | null | undefined): Pending[] {
     return this.pending.filter((p) => p.origin.run_id === runId);
   }

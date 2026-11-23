@@ -14,9 +14,9 @@
   let { agent }: { agent: Agent } = $props();
 
   let scroller: HTMLDivElement;
-  const run = $derived(runs.forAgent(agent.id));
+  const run = $derived(runs.forChat(chat.chatId));
   const jobRun = $derived(runs.jobForAgent(agent.id));
-  const waiting = $derived(asks.forAgent(agent.id));
+  const waiting = $derived(asks.forChat(agent.id, chat.chatId));
   /** The chat's own question, answered from the message box. */
   const composerAsk = $derived(
     run ? waiting.find((p) => p.origin.run_id === run.info.run_id && p.ask.kind === "question") : undefined,

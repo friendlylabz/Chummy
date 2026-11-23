@@ -441,6 +441,9 @@ export interface ChatMessage {
 export interface RunInfo {
   run_id: string;
   agent_id: string | null;
+  /** A chat run's chat, and its title. */
+  chat_id?: string;
+  chat_title?: string;
   title: string;
   source: "chat" | "test" | "job";
   job_id?: string;
@@ -533,6 +536,22 @@ export interface RunEnd {
   /** The model's tokens used today, and today's allowance (none: no limit). */
   daily_used?: number;
   daily_allowed?: number | null;
+}
+
+/** One of an agent's chats. */
+export interface ChatMeta {
+  id: string;
+  title: string;
+  created_at: number;
+  updated_at: number;
+  messages: number;
+}
+
+/** An agent's chats (newest first) and the open one. */
+export interface ChatIndex {
+  version: number;
+  active: string | null;
+  chats: ChatMeta[];
 }
 
 /** A finished run, as kept with its chat message. */
@@ -665,6 +684,7 @@ export interface Pending {
     run_id: string;
     kind: "chat" | "test" | "job";
     agent_id?: string;
+    chat_id?: string;
     job_id?: string;
     title: string;
   };
@@ -819,9 +839,17 @@ export const commands = {
   importLoop: () => call<string | null>("import_loop", undefined, () => null),
   exportLoop: (id: string) => call<boolean>("export_loop", { id }),
 
-  getChat: (agentId: string) => call<ChatMessage[]>("get_chat", { agentId }, () => []),
-  clearChat: (agentId: string) => call<void>("clear_chat", { agentId }),
-  sendMessage: (agentId: string, text: string) => call<string>("send_message", { agentId, text }),
+  listChats: (agentId: string) =>
+    call<ChatIndex>("list_chats", { agentId }, () => {
+      const c = { id: "c-demo", title: "New chat", created_at: 0, updated_at: 0, messages: 0 };
+      return { version: 1, active: c.id, chats: [c] };
+    }),
+  newChat: (agentId: string) => call<ChatMeta>("new_chat", { agentId }),
+  setActiveChat: (agentId: string, chatId: string) => call<void>("set_active_chat", { agentId, chatId }),
+  deleteChat: (agentId: string, chatId: string) => call<boolean>("delete_chat", { agentId, chatId }),
+  getChat: (agentId: string, chatId: string) => call<ChatMessage[]>("get_chat", { agentId, chatId }, () => []),
+  sendMessage: (agentId: string, chatId: string, text: string) =>
+    call<string>("send_message", { agentId, chatId, text }),
   testRun: (file: LoopFile, agentId: string | null, message: string, overrides: Record<string, string>) =>
     call<string>("test_run", { file, agentId, message, overrides }),
   stopRun: (runId: string) => call<void>("stop_run", { runId }),
@@ -918,9 +946,9 @@ export const events = {
   onRunEvent: (cb: (e: { run_id: string; event: FlowEvent }) => void) => on("run:event", cb),
   onRunFinished: (cb: (e: { run_id: string; agent_id: string | null; outcome: RunOutcome }) => void) =>
     on("run:finished", cb),
-  onChatMessage: (
-    cb: (e: { agent_id: string; message?: ChatMessage; cleared?: boolean }) => void,
-  ) => on("chat:message", cb),
+  onChatMessage: (cb: (e: { agent_id: string; chat_id: string; message: ChatMessage }) => void) =>
+    on("chat:message", cb),
+  onChatsChanged: (cb: (e: { agent_id: string; index: ChatIndex }) => void) => on("chats:changed", cb),
   onToolsChanged: (cb: (s: ToolsStatus) => void) => on("tools:changed", cb),
   onToolsProgress: (cb: (p: ToolsProgress) => void) => on("tools:progress", cb),
   onAsksChanged: (cb: (p: Pending[]) => void) => on("asks:changed", cb),

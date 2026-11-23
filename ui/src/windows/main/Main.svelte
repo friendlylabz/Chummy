@@ -13,6 +13,7 @@
   import Composer from "./Composer.svelte";
   import ChatView from "./ChatView.svelte";
   import AgentPicker from "./AgentPicker.svelte";
+  import ChatPicker from "./ChatPicker.svelte";
   import SessionsPanel from "./SessionsPanel.svelte";
 
   let menuOpen = $state(false);
@@ -55,6 +56,7 @@
     <header class="topbar">
       <Button variant="ghost" icon="menu" iconOnly aria-label="Open menu" onclick={() => (menuOpen = true)} />
       <AgentPicker />
+      <ChatPicker />
       <div class="spacer"></div>
       {#if !sessionsOpen}
         <Button variant="ghost" icon="panel-right" iconOnly aria-label="Show sessions" onclick={() => (sessionsOpen = true)} />

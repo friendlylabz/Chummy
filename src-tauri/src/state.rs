@@ -36,6 +36,11 @@ pub const HF_TOKEN_KEY: &str = "huggingface";
 pub struct RunInfo {
     pub run_id: String,
     pub agent_id: Option<String>,
+    /// The chat a chat run belongs to, and its title.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat_title: Option<String>,
     pub title: String,
     /// "chat", "test" or "job".
     pub source: &'static str,
