@@ -202,9 +202,10 @@ pub struct LlmParams {
     /// Model connection id. `None` uses the agent's model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// Tools the model may call. With none, the block has no Tool output.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tools: Vec<String>,
+    /// Which tools the model may call. Inherit (the default) offers every
+    /// tool the app and the agent allow.
+    #[serde(default, skip_serializing_if = "ToolSwitches::is_inherit")]
+    pub tools: ToolSwitches,
     #[serde(default)]
     pub tool_choice: ToolChoice,
     #[serde(default)]
@@ -214,10 +215,10 @@ pub struct LlmParams {
     pub retries: u32,
     #[serde(default)]
     pub tool_mode: ToolMode,
-    /// This block's tools may use the internet (if the app and the agent
-    /// also allow it).
-    #[serde(default)]
-    pub network: bool,
+    /// Whether this block's tools may use the internet: inherit the agent's
+    /// switch, or override it. The app's switches always apply.
+    #[serde(default, skip_serializing_if = "Switch::is_inherit")]
+    pub network: Switch,
     #[serde(default)]
     pub on_limit: OnLimit,
 }
@@ -282,15 +283,147 @@ fn d_outline_limit() -> u32 {
     5
 }
 
+/// A block's override of a setting the app and agent decide: inherit what
+/// they say (the default), or turn it on or off for this block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Switch {
+    #[default]
+    Inherit,
+    On,
+    Off,
+}
+
+impl Switch {
+    pub fn is_inherit(&self) -> bool {
+        *self == Switch::Inherit
+    }
+
+    /// The setting, given what the agent says.
+    pub fn resolve(self, agent: bool) -> bool {
+        match self {
+            Switch::Inherit => agent,
+            Switch::On => true,
+            Switch::Off => false,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Switch {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        // Older loops used true/false: true meant "if the agent allows it".
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Any {
+            Bool(bool),
+            Name(String),
+        }
+        Ok(match Any::deserialize(d)? {
+            Any::Bool(true) => Switch::Inherit,
+            Any::Bool(false) => Switch::Off,
+            Any::Name(n) => match n.as_str() {
+                "inherit" => Switch::Inherit,
+                "on" => Switch::On,
+                "off" => Switch::Off,
+                other => {
+                    return Err(serde::de::Error::custom(format!(
+                        "“{other}” isn't inherit, on or off"
+                    )));
+                }
+            },
+        })
+    }
+}
+
+/// Which tools a block may use: a switch for all of them, and switches for
+/// single tools. A tool is used when its switch says so: inherit means "if
+/// the agent may use it"; on means "even if it's off for the agent". The
+/// app-wide switches (Permissions and Settings → Tools) always apply.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolSwitches {
+    pub all: Switch,
+    pub each: std::collections::BTreeMap<String, Switch>,
+}
+
+impl ToolSwitches {
+    pub fn is_inherit(&self) -> bool {
+        self.all == Switch::Inherit && self.each.is_empty()
+    }
+
+    pub fn off() -> Self {
+        ToolSwitches {
+            all: Switch::Off,
+            each: Default::default(),
+        }
+    }
+
+    pub fn switch_for(&self, tool: &str) -> Switch {
+        self.each.get(tool).copied().unwrap_or(self.all)
+    }
+
+    /// Whether any tool could be used.
+    pub fn any(&self) -> bool {
+        self.all != Switch::Off || self.each.values().any(|s| *s != Switch::Off)
+    }
+}
+
+impl Serialize for ToolSwitches {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        if self.each.is_empty() {
+            return self.all.serialize(s);
+        }
+        let mut m = s.serialize_map(Some(2))?;
+        m.serialize_entry("all", &self.all)?;
+        m.serialize_entry("each", &self.each)?;
+        m.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for ToolSwitches {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Full {
+            #[serde(default)]
+            all: Switch,
+            #[serde(default)]
+            each: std::collections::BTreeMap<String, Switch>,
+        }
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Any {
+            One(Switch),
+            /// Older loops: a list of tool names, and nothing else.
+            List(Vec<String>),
+            Full(Full),
+        }
+        Ok(match Any::deserialize(d)? {
+            Any::One(all) => ToolSwitches {
+                all,
+                each: Default::default(),
+            },
+            Any::List(names) => ToolSwitches {
+                all: Switch::Off,
+                each: names.into_iter().map(|n| (n, Switch::Inherit)).collect(),
+            },
+            Any::Full(f) => ToolSwitches {
+                all: f.all,
+                each: f.each,
+            },
+        })
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FindCallParams {
-    /// Tools the text may call.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tools: Vec<String>,
-    /// These tools may use the internet (if the app and the agent also allow it).
-    #[serde(default)]
-    pub network: bool,
+    /// Tools the text may call (inherit: the app's and agent's).
+    #[serde(default, skip_serializing_if = "ToolSwitches::is_inherit")]
+    pub tools: ToolSwitches,
+    /// Whether these tools may use the internet (inherit: the agent's).
+    #[serde(default, skip_serializing_if = "Switch::is_inherit")]
+    pub network: Switch,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -523,7 +656,7 @@ impl BlockKind {
             Output(_) | Function(_) => vec![],
             Llm(p) => {
                 let mut v = vec![port("out", "Answer", Text)];
-                if !p.tools.is_empty() && p.tool_mode != ToolMode::Off {
+                if p.tools.any() && p.tool_mode != ToolMode::Off {
                     v.push(port("tool", "Tool call", ValueKind::Exchange));
                 }
                 v.push(port("reasoning", "Reasoning", Text));
@@ -653,7 +786,7 @@ pub enum ParamKind {
     },
     /// A list of message roles.
     Roles,
-    /// A list of installed tool names.
+    /// Tool switches: one for all tools (inherit / on / off), and one per tool.
     Tools,
 }
 
@@ -661,6 +794,11 @@ pub enum ParamKind {
 pub struct ChoiceOption {
     pub value: &'static str,
     pub label: &'static str,
+}
+
+/// Inherit / On / Off, as a three-way choice.
+fn switch_choice(inherit: &'static str) -> ParamKind {
+    choice(&[("inherit", inherit), ("on", "On"), ("off", "Off")])
 }
 
 fn choice(options: &[(&'static str, &'static str)]) -> ParamKind {
@@ -814,7 +952,7 @@ pub fn catalog() -> Vec<BlockInfo> {
                         "tools",
                         "Tools",
                         K::Tools,
-                        "Tools this step may call. Fewer tools means a shorter prompt and fewer mistakes.",
+                        "Same as the agent offers the tools the agent allows. Set a tool On to offer it even when the agent's switch is off, or Off to never offer it here. A tool off app-wide (Permissions or Settings → Tools) is never offered. Fewer tools means a shorter prompt and fewer mistakes.",
                     )
                 },
                 p(
@@ -852,8 +990,8 @@ pub fn catalog() -> Vec<BlockInfo> {
                 p(
                     "network",
                     "Tools may use the internet",
-                    K::Bool,
-                    "Also needs Internet access in Settings → Permissions, the tool's own internet switch, and the agent's.",
+                    switch_choice("Same as the agent"),
+                    "Same as the agent uses the agent's Internet switch. On works even when the agent's is off; Off never. Internet access in Settings → Permissions and the tool's own internet switch must always allow it too.",
                 ),
                 p(
                     "on_limit",
@@ -866,7 +1004,7 @@ pub fn catalog() -> Vec<BlockInfo> {
                     "Each model connection has a daily token limit (Settings → Models).",
                 ),
             ],
-            json!({ "prompt": "_INPUT_", "tool_mode": "native", "network": false, "on_limit": "ask" }),
+            json!({ "prompt": "_INPUT_", "tool_mode": "native", "on_limit": "ask" }),
         ),
         info(
             "run_tool",
@@ -944,16 +1082,21 @@ pub fn catalog() -> Vec<BlockInfo> {
             vec![
                 ParamSpec {
                     optional: true,
-                    ..p("tools", "Tools", K::Tools, "Tools the text may call.")
+                    ..p(
+                        "tools",
+                        "Tools",
+                        K::Tools,
+                        "Tools the text may call: the agent's by default, or set per tool. A tool off app-wide is never run.",
+                    )
                 },
                 p(
                     "network",
                     "Tools may use the internet",
-                    K::Bool,
-                    "Also needs Internet access in Settings → Permissions, the tool's own internet switch, and the agent's.",
+                    switch_choice("Same as the agent"),
+                    "Same as the agent uses the agent's Internet switch. On works even when the agent's is off; Off never. Internet access in Settings → Permissions and the tool's own internet switch must always allow it too.",
                 ),
             ],
-            json!({ "network": false }),
+            json!({}),
         ),
         info(
             "store",

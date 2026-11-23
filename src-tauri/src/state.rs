@@ -149,9 +149,11 @@ impl AppState {
 
         let runtime = RuntimePaths::new(&dirs.runtime);
         let engine = Engine::new(&runtime.python, &runtime.engine_dir);
+        let library = Library::new(&dirs.loops);
+        library.upgrade_builtins();
         Ok(Self {
             secrets: Box::new(Keychain::new(KEYCHAIN_SERVICE)),
-            library: Library::new(&dirs.loops),
+            library,
             engine,
             runtime,
             protected,

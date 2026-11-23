@@ -241,7 +241,7 @@ mod tests {
             id: "c1".into(),
             name: "calculator".into(),
             arguments: json!({ "expression": "1+1" }),
-            online: false,
+            network: crate::blocks::Switch::Off,
         }];
         let mut r1 = ExMessage::new(Role::Tool, "2");
         r1.name = Some("calculator".into());

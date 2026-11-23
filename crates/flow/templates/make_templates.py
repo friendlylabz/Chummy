@@ -30,10 +30,11 @@ import os
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-TOOLS = ["read_file", "write_file", "list_files", "search_files", "fetch_page", "calculator", "current_time"]
 STEP = r"(?m)^\s*\d+[.)]\s*(.+?)\s*$"
 TOO_BIG = r"(?i)^\W*too\s*big"
-YES = r"(?i)^\W*yes"
+# A blank verdict (a thinking model that only thought, or ran out of room) passes:
+# a check that says nothing never blocks the work.
+YES = r"(?i)^\W*yes|^\s*$"
 
 SYSTEM = "You are working toward the user's goal one task at a time. Keep every answer short and concrete."
 ATTEMPT = (
@@ -127,7 +128,7 @@ def attempt_fn(verify):
     blocks = [
         b("entry", "forward", "Exchange", 0, 0),
         b("work", "llm", "Try the task", 260, 0, {
-            "system": ATTEMPT, "max_tokens": 800, "tools": TOOLS, "retries": 2}),
+            "system": ATTEMPT, "retries": 2}),
         b("run", "run_tool", "Run tool", 520, 200, {"max_result_chars": 4000}),
         b("which", "read_exchange", "Which task", 260, -200, {"role": "user"}),
         b("big_answer", "branch", "Too big? (answer)", 780, 0, {"pattern": TOO_BIG}),
@@ -274,7 +275,7 @@ def planner(verify):
     limits = {"max_steps": 1500, "max_llm_calls": 120, "max_tool_calls": 40} if verify else \
         {"max_steps": 800, "max_llm_calls": 60, "max_tool_calls": 30}
     return {
-        "format": "chummy.loop", "version": 2, "name": name, "description": description, "limits": limits,
+        "format": "chummy.loop", "version": 3, "name": name, "description": description, "limits": limits,
         "blocks": blocks, "links": links, "functions": functions,
     }
 
@@ -324,7 +325,9 @@ NOTES = (
     "rest of the work: key facts found, decisions made, what is done and what is left. At most 10 short lines. "
     "Write only the notes."
 )
-QUESTION = r"(?i)^\W*question\s*:"
+QUESTION = r"(?i)^\W*question\s*:\s*\S"
+# A blank reply counts as clear: an empty question is never put to you.
+CLEAR = r"(?i)^\W*clear|^\s*$"
 ANY = r"(?s)."
 NO_ANSWER = "No answer came. Use your best judgement and carry on."
 
@@ -372,8 +375,8 @@ def clarify_fn():
             b("judge", "llm", "Clear enough?", 0, 0, {
                 "prompt": CLARIFY, "system": "Reply with CLEAR or one short question.", "temperature": 0.0,
                 "max_tokens": 100}, "Replies CLEAR, or with one question."),
-            b("clear", "branch", "Clear?", 300, 100, {"pattern": r"(?i)^\W*clear"}),
-            b("unclear", "branch", "Question", 300, -100, {"pattern": r"(?i)^\W*clear"}),
+            b("clear", "branch", "Clear?", 300, 100, {"pattern": CLEAR}),
+            b("unclear", "branch", "Question", 300, -100, {"pattern": CLEAR}),
             b("ask", "ask_user", "Ask you", 600, -100, {
                 "prompt": "_INPUT_", "timeout_minutes": 60, "default_answer": NO_ANSWER},
                 "Waits up to an hour, then carries on without an answer."),
@@ -458,9 +461,9 @@ def a_attempt_fn():
         b("entry", "forward", "Exchange", 0, 0),
         b("which", "read_exchange", "Which task", 0, -220, {"role": "user"}),
         b("work", "llm", "Try the task", 300, 0, {
-            "system": A_ATTEMPT, "tools": TOOLS, "retries": 2, "network": True,
+            "system": A_ATTEMPT, "retries": 2,
             "on_limit": "ask"},
-            "Can use tools (all three switches must allow each one), answer, say TOO BIG, or ask a QUESTION."),
+            "Can use the tools this agent allows, answer, say TOO BIG, or ask a QUESTION."),
         b("check", "function", "Check the tool call", 300, 300, {"function": "check_call"},
           "Every call is checked before it runs."),
         b("run", "run_tool", "Run tool", 600, 300, {"max_result_chars": 4000},
@@ -630,7 +633,7 @@ def assistant():
         l("plan", "steps", "more", "in"), l("more", "out", "queue", "in", "each step"),
     ]
     return {
-        "format": "chummy.loop", "version": 2, "name": "Chummy assistant",
+        "format": "chummy.loop", "version": 3, "name": "Chummy assistant",
         "description": (
             "The default loop. It asks you a question first if your request is unclear, then tries it straight "
             "away, with tools. Anything too big is broken into 5 or fewer steps, tried the same way. Every tool "
@@ -654,9 +657,26 @@ def assistant():
         ],
     }
 
+def tidy(loop):
+    """Model blocks that do the work inherit the agent's tools and every model setting;
+    the others (judges, checks, plans, notes) never get tools."""
+    def walk(blocks):
+        for blk in blocks:
+            if blk["type"] != "llm":
+                continue
+            p = blk.setdefault("params", {})
+            p.pop("max_tokens", None)
+            if blk["id"] != "work":
+                p["tools"] = "off"
+    walk(loop["blocks"])
+    for f in loop.get("functions", []):
+        walk(f["blocks"])
+    return loop
+
+
 for verify, file in [(False, "five-step-plan.chummy.json"), (True, "five-step-plan-verify.chummy.json")]:
     with open(os.path.join(HERE, file), "w", encoding="utf-8") as f:
-        f.write(json.dumps(planner(verify), indent=2, ensure_ascii=False) + "\n")
+        f.write(json.dumps(tidy(planner(verify)), indent=2, ensure_ascii=False) + "\n")
 with open(os.path.join(HERE, "assistant.chummy.json"), "w", encoding="utf-8") as f:
-    f.write(json.dumps(assistant(), indent=2, ensure_ascii=False) + "\n")
+    f.write(json.dumps(tidy(assistant()), indent=2, ensure_ascii=False) + "\n")
 print("wrote the planner templates and the Chummy assistant")

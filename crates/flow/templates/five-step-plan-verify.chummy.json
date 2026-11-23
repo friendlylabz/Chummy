@@ -1,6 +1,6 @@
 {
   "format": "chummy.loop",
-  "version": 2,
+  "version": 3,
   "name": "5 step recursive plan verify",
   "description": "Treats your message as a goal and tries to do it straight away, by writing or with tools. Anything too big is broken into 5 or fewer smaller steps, and each step is tried the same way, breadth-first. Every result and plan is shown, and added to one running exchange. Each result and plan is also checked: the model writes a yes/no question for it and answers it. Results that fail are broken down; plans that fail are made again once. Slower, but more careful.",
   "limits": {
@@ -339,7 +339,7 @@
           },
           "params": {
             "inputs": 2,
-            "format": "(?i)^\\W*question\\s*:"
+            "format": "(?i)^\\W*question\\s*:\\s*\\S"
           }
         },
         {
@@ -353,7 +353,7 @@
           "params": {
             "system": "Write one short yes-or-no question.",
             "temperature": 0.2,
-            "max_tokens": 80
+            "tools": "off"
           }
         },
         {
@@ -380,7 +380,7 @@
           "params": {
             "system": "Answer YES or NO first, then give one short reason.",
             "temperature": 0.0,
-            "max_tokens": 80
+            "tools": "off"
           }
         },
         {
@@ -392,7 +392,7 @@
             "y": 200
           },
           "params": {
-            "pattern": "(?i)^\\W*yes"
+            "pattern": "(?i)^\\W*yes|^\\s*$"
           }
         },
         {
@@ -404,7 +404,7 @@
             "y": 0
           },
           "params": {
-            "pattern": "(?i)^\\W*yes"
+            "pattern": "(?i)^\\W*yes|^\\s*$"
           }
         }
       ],
@@ -582,16 +582,6 @@
           },
           "params": {
             "system": "Do the user's latest task now. Use a tool if it helps. If you can do it, give the result in a few sentences. If it is too big to finish in one go, reply with only: TOO BIG",
-            "max_tokens": 800,
-            "tools": [
-              "read_file",
-              "write_file",
-              "list_files",
-              "search_files",
-              "fetch_page",
-              "calculator",
-              "current_time"
-            ],
             "retries": 2
           }
         },
@@ -700,7 +690,7 @@
             "y": 200
           },
           "params": {
-            "pattern": "(?i)^\\W*yes"
+            "pattern": "(?i)^\\W*yes|^\\s*$"
           }
         },
         {
@@ -1006,7 +996,7 @@
           },
           "params": {
             "temperature": 0.3,
-            "max_tokens": 400
+            "tools": "off"
           }
         },
         {
@@ -1091,7 +1081,7 @@
             "y": 250
           },
           "params": {
-            "pattern": "(?i)^\\W*yes"
+            "pattern": "(?i)^\\W*yes|^\\s*$"
           }
         },
         {
@@ -1117,7 +1107,7 @@
           },
           "params": {
             "temperature": 0.3,
-            "max_tokens": 400
+            "tools": "off"
           }
         }
       ],

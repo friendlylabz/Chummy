@@ -7,6 +7,8 @@
 //! can pick up where it left off.
 
 use serde::{Deserialize, Serialize};
+
+use crate::blocks::Switch;
 use serde_json::Value as Json;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -36,10 +38,10 @@ pub struct ToolCall {
     pub name: String,
     /// Always a JSON object.
     pub arguments: Json,
-    /// The block that made this call lets its tools use the internet. (The
-    /// app and the agent must allow it too.)
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub online: bool,
+    /// The internet switch of the block that made this call: inherit the
+    /// agent's, or override it. The app's switches always apply.
+    #[serde(default = "no_network", skip_serializing_if = "is_off")]
+    pub network: Switch,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -250,6 +252,14 @@ fn check_value(name: &str, spec: &Json, v: &Json) -> Result<Json, String> {
     }
 }
 
+fn no_network() -> Switch {
+    Switch::Off
+}
+
+fn is_off(s: &Switch) -> bool {
+    *s == Switch::Off
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,7 +314,7 @@ mod tests {
             id: "1".into(),
             name: "read_file".into(),
             arguments: json!({ "path": "a" }),
-            online: false,
+            network: Switch::Off,
         };
         let mut ex = Exchange {
             messages: vec![ExMessage::new(Role::User, "hi")],

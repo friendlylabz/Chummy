@@ -33,6 +33,7 @@ use serde_json::Value as Json;
 use crate::blocks::{
     BadCall, BlockKind, FAILED, LlmParams, OnLimit, OnToolError, ToolChoice, ToolMode,
 };
+use crate::blocks::{Switch, ToolSwitches};
 use crate::exchange::{ExMessage, Exchange, Role, ToolCall, ToolInfo, check_arguments};
 use crate::format::{Block, FunctionDef, Link, LoopFile};
 use crate::log::{LOG_VALUE_CHARS, ModelLog, PortLog, StepLog, StepStatus, logged, now_ms};
@@ -272,15 +273,24 @@ pub trait Host: Send + Sync {
         on_text: &mut (dyn FnMut(&str) + Send),
     ) -> impl Future<Output = Result<LlmAnswer, String>> + Send;
     /// A tool that's installed and switched on, if there is one by that name.
+    /// A tool the app allows (Permissions and Settings → Tools), or `None`.
     fn tool_info(&self, name: &str) -> Option<ToolInfo>;
+    /// Every tool the app allows, for blocks that inherit.
+    fn tool_names(&self) -> Vec<String> {
+        vec![]
+    }
+    /// Whether the agent's own switch allows this tool.
+    fn agent_allows(&self, _tool: &str) -> bool {
+        true
+    }
     /// Runs a tool. `Err` means it couldn't run at all.
-    /// Runs a tool. `online`: the calling block lets its tools use the
-    /// internet (the host decides whether the app and agent do too).
+    /// Runs a tool. `network`: the calling block's internet switch (the host
+    /// resolves inherit with the agent's switch, and applies the app's).
     fn run_tool(
         &self,
         name: &str,
         arguments: Json,
-        online: bool,
+        network: Switch,
     ) -> impl Future<Output = Result<ToolOutput, String>> + Send;
     fn read_file(&self, path: &str) -> Result<String, String>;
     fn write_file(&self, path: &str, content: &str, append: bool) -> Result<(), String>;
@@ -292,7 +302,7 @@ pub trait Host: Send + Sync {
     fn ask(&self, ask: Ask) -> impl Future<Output = Result<Answer, String>> + Send;
     /// Whether calls to `tool` must be allowed by the user first, whatever
     /// the Run tool block says (e.g. tools that would go online).
-    fn must_confirm(&self, _tool: &str, _online: bool) -> bool {
+    fn must_confirm(&self, _tool: &str, _network: Switch) -> bool {
         false
     }
     /// Whether the model (`None`: the agent's) may be called now.
@@ -916,7 +926,15 @@ impl<'a, H: Host> Runner<'a, H> {
                 on_event(Event::Reply { block: path, text });
                 Ok(vec![])
             }
-            BlockKind::Llm(p) => self.model_block(&path, &p, arg(0), on_event).await,
+            BlockKind::Llm(p) => {
+                // Tools are only offered when the Tool output goes somewhere, so a
+                // block that inherits the agent's tools without a Run tool after it
+                // just answers.
+                let key = (id.to_string(), "tool".to_string());
+                let wired = frame.routes.get(&key).is_some_and(|r| !r.is_empty())
+                    || frame.exposed.get(&key).is_some_and(|r| !r.is_empty());
+                self.model_block(&path, &p, wired, arg(0), on_event).await
+            }
             BlockKind::RunTool(p) => {
                 let Value::Exchange(mut ex) = arg(0) else {
                     return Err(BlockErr::Failed(
@@ -944,7 +962,7 @@ impl<'a, H: Host> Runner<'a, H> {
                         tool: call.name.clone(),
                         arguments: call.arguments.to_string(),
                     });
-                    let refused = if p.confirm || self.host.must_confirm(&call.name, call.online) {
+                    let refused = if p.confirm || self.host.must_confirm(&call.name, call.network) {
                         let ask = Ask {
                             block: path.clone(),
                             label: frame.label(id),
@@ -975,7 +993,7 @@ impl<'a, H: Host> Runner<'a, H> {
                     } else {
                         let fut =
                             self.host
-                                .run_tool(&call.name, call.arguments.clone(), call.online);
+                                .run_tool(&call.name, call.arguments.clone(), call.network);
                         tokio::select! {
                             r = fut => r,
                             _ = cancelled(self.cancel) => return Err(Stop::Cancelled.into()),
@@ -1008,6 +1026,13 @@ impl<'a, H: Host> Runner<'a, H> {
             }
             BlockKind::AskUser(p) => {
                 let text = fill_template(&p.prompt, Some(&arg(0).as_text()), &self.memory);
+                // A blank question (often a thinking model that only thought) is never
+                // put to the person: the block fails, so its Error path is taken.
+                if text.trim().is_empty() {
+                    return Err(BlockErr::Failed(
+                        "there was no question to ask (the text was empty)".into(),
+                    ));
+                }
                 let ask = Ask {
                     block: path.clone(),
                     label: frame.label(id),
@@ -1074,17 +1099,17 @@ impl<'a, H: Host> Runner<'a, H> {
                     .iter()
                     .map(|b| format!("a tool call couldn't be read ({})", b.error))
                     .collect();
+                let usable = self.block_tools(&path, &p.tools, on_event);
                 for f in found {
-                    // Like a model block, only the tools ticked in the block.
-                    let allowed = p.tools.contains(&f.name);
-                    match self.host.tool_info(&f.name).filter(|_| allowed) {
+                    // Like a model block: only the tools its switches allow.
+                    match usable.iter().find(|t| t.name == f.name) {
                         None => problems.push(format!("there's no tool called “{}” here", f.name)),
                         Some(t) => match check_arguments(&t.parameters, &f.arguments) {
                             Ok(args) => calls.push(ToolCall {
                                 id: format!("call_{}_{}", self.steps, calls.len() + 1),
                                 name: f.name,
                                 arguments: args,
-                                online: p.network,
+                                network: p.network,
                             }),
                             Err(e) => problems.push(format!("in the call to {}, {e}", f.name)),
                         },
@@ -1487,30 +1512,71 @@ impl<'a, H: Host> Runner<'a, H> {
         Ok(sub.collected)
     }
 
+    /// The tools a block may use: each tool's switch (inherit: the agent's
+    /// switch; on: even if the agent's is off; off: never), always within
+    /// what the app allows.
+    fn block_tools(
+        &mut self,
+        path: &str,
+        switches: &ToolSwitches,
+        on_event: &mut Emit<'_>,
+    ) -> Vec<ToolInfo> {
+        let mut names = self.host.tool_names();
+        for n in switches.each.keys() {
+            if !names.contains(n) {
+                names.push(n.clone());
+            }
+        }
+        let mut out = Vec::new();
+        let mut notes = Vec::new();
+        for name in names {
+            let s = switches.switch_for(&name);
+            if s == Switch::Off {
+                continue;
+            }
+            let Some(info) = self.host.tool_info(&name) else {
+                if switches.each.contains_key(&name) {
+                    notes.push(format!(
+                        "The tool “{name}” is off in Chummy (Permissions or Settings → Tools), so the model wasn't offered it."
+                    ));
+                }
+                continue;
+            };
+            let agent = self.host.agent_allows(&name);
+            if !s.resolve(agent) {
+                continue;
+            }
+            if s == Switch::On && !agent {
+                notes.push(format!(
+                    "This block turns on “{name}”, which is off for this agent."
+                ));
+            }
+            out.push(info);
+        }
+        for text in notes {
+            if self.noticed.insert(format!("{path}\u{0}{text}")) {
+                on_event(Event::Notice {
+                    block: path.to_string(),
+                    text,
+                });
+            }
+        }
+        out
+    }
+
     async fn model_block(
         &mut self,
         path: &str,
         p: &LlmParams,
+        tool_wired: bool,
         input: Value,
         on_event: &mut Emit<'_>,
     ) -> Result<Outputs, BlockErr> {
-        let mut tools = Vec::new();
-        for name in &p.tools {
-            match self.host.tool_info(name) {
-                Some(t) => tools.push(t),
-                None => {
-                    let text = format!(
-                        "The tool “{name}” isn't available to this agent (Settings → Tools, and the agent's tools), so the model wasn't offered it."
-                    );
-                    if self.noticed.insert(text.clone()) {
-                        on_event(Event::Notice {
-                            block: path.to_string(),
-                            text,
-                        });
-                    }
-                }
-            }
-        }
+        let tools = if tool_wired || p.tool_mode == ToolMode::Off {
+            self.block_tools(path, &p.tools, on_event)
+        } else {
+            Vec::new()
+        };
         // `_TOOLS_` in the prompt or system message lists the block's tools,
         // and `{{name}}` reads memory.
         let listed = prompted::tool_list(&tools);
@@ -1608,7 +1674,7 @@ impl<'a, H: Host> Runner<'a, H> {
                     id: String::new(),
                     name: f.name,
                     arguments: f.arguments,
-                    online: false,
+                    network: Switch::Off,
                 }));
                 answer
                     .malformed
@@ -1708,7 +1774,7 @@ impl<'a, H: Host> Runner<'a, H> {
                             good.push(ToolCall {
                                 id,
                                 arguments: args,
-                                online: p.network,
+                                network: p.network,
                                 name: c.name.clone(),
                             })
                         }
@@ -1867,7 +1933,7 @@ mod tests {
         /// The model's daily tokens are used up until granted more.
         exhausted: Mutex<bool>,
         granted: Mutex<Vec<u64>>,
-        online_runs: Mutex<Vec<bool>>,
+        online_runs: Mutex<Vec<Switch>>,
     }
 
     fn text(s: &str) -> LlmAnswer {
@@ -1883,7 +1949,7 @@ mod tests {
                 id: format!("c-{name}"),
                 name: name.into(),
                 arguments: args,
-                online: false,
+                network: Switch::Off,
             }],
             ..Default::default()
         }
@@ -1922,6 +1988,9 @@ mod tests {
             on_text(&a.text);
             Ok(a)
         }
+        fn tool_names(&self) -> Vec<String> {
+            vec!["echo".into()]
+        }
         fn tool_info(&self, name: &str) -> Option<ToolInfo> {
             (name == "echo").then(|| ToolInfo {
                 name: "echo".into(),
@@ -1938,7 +2007,7 @@ mod tests {
             &self,
             name: &str,
             arguments: Json,
-            online: bool,
+            online: Switch,
         ) -> Result<ToolOutput, String> {
             self.online_runs.lock().unwrap().push(online);
             self.tool_runs
@@ -1985,7 +2054,7 @@ mod tests {
                 .pop_front()
                 .ok_or_else(|| "nobody to ask".to_string())
         }
-        fn must_confirm(&self, tool: &str, _online: bool) -> bool {
+        fn must_confirm(&self, tool: &str, _online: Switch) -> bool {
             self.confirm_tools.iter().any(|t| t == tool)
         }
         fn budget(&self, _model: Option<&str>) -> Budget {
@@ -2026,7 +2095,7 @@ mod tests {
         l.links = links;
         l
     }
-    async fn go(l: &LoopFile, host: &Fake, msg: &str) -> (RunOutcome, Vec<Event>) {
+    async fn go(l: &LoopFile, host: &impl Host, msg: &str) -> (RunOutcome, Vec<Event>) {
         let mut ev = vec![];
         let inputs = RunInputs {
             message: msg.into(),
@@ -2422,7 +2491,7 @@ mod tests {
         assert!(host.calls.lock().unwrap()[0].tools.is_empty());
         assert!(
             ev.iter().any(
-                |e| matches!(e, Event::Notice { text, .. } if text.contains("isn't available"))
+                |e| matches!(e, Event::Notice { text, .. } if text.contains("is off in Chummy"))
             )
         );
     }
@@ -2723,6 +2792,128 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn block_tool_switches_inherit_from_the_agent() {
+        struct Agent {
+            fake: Fake,
+            agent_echo: bool,
+        }
+        impl Host for Agent {
+            async fn llm(
+                &self,
+                call: LlmCall,
+                t: &mut (dyn FnMut(&str) + Send),
+            ) -> Result<LlmAnswer, String> {
+                self.fake.llm(call, t).await
+            }
+            fn tool_names(&self) -> Vec<String> {
+                self.fake.tool_names()
+            }
+            fn tool_info(&self, name: &str) -> Option<ToolInfo> {
+                self.fake.tool_info(name)
+            }
+            fn agent_allows(&self, _: &str) -> bool {
+                self.agent_echo
+            }
+            async fn run_tool(&self, n: &str, a: Json, s: Switch) -> Result<ToolOutput, String> {
+                self.fake.run_tool(n, a, s).await
+            }
+            fn read_file(&self, p: &str) -> Result<String, String> {
+                self.fake.read_file(p)
+            }
+            fn write_file(&self, p: &str, c: &str, a: bool) -> Result<(), String> {
+                self.fake.write_file(p, c, a)
+            }
+            fn list_files(&self, p: &str) -> Result<Vec<String>, String> {
+                self.fake.list_files(p)
+            }
+            async fn ask(&self, a: Ask) -> Result<Answer, String> {
+                self.fake.ask(a).await
+            }
+        }
+        let offered = |params: Json, agent_echo: bool| async move {
+            let off = params["tools"] == "off";
+            let l = lp(
+                vec![
+                    b("in", "input", json!({})),
+                    b("m", "llm", params),
+                    b("o", "output", json!({})),
+                    b("run", "run_tool", json!({})),
+                ],
+                {
+                    let mut links = vec![ln("in", "out", "m", "in"), ln("m", "out", "o", "in")];
+                    // With every tool off, the block has no Tool output to wire.
+                    if !off {
+                        links.push(ln("m", "tool", "run", "in"));
+                        links.push(ln("run", "out", "m", "in"));
+                    }
+                    links
+                },
+            );
+            let host = Agent {
+                fake: Fake::with(&["ok"]),
+                agent_echo,
+            };
+            let (_, ev) = go(&l, &host, "x").await;
+            let names: Vec<String> = host.fake.calls.lock().unwrap()[0]
+                .tools
+                .iter()
+                .map(|t| t.name.clone())
+                .collect();
+            let notice = ev.iter().any(
+                |e| matches!(e, Event::Notice { text, .. } if text.contains("off for this agent")),
+            );
+            (names, notice)
+        };
+        // Inherit (the default): what the agent allows.
+        assert_eq!(offered(json!({}), true).await.0, ["echo"]);
+        assert!(offered(json!({}), false).await.0.is_empty());
+        // Off: never. On: even when the agent's switch is off (and says so).
+        assert!(offered(json!({ "tools": "off" }), true).await.0.is_empty());
+        let (on, notice) = offered(json!({ "tools": "on" }), false).await;
+        assert_eq!(on, ["echo"]);
+        assert!(notice);
+        // Per tool.
+        let each = json!({ "tools": { "all": "off", "each": { "echo": "inherit" } } });
+        assert_eq!(offered(each, true).await.0, ["echo"]);
+        // No Run tool after the block: it just answers, without tools.
+        let l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b("m", "llm", json!({})),
+                b("o", "output", json!({})),
+            ],
+            vec![ln("in", "out", "m", "in"), ln("m", "out", "o", "in")],
+        );
+        let host = Fake::with(&["ok"]);
+        go(&l, &host, "x").await;
+        assert!(host.calls.lock().unwrap()[0].tools.is_empty());
+        // A tool the app doesn't allow is never offered, whatever the block says.
+        assert!(
+            offered(json!({ "tools": { "each": { "nope": "on" } } }), true)
+                .await
+                .0
+                == ["echo"]
+        );
+    }
+
+    #[test]
+    fn older_loops_keep_blocks_without_tools_tool_free() {
+        let json = r#"{"format":"chummy.loop","version":2,"name":"x","blocks":[
+            {"id":"m","type":"llm","params":{}},
+            {"id":"t","type":"llm","params":{"tools":["echo"],"network":true}}]}"#;
+        let l = LoopFile::from_json(json).unwrap();
+        let p = |i: usize| match BlockKind::parse(&l.blocks[i].kind, &l.blocks[i].params).unwrap() {
+            BlockKind::Llm(p) => p,
+            _ => unreachable!(),
+        };
+        assert_eq!(p(0).tools, ToolSwitches::off());
+        assert_eq!(p(0).network, Switch::Off);
+        assert_eq!(p(1).tools.switch_for("echo"), Switch::Inherit);
+        assert_eq!(p(1).tools.switch_for("other"), Switch::Off);
+        assert_eq!(p(1).network, Switch::Inherit);
+    }
+
     #[test]
     fn functions_cannot_use_themselves() {
         let mut l = lp(
@@ -2767,7 +2958,7 @@ mod tests {
             id: id.into(),
             name: "echo".into(),
             arguments: json!({ "text": "a" }),
-            online: false,
+            network: Switch::Off,
         };
         let host = Fake::script(vec![
             LlmAnswer {
@@ -2936,11 +3127,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn waiting_runs_can_be_stopped() {
+    async fn blank_questions_are_never_asked() {
         let l = lp(
             vec![
                 b("in", "input", json!({})),
                 b("ask", "ask_user", json!({})),
+                b("out", "output", json!({})),
+                b("err", "output", json!({})),
+            ],
+            vec![
+                ln("in", "out", "ask", "in"),
+                ln("ask", "out", "out", "in"),
+                ln("ask", "error", "err", "in"),
+            ],
+        );
+        let host = Fake::default();
+        let (out, _) = go(&l, &host, "  \n ").await;
+        assert!(host.asks.lock().unwrap().is_empty());
+        assert!(
+            out.replies.iter().any(|t| t.contains("no question")),
+            "{:?}",
+            out.replies
+        );
+    }
+
+    #[tokio::test]
+    async fn waiting_runs_can_be_stopped() {
+        let l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b("ask", "ask_user", json!({ "prompt": "Which one?" })),
                 b("out", "output", json!({})),
             ],
             vec![ln("in", "out", "ask", "in"), ln("ask", "out", "out", "in")],
@@ -3027,7 +3243,7 @@ mod tests {
         let l = lp(
             vec![
                 b("in", "input", json!({})),
-                b("ask", "ask_user", json!({})),
+                b("ask", "ask_user", json!({ "prompt": "Which one?" })),
                 b("out", "output", json!({})),
             ],
             vec![ln("in", "out", "ask", "in"), ln("ask", "out", "out", "in")],
@@ -3045,7 +3261,7 @@ mod tests {
     #[tokio::test]
     async fn prompted_tools_are_described_and_read_from_text() {
         let mut l = tool_loop();
-        l.blocks[1].params = json!({ "prompt": "Do: _INPUT_", "tools": ["echo"], "tool_mode": "prompted", "network": true });
+        l.blocks[1].params = json!({ "prompt": "Do: _INPUT_", "tools": ["echo"], "tool_mode": "prompted", "network": "on" });
         let host = Fake::script(vec![
             text(
                 "Sure.\n<tool_call>\n{\"name\": \"echo\", \"arguments\": {\"text\": \"hi\"}}\n</tool_call>",
@@ -3075,7 +3291,7 @@ mod tests {
         );
         assert_eq!(
             *host.online_runs.lock().unwrap(),
-            [true],
+            [Switch::On],
             "the block's internet switch rides with the call"
         );
     }

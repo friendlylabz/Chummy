@@ -586,11 +586,8 @@ fn param_problems(k: &BlockKind) -> Vec<String> {
             if p.retries > 5 {
                 v.push("times to ask again must be 0–5".into());
             }
-            let mut seen = HashSet::new();
-            for t in &p.tools {
-                if t.is_empty() || !seen.insert(t) {
-                    v.push(format!("the tool list has a blank or repeated name “{t}”"));
-                }
+            if p.tools.each.keys().any(|t| t.trim().is_empty()) {
+                v.push("the tool list has a blank name".into());
             }
         }
         BlockKind::RunTool(p) if p.max_result_chars < 100 => {

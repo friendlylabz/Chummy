@@ -1,6 +1,6 @@
 {
   "format": "chummy.loop",
-  "version": 2,
+  "version": 3,
   "name": "Chummy assistant",
   "description": "The default loop. It asks you a question first if your request is unclear, then tries it straight away, with tools. Anything too big is broken into 5 or fewer steps, tried the same way. Every tool call is checked before it runs, every result and plan is checked, and the model keeps working notes as it goes. Failures are caught and reported instead of stopping the run.",
   "limits": {
@@ -537,7 +537,7 @@
           },
           "params": {
             "inputs": 2,
-            "format": "(?i)^\\W*question\\s*:"
+            "format": "(?i)^\\W*question\\s*:\\s*\\S"
           }
         },
         {
@@ -551,7 +551,7 @@
           "params": {
             "system": "Write one short yes-or-no question.",
             "temperature": 0.2,
-            "max_tokens": 80
+            "tools": "off"
           },
           "comment": "A small model checks itself best with a question it wrote."
         },
@@ -579,7 +579,7 @@
           "params": {
             "system": "Answer YES or NO first, then give one short reason.",
             "temperature": 0.0,
-            "max_tokens": 80
+            "tools": "off"
           },
           "comment": "Must start with YES or NO."
         },
@@ -592,7 +592,7 @@
             "y": 200
           },
           "params": {
-            "pattern": "(?i)^\\W*yes"
+            "pattern": "(?i)^\\W*yes|^\\s*$"
           }
         },
         {
@@ -604,7 +604,7 @@
             "y": 0
           },
           "params": {
-            "pattern": "(?i)^\\W*yes"
+            "pattern": "(?i)^\\W*yes|^\\s*$"
           }
         },
         {
@@ -906,7 +906,7 @@
             "prompt": "_INPUT_\n\nIs the user's latest request clear enough to act on? If it is, reply with only: CLEAR\nIf not, reply with the one short question you most need answered.",
             "system": "Reply with CLEAR or one short question.",
             "temperature": 0.0,
-            "max_tokens": 100
+            "tools": "off"
           },
           "comment": "Replies CLEAR, or with one question."
         },
@@ -919,7 +919,7 @@
             "y": 100
           },
           "params": {
-            "pattern": "(?i)^\\W*clear"
+            "pattern": "(?i)^\\W*clear|^\\s*$"
           }
         },
         {
@@ -931,7 +931,7 @@
             "y": -100
           },
           "params": {
-            "pattern": "(?i)^\\W*clear"
+            "pattern": "(?i)^\\W*clear|^\\s*$"
           }
         },
         {
@@ -1246,7 +1246,7 @@
           "params": {
             "system": "Answer YES or NO first, then give one short reason.",
             "temperature": 0.0,
-            "max_tokens": 80
+            "tools": "off"
           },
           "comment": "Must start with YES or NO."
         },
@@ -1259,7 +1259,7 @@
             "y": 150
           },
           "params": {
-            "pattern": "(?i)^\\W*yes"
+            "pattern": "(?i)^\\W*yes|^\\s*$"
           }
         },
         {
@@ -1271,7 +1271,7 @@
             "y": -50
           },
           "params": {
-            "pattern": "(?i)^\\W*yes"
+            "pattern": "(?i)^\\W*yes|^\\s*$"
           }
         },
         {
@@ -1491,7 +1491,7 @@
           "params": {
             "prompt": "Your working notes so far:\n{{notes}}\n\nWhat just happened:\n_INPUT_\n\nRewrite the working notes for the rest of the work: key facts found, decisions made, what is done and what is left. At most 10 short lines. Write only the notes.",
             "temperature": 0.2,
-            "max_tokens": 300
+            "tools": "off"
           },
           "comment": "Sees the notes so far and what just happened."
         },
@@ -1620,20 +1620,10 @@
           },
           "params": {
             "system": "Do the user's latest task now. Use a tool if it helps. If you can do it, give the result in a few sentences. If it is too big to finish in one go, reply with only: TOO BIG\nIf you can't go on without the user's input, reply with only: QUESTION: and your question.\n\nThe whole plan (✓ done, ○ to do, ▾ broken down):\n{{plan}}\n\nYour working notes:\n{{notes}}",
-            "tools": [
-              "read_file",
-              "write_file",
-              "list_files",
-              "search_files",
-              "fetch_page",
-              "calculator",
-              "current_time"
-            ],
             "retries": 2,
-            "network": true,
             "on_limit": "ask"
           },
-          "comment": "Can use tools (all three switches must allow each one), answer, say TOO BIG, or ask a QUESTION."
+          "comment": "Can use the tools this agent allows, answer, say TOO BIG, or ask a QUESTION."
         },
         {
           "id": "check",
@@ -1670,7 +1660,7 @@
             "y": 0
           },
           "params": {
-            "pattern": "(?i)^\\W*question\\s*:"
+            "pattern": "(?i)^\\W*question\\s*:\\s*\\S"
           }
         },
         {
@@ -1783,7 +1773,7 @@
             "y": 200
           },
           "params": {
-            "pattern": "(?i)^\\W*yes"
+            "pattern": "(?i)^\\W*yes|^\\s*$"
           }
         },
         {
@@ -1906,7 +1896,7 @@
             "y": -350
           },
           "params": {
-            "pattern": "(?i)^\\W*yes"
+            "pattern": "(?i)^\\W*yes|^\\s*$"
           }
         },
         {
@@ -2561,7 +2551,7 @@
           },
           "params": {
             "temperature": 0.3,
-            "max_tokens": 400
+            "tools": "off"
           },
           "comment": "Sees the running exchange, including the working notes."
         },
@@ -2648,7 +2638,7 @@
             "y": 250
           },
           "params": {
-            "pattern": "(?i)^\\W*yes"
+            "pattern": "(?i)^\\W*yes|^\\s*$"
           }
         },
         {
@@ -2674,7 +2664,7 @@
           },
           "params": {
             "temperature": 0.3,
-            "max_tokens": 400
+            "tools": "off"
           },
           "comment": "Only once, so a plan can't loop."
         },

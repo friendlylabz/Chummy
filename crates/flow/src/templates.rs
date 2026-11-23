@@ -70,7 +70,7 @@ pub fn templates() -> Vec<Template> {
             json!({
                 "prompt": "_INPUT_\n\nWrite the assistant's reply.",
                 "system": "You are a helpful assistant. Answer clearly and briefly.",
-                "max_tokens": 1024
+                "tools": "off"
             }),
         ),
         b("reply", "output", "Reply", 900.0, 60.0, json!({})),
@@ -114,7 +114,7 @@ pub fn templates() -> Vec<Template> {
             json!({
                 "prompt": "_INPUT_\n\nWrite the assistant's reply.",
                 "system": "You are a helpful assistant. Answer clearly and briefly.",
-                "max_tokens": 1024
+                "tools": "off"
             }),
         ),
         b(
@@ -126,7 +126,7 @@ pub fn templates() -> Vec<Template> {
             json!({
                 "prompt": "Read this reply. Is it clear, correct and complete?\n\nReply:\n_INPUT_\n\nAnswer with just YES or NO.",
                 "temperature": 0.0,
-                "max_tokens": 8
+                "tools": "off"
             }),
         ),
         b(
@@ -135,7 +135,7 @@ pub fn templates() -> Vec<Template> {
             "Good enough?",
             1160.0,
             60.0,
-            json!({ "pattern": "(?i)^\\W*yes" }),
+            json!({ "pattern": "(?i)^\\W*yes|^\\s*$" }),
         ),
         b(
             "improve",
@@ -145,7 +145,7 @@ pub fn templates() -> Vec<Template> {
             320.0,
             json!({
                 "prompt": "Improve this reply. Fix anything unclear or wrong. Answer with only the improved reply.\n\n_INPUT_",
-                "max_tokens": 1024
+                "tools": "off"
             }),
         ),
         b("reply", "output", "Reply", 1460.0, 60.0, json!({})),
@@ -247,6 +247,9 @@ mod tests {
         /// The last message of every call.
         lasts: Mutex<Vec<String>>,
         notes_updates: Mutex<u32>,
+        /// Judges and checks answer with nothing, like a thinking model whose
+        /// reply was all thinking.
+        blank: bool,
     }
 
     impl Host for Planner {
@@ -285,6 +288,17 @@ mod tests {
                     ..Default::default()
                 })
             };
+            if self.blank
+                && [
+                    "clear enough to act on",
+                    "sensible and safe",
+                    "start with yes or no",
+                ]
+                .iter()
+                .any(|j| user.contains(j))
+            {
+                return text("");
+            }
             if user.contains("clear enough to act on") {
                 return text(if self.picky && user.contains("about it") {
                     "Which topic do you mean?"
@@ -326,7 +340,7 @@ mod tests {
                             id: "t1".into(),
                             name: "current_time".into(),
                             arguments: json!({}),
-                            online: false,
+                            network: crate::blocks::Switch::Off,
                         }],
                         ..Default::default()
                     })
@@ -368,6 +382,9 @@ mod tests {
             }
             text("did it")
         }
+        fn tool_names(&self) -> Vec<String> {
+            vec!["current_time".into()]
+        }
         fn tool_info(&self, name: &str) -> Option<ToolInfo> {
             (name == "current_time").then(|| ToolInfo {
                 name: name.into(),
@@ -375,7 +392,12 @@ mod tests {
                 parameters: json!({ "type": "object", "properties": {} }),
             })
         }
-        async fn run_tool(&self, name: &str, _: Json, _online: bool) -> Result<ToolOutput, String> {
+        async fn run_tool(
+            &self,
+            name: &str,
+            _: Json,
+            _online: crate::blocks::Switch,
+        ) -> Result<ToolOutput, String> {
             self.tools_run.lock().unwrap().push(name.into());
             Ok(ToolOutput {
                 text: "Monday".into(),
@@ -584,6 +606,54 @@ mod tests {
         let out = plan_run(ASSISTANT, &host, "Paint it, ask me first").await;
         assert_eq!(out.status, RunStatus::Completed, "{out:?}");
         assert_eq!(out.replies.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn blank_judges_never_ask_or_block() {
+        // A thinking model's judge reply can be empty once its thinking is
+        // removed: that counts as clear, approved and passed.
+        let host = Planner {
+            blank: true,
+            ..Default::default()
+        };
+        let out = plan_run(ASSISTANT, &host, "What's the date?").await;
+        assert_eq!(out.status, RunStatus::Completed, "{out:?}");
+        assert!(host.asked.lock().unwrap().is_empty(), "no empty question");
+        assert_eq!(*host.tools_run.lock().unwrap(), ["current_time"]);
+        assert_eq!(
+            out.replies,
+            ["**✓ Task: What's the date?**\n\nDone: Monday"]
+        );
+    }
+
+    #[test]
+    fn only_the_working_blocks_get_tools() {
+        use crate::blocks::{BlockKind, Switch};
+        for t in templates() {
+            let mut blocks: Vec<&Block> = t.file.blocks.iter().collect();
+            for f in &t.file.functions {
+                blocks.extend(f.blocks.iter());
+            }
+            for blk in blocks.into_iter().filter(|b| b.kind == "llm") {
+                let Ok(BlockKind::Llm(p)) = BlockKind::parse(&blk.kind, &blk.params) else {
+                    panic!("{}", blk.id)
+                };
+                assert_eq!(
+                    p.max_tokens, None,
+                    "{} {} inherits the model's",
+                    t.id, blk.id
+                );
+                if blk.id == "work" {
+                    assert!(
+                        p.tools.is_inherit() && p.network == Switch::Inherit,
+                        "{}",
+                        t.id
+                    );
+                } else {
+                    assert_eq!(p.tools.all, Switch::Off, "{} {}", t.id, blk.id);
+                }
+            }
+        }
     }
 
     #[tokio::test]

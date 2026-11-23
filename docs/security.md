@@ -136,10 +136,24 @@ without noticing.
 - Secrets are only in the OS keychain. The Chummy folder is private to the
   user (0700 on Unix).
 
+## Tool switches (two levels)
+
+- A tool is offered only when it is on **app-wide**: tools on in Permissions
+  and the tool on in Settings → Tools. Nothing in a loop can get past this.
+- Then the **agent's** switch decides. Loop blocks inherit it by default; a
+  block can turn a tool **on** for itself even when it is off for the agent
+  (the run shows “This block turns on …, which is off for this agent.”), or
+  **off**. The same goes for the block's internet switch, which can never get
+  past Internet access in Permissions or the tool's own internet switch.
+- The built-in loops only give tools to the blocks that do the work; checks,
+  plans and notes have tools off.
+- Calls still ask first as before (tools set to ask, and online calls when
+  “Ask before tools go online” is on).
+
 ## Pass 6 changes
 
 - **Per-agent tool and internet switches.** A tool runs only when it is on
-  app-wide (Permissions and Tools), for the agent, and ticked in the block.
+  app-wide (Permissions and Tools), for the agent, and ticked in the block. (Since replaced by two levels with a per-block override; see Tool switches above.)
   Going online needs four switches: Permissions, the tool, the agent and the
   block ("may use the internet"). New agents start with no tools and
   offline; agents that existed before pass 6 kept what they could already

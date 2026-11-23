@@ -155,16 +155,18 @@ pub fn to_llm_message(m: &ExMessage) -> Message {
 
 impl<S: Services> AgentHost<S> {
     pub fn new(services: Arc<S>, setup: AgentSetup) -> Self {
+        // A run without an agent (a test run) has no tools at all.
+        let has_agent = setup.agent.is_some();
         let agent = setup.agent.unwrap_or_default();
-        // A tool is offered only with all three switched on: tools in the
-        // app, the tool itself, and the tool for this agent. (Blocks then
-        // choose among these.)
-        let tools = if setup.permissions.tools {
+        // The app-wide level: tools on in Permissions, and the tool on in
+        // Settings → Tools. Nothing can get past this. The agent's own switch
+        // is the default each block inherits (see `agent_allows`); a block can
+        // turn one of these on or off for itself.
+        let tools = if setup.permissions.tools && has_agent {
             setup
                 .installed
                 .into_iter()
                 .filter(|m| setup.tool_grants.get(&m.name).is_some_and(|g| g.enabled))
-                .filter(|m| agent.tools.contains(&m.name))
                 .map(|m| (m.name.clone(), m))
                 .collect()
         } else {
@@ -197,9 +199,11 @@ impl<S: Services> AgentHost<S> {
     }
 
     /// Whether `m` may use the internet for a call from a block whose
-    /// internet switch is `online`, and if not, why (for the model). Every
-    /// switch must be on: the app's, the tool's, the agent's and the block's.
-    pub fn net_policy(&self, m: &ToolManifest, online: bool) -> NetPolicy {
+    /// internet switch is `network`, and if not, why (for the model). The
+    /// app's switch and the tool's must be on; then the block decides, where
+    /// Inherit means the agent's switch.
+    pub fn net_policy(&self, m: &ToolManifest, network: chummy_flow::Switch) -> NetPolicy {
+        use chummy_flow::Switch;
         if !m.network {
             NetPolicy::off(format!("{} doesn't use the internet.", m.title))
         } else if !self.permissions.network {
@@ -209,9 +213,9 @@ impl<S: Services> AgentHost<S> {
                 "Internet access is off for “{}”, so it can't go online.",
                 m.title
             ))
-        } else if !self.agent.network {
+        } else if network == Switch::Inherit && !self.agent.network {
             NetPolicy::off("Internet access is off for this agent, so this tool can't go online.")
-        } else if !online {
+        } else if network == Switch::Off {
             NetPolicy::off(
                 "This step of the loop isn't allowed to use the internet, so this tool can't go online.",
             )
@@ -358,11 +362,21 @@ impl<S: Services> Host for AgentHost<S> {
                     id: c.id,
                     name: c.name,
                     arguments: c.arguments,
-                    online: false,
+                    network: chummy_flow::Switch::Off,
                 })
                 .collect(),
             malformed,
         })
+    }
+
+    fn tool_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.tools.keys().cloned().collect();
+        names.sort();
+        names
+    }
+
+    fn agent_allows(&self, tool: &str) -> bool {
+        self.agent.tools.contains(tool)
     }
 
     fn tool_info(&self, name: &str) -> Option<ToolInfo> {
@@ -377,7 +391,7 @@ impl<S: Services> Host for AgentHost<S> {
         &self,
         name: &str,
         arguments: serde_json::Value,
-        online: bool,
+        network: chummy_flow::Switch,
     ) -> Result<ToolOutput, String> {
         let Some(m) = self.tools.get(name) else {
             return Ok(ToolOutput {
@@ -392,7 +406,7 @@ impl<S: Services> Host for AgentHost<S> {
             .map(|tz| ("TZ".to_string(), tz.clone()))
             .collect();
         let workspace = self.jail.as_ref().map(|j| j.root().to_path_buf());
-        let policy = self.net_policy(m, online);
+        let policy = self.net_policy(m, network);
         let internet = if policy.allowed { "allowed" } else { "off" };
         let r = host
             .run(name, arguments, workspace.as_deref(), policy, env)
@@ -469,12 +483,12 @@ impl<S: Services> Host for AgentHost<S> {
         }
     }
 
-    fn must_confirm(&self, tool: &str, online: bool) -> bool {
+    fn must_confirm(&self, tool: &str, network: chummy_flow::Switch) -> bool {
         let Some(m) = self.tools.get(tool) else {
             return false;
         };
         self.tool_grant(tool).ask
-            || (self.permissions.confirm_online_tools && self.net_policy(m, online).allowed)
+            || (self.permissions.confirm_online_tools && self.net_policy(m, network).allowed)
     }
 
     fn budget(&self, model: Option<&str>) -> Budget {
@@ -693,44 +707,46 @@ mod tests {
 
     #[test]
     fn tools_need_every_switch_and_online_tools_ask() {
+        use chummy_flow::Switch::{Inherit, Off, On};
         // Tools off in the app: nothing offered, whatever else says.
         let mut s = all_on();
         s.permissions.tools = false;
-        assert!(
-            AgentHost::new(Arc::new(NoServices), s)
-                .tool_info("calc")
-                .is_none()
-        );
+        let h = AgentHost::new(Arc::new(NoServices), s);
+        assert!(h.tool_info("calc").is_none() && h.tool_names().is_empty());
 
         // Everything on.
         let h = AgentHost::new(Arc::new(NoServices), all_on());
         assert!(h.tool_info("calc").is_some() && h.tool_info("fetch").is_some());
+        assert_eq!(h.tool_names(), ["calc", "fetch"]);
+        assert!(h.agent_allows("calc") && h.agent_allows("fetch"));
         assert!(
-            !h.must_confirm("calc", true),
+            !h.must_confirm("calc", Inherit),
             "offline tools don't ask by default"
         );
-        assert!(h.must_confirm("fetch", true), "online tools ask");
-        assert!(!h.must_confirm("missing", true));
-        assert!(h.net_policy(&manifest("fetch", true), true).allowed);
+        assert!(h.must_confirm("fetch", Inherit), "online tools ask");
+        assert!(!h.must_confirm("missing", Inherit));
+        assert!(h.net_policy(&manifest("fetch", true), Inherit).allowed);
 
-        // The block's switch: a call from a block without internet can't go
+        // The block's switch: a call from a block with internet off can't go
         // online, so it doesn't need asking either.
-        assert!(!h.net_policy(&manifest("fetch", true), false).allowed);
-        assert!(!h.must_confirm("fetch", false));
+        assert!(!h.net_policy(&manifest("fetch", true), Off).allowed);
+        assert!(!h.must_confirm("fetch", Off));
 
-        // The agent's switches.
+        // The agent's switches are what blocks inherit; a block can turn them on.
         let mut s = all_on();
         s.agent = Some(AgentGrant {
             tools: ["fetch".to_string()].into(),
             network: false,
         });
         let h = AgentHost::new(Arc::new(NoServices), s);
+        assert!(!h.agent_allows("calc") && h.agent_allows("fetch"));
         assert!(
-            h.tool_info("calc").is_none(),
-            "not one of this agent's tools"
+            h.tool_info("calc").is_some(),
+            "on app-wide, so a block may turn it on"
         );
-        let why = h.net_policy(&manifest("fetch", true), true);
+        let why = h.net_policy(&manifest("fetch", true), Inherit);
         assert!(!why.allowed && why.refusal.contains("this agent"));
+        assert!(h.net_policy(&manifest("fetch", true), On).allowed);
         // No agent (a test run without one): no tools.
         let mut s = all_on();
         s.agent = None;
@@ -740,17 +756,29 @@ mod tests {
                 .is_none()
         );
 
-        // The tool's own internet switch.
+        // The app's and the tool's own internet switches can't be overridden.
         let mut s = all_on();
         s.tool_grants.get_mut("fetch").unwrap().network = false;
         let h = AgentHost::new(Arc::new(NoServices), s);
-        assert!(!h.must_confirm("fetch", true));
-        assert!(!h.net_policy(&manifest("fetch", true), true).allowed);
+        assert!(!h.must_confirm("fetch", On));
+        assert!(!h.net_policy(&manifest("fetch", true), On).allowed);
+        let mut s = all_on();
+        s.permissions.network = false;
+        let h = AgentHost::new(Arc::new(NoServices), s);
+        assert!(!h.net_policy(&manifest("fetch", true), On).allowed);
+        // A tool off in Settings → Tools isn't there for any block.
+        let mut s = all_on();
+        s.tool_grants.get_mut("calc").unwrap().enabled = false;
+        assert!(
+            AgentHost::new(Arc::new(NoServices), s)
+                .tool_info("calc")
+                .is_none()
+        );
 
         // A tool set to always ask does.
         let mut s = all_on();
         s.tool_grants.get_mut("calc").unwrap().ask = true;
-        assert!(AgentHost::new(Arc::new(NoServices), s).must_confirm("calc", false));
+        assert!(AgentHost::new(Arc::new(NoServices), s).must_confirm("calc", Off));
     }
 
     #[test]

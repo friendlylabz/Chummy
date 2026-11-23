@@ -7,6 +7,7 @@
  * - each note is a node of type "note" whose id is `note:` + the note id.
  */
 import type { Edge, Node } from "@xyflow/svelte";
+import { describeTools } from "$lib/switches";
 import type { Block, BlockInfo, BlockPorts, FunctionDef, Link, LoopFile, Note, PortSpec } from "$lib/ipc";
 
 /** The output a block uses for a failure it can recover from. */
@@ -321,12 +322,12 @@ export function summary(b: Block): string {
   const s = (v: unknown) => (typeof v === "string" ? v : "");
   switch (b.type) {
     case "llm": {
-      const tools = Array.isArray(p.tools) ? p.tools.length : 0;
+      const tools = p.tools === "off" ? "" : describeTools(p.tools);
       const prompt = s(p.prompt).replace(/\s+/g, " ").trim();
       const sys = s(p.system).replace(/\s+/g, " ").trim();
       const base = prompt && prompt !== "_INPUT_" ? prompt : sys;
       const mode = p.tool_mode === "prompted" ? " (prompted)" : p.tool_mode === "off" ? " (off)" : "";
-      return tools ? `${tools} tool${tools === 1 ? "" : "s"}${mode} · ${base}` : base;
+      return tools ? `${tools}${mode} · ${base}` : base;
     }
     case "augment":
       return `${s(p.role) || "user"}: ${s(p.format).replace(/\s+/g, " ").trim()}`;
@@ -372,8 +373,7 @@ export function summary(b: Block): string {
           ? `Marks a task ${s(p.status) || "done"}`
           : `Starts {{${s(p.key) || "plan"}}}`;
     case "find_call": {
-      const n = Array.isArray(p.tools) ? p.tools.length : 0;
-      return n ? `${n} tool${n === 1 ? "" : "s"}` : "No tools ticked";
+      return describeTools(p.tools);
     }
     case "decline_calls":
       return "Answers each call: not run";

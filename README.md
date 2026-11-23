@@ -335,7 +335,11 @@ OpenAI-compatible endpoint (127.0.0.1, random bearer token, offline).
    assistant's output.** Done.
 8. **Formatted replies (Markdown and math), encrypted and configurable logs
    with an exportable key, and answer length per model.** Done.
-9. **chummyd.** An optional, separately installed background service for jobs,
+9. **Inherited settings: tools follow the app and the agent, with an
+   inherit / on / off override per block; answer length and temperature
+   follow the model unless a block sets them. Blank clarifying questions
+   fixed.** Done.
+10. **chummyd.** An optional, separately installed background service for jobs,
    with an authenticated API, configured from the app. See
    [docs/chummyd-plan.md](docs/chummyd-plan.md).
 

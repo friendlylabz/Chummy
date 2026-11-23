@@ -9,6 +9,7 @@
   import { tools } from "$lib/stores/tools.svelte";
   import Button from "./Button.svelte";
   import Icon from "./Icon.svelte";
+  import { readTools, writeTools, switchFor, switchLabels, readSwitch, type Switch } from "$lib/switches";
 
   let {
     info,
@@ -45,24 +46,37 @@
     const v = params.roles;
     return Array.isArray(v) ? (v as string[]) : ["user"];
   }
-  function toolList(): string[] {
-    const v = params.tools;
-    return Array.isArray(v) ? (v as string[]) : [];
+  const switches: Switch[] = ["inherit", "on", "off"];
+  function toolSwitches() {
+    return readTools(params.tools);
   }
-  function toggleTool(name: string, on: boolean) {
-    const cur = toolList().filter((t) => t !== name);
-    onset("tools", on ? [...cur, name] : cur.length ? cur : undefined);
+  function setAll(all: Switch) {
+    onset("tools", writeTools({ ...toolSwitches(), all }));
+  }
+  /** `null` goes back to following "All tools". */
+  function setTool(name: string, s: Switch | null) {
+    const t = toolSwitches();
+    const each = { ...t.each };
+    if (s === null) delete each[name];
+    else each[name] = s;
+    onset("tools", writeTools({ all: t.all, each }));
   }
   function numberInput(p: ParamSpec, raw: string) {
     if (raw.trim() === "") return onset(p.key, p.optional ? undefined : 0);
     const n = Number(raw);
     if (!isNaN(n)) onset(p.key, p.kind === "integer" ? Math.round(n) : n);
   }
-  function why(t: { enabled: boolean; name: string }): string {
-    if (!settings.current.permissions.tools) return "tools off in Permissions";
-    if (!t.enabled) return "off in Settings → Tools";
-    if (agentTools && !agentTools.includes(t.name)) return "off for this agent";
-    return "";
+  /** Whether this block offers the tool, and why (or why not). */
+  function verdict(t: { enabled: boolean; name: string }): { on: boolean; text: string } {
+    if (!settings.current.permissions.tools) return { on: false, text: "tools off in Permissions" };
+    if (!t.enabled) return { on: false, text: "off in Settings → Tools" };
+    const s = switchFor(toolSwitches(), t.name);
+    if (s === "off") return { on: false, text: "off here" };
+    if (s === "on") {
+      return { on: true, text: agentTools && !agentTools.includes(t.name) ? "on here, though off for the agent" : "on here" };
+    }
+    if (!agentTools) return { on: true, text: "if the agent allows it" };
+    return agentTools.includes(t.name) ? { on: true, text: "on for the agent" } : { on: false, text: "off for the agent" };
   }
 </script>
 
@@ -106,15 +120,18 @@
               min={p.min}
               max={p.max}
               step={p.kind === "number" ? p.step : 1}
-              placeholder={p.optional ? (p.key === "max_tokens" ? "The model's setting" : "Default") : ""}
+              placeholder={p.optional ? (p.key === "max_tokens" || p.key === "temperature" ? "Same as the model" : "Default") : ""}
               value={value(p) ?? ""}
               oninput={(e) => numberInput(p, (e.currentTarget as HTMLInputElement).value)}
             />
+            {#if p.optional && value(p) != null && (p.key === "max_tokens" || p.key === "temperature")}
+              <button type="button" class="reset start" onclick={() => onset(p.key, undefined)}>Use the model's setting</button>
+            {/if}
           {:else if p.kind === "choice"}
             <select
               id="{idPrefix}-{p.key}"
               class="input"
-              value={(value(p) as string) ?? p.options[0]?.value}
+              value={p.key === "network" ? readSwitch(value(p)) : ((value(p) as string) ?? p.options[0]?.value)}
               onchange={(e) => onset(p.key, (e.currentTarget as HTMLSelectElement).value)}
             >
               {#each p.options as o (o.value)}<option value={o.value}>{o.label}</option>{/each}
@@ -139,17 +156,43 @@
               <p class="hint">No tools yet. Set them up in Settings → Tools.</p>
               <Button variant="ghost" icon="wrench" onclick={() => commands.openWindow("settings", "tools")}>Open Tools settings</Button>
             {:else}
-              <p class="hint">A tool runs only when it is on in Settings → Tools, on for the agent, and ticked here.</p>
+              <select
+                id="{idPrefix}-{p.key}"
+                class="input"
+                value={toolSwitches().all}
+                onchange={(e) => setAll((e.currentTarget as HTMLSelectElement).value as Switch)}
+              >
+                <option value="inherit">Same as the agent</option>
+                <option value="on">All on</option>
+                <option value="off">All off</option>
+              </select>
               <div class="tools">
                 {#each tools.installed as t (t.name)}
-                  <label class="check" title={t.description}>
-                    <input type="checkbox" checked={toolList().includes(t.name)} onchange={(e) => toggleTool(t.name, (e.currentTarget as HTMLInputElement).checked)} />
+                  {@const v = verdict(t)}
+                  {@const own = toolSwitches().each[t.name]}
+                  <div class="tool" title={t.description}>
+                    <span class="dot" class:on={v.on}></span>
                     <span class="tname">{t.title}</span>
-                    {#if why(t)}<span class="off">{why(t)}</span>{/if}
-                  </label>
+                    <span class="off">{v.text}</span>
+                    <select
+                      class="input tiny"
+                      aria-label="{t.title} in this block"
+                      value={own ?? ""}
+                      onchange={(e) => {
+                        const x = (e.currentTarget as HTMLSelectElement).value;
+                        setTool(t.name, x ? (x as Switch) : null);
+                      }}
+                    >
+                      <option value="">Like all tools</option>
+                      {#each switches as sw (sw)}<option value={sw}>{switchLabels[sw]}</option>{/each}
+                    </select>
+                  </div>
                 {/each}
-                {#each toolList().filter((n) => !tools.installed.some((t) => t.name === n)) as missing (missing)}
-                  <label class="check"><input type="checkbox" checked onchange={() => toggleTool(missing, false)} /><span class="tname mono">{missing}</span><span class="off">not installed</span></label>
+                {#each Object.keys(toolSwitches().each).filter((n) => !tools.installed.some((t) => t.name === n)) as missing (missing)}
+                  <div class="tool">
+                    <span class="dot"></span><span class="tname mono">{missing}</span><span class="off">not installed</span>
+                    <button type="button" class="mini" aria-label="Forget {missing}" onclick={() => setTool(missing, null)}><Icon name="minus" size={13} /></button>
+                  </div>
                 {/each}
               </div>
             {/if}
@@ -194,6 +237,9 @@
     color: var(--accent);
     font-size: var(--text-xs);
     cursor: pointer;
+  }
+  .reset.start {
+    justify-self: start;
   }
   label {
     font-size: var(--text-sm);
@@ -261,6 +307,28 @@
   }
   .tname {
     flex: 1;
+  }
+  .tool {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
+  }
+  .input.tiny {
+    width: auto;
+    height: 26px;
+    padding: 0 var(--space-2);
+    font-size: var(--text-xs);
+  }
+  .dot {
+    flex: none;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--border-strong);
+  }
+  .dot.on {
+    background: var(--accent);
   }
   .off {
     color: var(--text-faint);

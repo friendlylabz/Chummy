@@ -1,7 +1,8 @@
 <script lang="ts">
   /**
    * An agent's own tool and internet switches. A tool runs only when it is
-   * on everywhere: app-wide, for the agent, and in the block that calls it.
+   * on app-wide; then the agent's switch decides, unless a loop block turns
+   * the tool on or off for itself.
    */
   import { onMount } from "svelte";
   import { commands, errorText, type Agent } from "$lib/ipc";
@@ -40,9 +41,10 @@
 <div class="card card-pad">
   <div class="section-title"><Icon name="wrench" size={16} /> Tools and internet for {agent.name}</div>
   <p class="explain">
-    A tool runs only when <b>all three</b> switches are on: app-wide in Settings → Tools, here for this agent, and
-    ticked in the loop block that uses it. Going online also needs Internet access in Permissions, the tool's own
-    internet switch, this agent's switch below, and “may use the internet” in the block.
+    A tool can run only when it is on <b>app-wide</b> (Settings → Tools and Permissions). Then <b>this agent's</b>
+    switch decides. Loop blocks follow the agent by default; a block can turn a tool on or off just for itself, and
+    the run notes it when a block turns on a tool that is off here. Going online also needs Internet access in
+    Permissions and the tool's own internet switch, which nothing can override.
   </p>
 
   {#if !perms.tools}
@@ -80,7 +82,7 @@
       <span class="row-title">Tools may use the internet</span>
       <span class="row-sub">
         {perms.network ? "Internet access is on in Permissions." : "Internet access is off in Permissions, so tools stay offline even if this is on."}
-        Each tool's own internet switch and the block's switch must be on too.
+        Each tool's own internet switch must be on too. Blocks follow this unless they say otherwise.
       </span>
     </span>
   </label>

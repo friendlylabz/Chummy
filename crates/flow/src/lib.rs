@@ -26,7 +26,8 @@ mod validate;
 
 pub use blocks::{
     BadCall, BlockInfo, BlockKind, Category, ChoiceOption, FAILED, OnLimit, OnToolError, ParamKind,
-    ParamSpec, PortSpec, RoleFilter, ToolChoice, ToolMode, ValueKind, catalog,
+    ParamSpec, PortSpec, RoleFilter, Switch, ToolChoice, ToolMode, ToolSwitches, ValueKind,
+    catalog,
 };
 pub use config::{CONFIG_FORMAT, LoopConfig, Overrides, find_block};
 pub use engine::{

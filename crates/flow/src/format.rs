@@ -35,14 +35,14 @@ use crate::engine::RunLimits;
 pub const FORMAT: &str = "chummy.loop";
 /// Version 2 added block comments, link labels and notes. Version 1 files
 /// read as version 2 with none of them.
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LoopFile {
     /// Always `"chummy.loop"`.
     pub format: String,
-    /// Format version; this build reads versions 1 and 2.
+    /// Format version; this build reads versions 1 to 3.
     pub version: u32,
     pub name: String,
     #[serde(default)]
@@ -232,6 +232,10 @@ impl LoopFile {
         if version == 0 {
             return Err(FlowError::Parse("missing or invalid \"version\"".into()));
         }
+        let mut raw = raw;
+        if version < 3 {
+            upgrade_tools(&mut raw);
+        }
         serde_json::from_value(raw).map_err(|e| FlowError::Parse(e.to_string()))
     }
 
@@ -245,6 +249,36 @@ impl LoopFile {
 
     pub fn function(&self, id: &str) -> Option<&FunctionDef> {
         self.functions.iter().find(|f| f.id == id)
+    }
+}
+
+/// Before version 3, a model block (or Find tool call) without a `tools`
+/// list had no tools, and without `network` stayed offline. Since version 3
+/// leaving them out means "inherit", so older files say "off" explicitly.
+fn upgrade_tools(raw: &mut serde_json::Value) {
+    fn blocks(list: Option<&mut serde_json::Value>) {
+        for b in list.and_then(|v| v.as_array_mut()).into_iter().flatten() {
+            let kind = b.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            if kind != "llm" && kind != "find_call" {
+                continue;
+            }
+            if b.get("params").is_none_or(|p| p.is_null()) {
+                b["params"] = serde_json::json!({});
+            }
+            if let Some(p) = b.get_mut("params").and_then(|p| p.as_object_mut()) {
+                p.entry("tools").or_insert_with(|| "off".into());
+                p.entry("network").or_insert_with(|| "off".into());
+            }
+        }
+    }
+    blocks(raw.get_mut("blocks"));
+    for f in raw
+        .get_mut("functions")
+        .and_then(|v| v.as_array_mut())
+        .into_iter()
+        .flatten()
+    {
+        blocks(f.get_mut("blocks"));
     }
 }
 

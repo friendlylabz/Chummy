@@ -1,4 +1,4 @@
-# The Chummy loop format (`chummy.loop`, version 2)
+# The Chummy loop format (`chummy.loop`, version 3)
 
 A loop is how an agent thinks: a directed graph of **blocks** that pass text
 (and conversations with the model) to each other along **links**, from the
@@ -11,7 +11,7 @@ file means exactly one thing.
 ```json
 {
   "format": "chummy.loop",
-  "version": 2,
+  "version": 3,
   "name": "Simple chat",
   "description": "Answers each message with the recent conversation as context.",
   "limits": { "max_steps": 200, "max_llm_calls": 20, "max_tool_calls": 20 },
@@ -25,7 +25,7 @@ file means exactly one thing.
 | Field         | Type   | Required | Meaning |
 |---------------|--------|----------|---------|
 | `format`      | string | yes      | Always `"chummy.loop"`. |
-| `version`     | number | yes      | Format version. This document describes `2`. Version `1` files (no comments, labels or notes) still load; newer versions are refused, never guessed at. Chummy saves as `2`. |
+| `version`     | number | yes      | Format version. This document describes `3`. Older files still load: version `1` had no comments, labels or notes, and before version `3` a model block (or Find tool call) without `tools` or `network` had none, so those files load with both set to `"off"`. Newer versions are refused, never guessed at. Chummy saves as `3`. |
 | `name`        | string | yes      | Display name. |
 | `description` | string | no       | Defaults to `""`. |
 | `limits`      | object | no       | Safety limits for one run (see below). |
@@ -123,8 +123,10 @@ A model block (`llm`) with tools works like this:
 
 1. Its input is text (filled into its prompt, as a new conversation) or an
    exchange (which it continues; the prompt isn't used).
-2. The model's tools are the block's `tools` that are installed and switched
-   on; any others are left out, with a notice.
+2. The model's tools come from two levels of switches, plus the block's
+   own setting (see **Tool switches** below). A block whose **Tool call**
+   output isn't connected is offered no tools (unless `tool_mode` is `off`),
+   so it simply answers.
 3. If the model answers, the answer goes out of **Answer**. If it calls a
    tool, the exchange plus the model's request goes out of **Tool call**
    instead, and Answer stays silent. **Reasoning** carries any thinking the
@@ -146,10 +148,34 @@ A model block (`llm`) with tools works like this:
    tool when `tool_choice` is `required`. `on_bad_call` decides what happens:
    `retry` (tell the model what was wrong and ask again, up to `retries`
    times, then stop), `fail` (stop), or `answer` (use the text as the answer).
-6. A tool may go online only if `network` is on in the block **and**
-   Internet access is on in Permissions, for the tool, and for the agent. A
-   tool is offered only if it is on app-wide, allowed for the agent, and in
-   the block's `tools`.
+6. A tool may go online only if Internet access is on in Permissions and
+   the tool's own internet switch is on; then the block's `network` decides
+   (`inherit`, the default, uses the agent's internet switch).
+
+### Tool switches
+
+Two switches decide which tools a block offers: the **app-wide** one (tools
+on in Permissions, and the tool on in Settings → Tools) and the **agent's**
+(its tool and internet switches). The app-wide one always applies; nothing in
+a loop can get past it. A block follows the agent by default and can override
+it, one tool at a time:
+
+| Switch    | Meaning                                                            |
+|-----------|--------------------------------------------------------------------|
+| `inherit` | What the agent allows (the default, also when the key is left out). |
+| `on`      | On for this block, even when the agent's switch is off. The run shows a notice when this happens. |
+| `off`     | Never in this block.                                               |
+
+`tools` is one switch for every tool (`"inherit"`, `"on"` or `"off"`), or an
+object when single tools differ: `{"all": "off", "each": {"calculator":
+"inherit"}}` offers only the calculator, if the agent allows it. `network` is
+one switch (`"inherit"`, `"on"` or `"off"`). Old forms still load: a list of
+tool names means those tools inherit and every other is off, and `true` /
+`false` mean `inherit` / `off`.
+
+Model settings inherit the same way: `max_tokens` and `temperature` left out
+use the model connection's own settings (Settings → Models), and `model` left
+out uses the agent's model.
 
 A **Run tool** block runs the calls at the end of an exchange in the agent's
 sandbox, adds their results as tool messages, and sends the exchange on.
@@ -236,14 +262,14 @@ Ports are written `name: kind`.
 | `input` | Message | none | `out: text` | none. Sends the chat message. |
 | `history` | Conversation | none | `out: text` | `max_messages` (10): recent messages, formatted `User: …` / `Assistant: …`. |
 | `fixed` | Fixed text | none | `out: text` | `text` (""). |
-| `llm` | Ask the model | `in: any` | `out: text` (Answer), `tool: exchange` (Tool call, only with tools and `tool_mode` not `off`), `reasoning: text`, `error: text` | `prompt` ("_INPUT_"), `system` (""), `model` (unset = the agent's model; otherwise a model connection id), `temperature` (unset = model default; 0–2), `max_tokens` (unset = the model connection's longest answer, 1,024 unless changed in Settings → Models; 1–32,768), `tools` ([]), `tool_mode` ("native", "prompted" or "off"), `network` (false), `on_limit` ("ask", "wait" or "stop"), `tool_choice` ("auto" or "required"), `on_bad_call` ("retry", "fail" or "answer"), `retries` (2; 0–5). `_TOOLS_` in the prompt or system message lists the block's tools; `{{name}}` includes memory. Text input: `_INPUT_` in the prompt is replaced by it (or it's added after the prompt). Exchange input: the exchange is continued; a non-empty `system` replaces its system message for this call. `<think>…</think>` sections are moved from the answer to Reasoning. |
+| `llm` | Ask the model | `in: any` | `out: text` (Answer), `tool: exchange` (Tool call, only with tools and `tool_mode` not `off`), `reasoning: text`, `error: text` | `prompt` ("_INPUT_"), `system` (""), `model` (unset = the agent's model; otherwise a model connection id), `temperature` (unset = the model connection's setting; 0–2), `max_tokens` (unset = the model connection's longest answer, 1,024 unless changed in Settings → Models; 1–32,768), `tools` ("inherit"; see Tool switches), `tool_mode` ("native", "prompted" or "off"), `network` ("inherit"), `on_limit` ("ask", "wait" or "stop"), `tool_choice` ("auto" or "required"), `on_bad_call` ("retry", "fail" or "answer"), `retries` (2; 0–5). `_TOOLS_` in the prompt or system message lists the block's tools; `{{name}}` includes memory. Text input: `_INPUT_` in the prompt is replaced by it (or it's added after the prompt). Exchange input: the exchange is continued; a non-empty `system` replaces its system message for this call. `<think>…</think>` sections are moved from the answer to Reasoning. |
 | `run_tool` | Run tool | `in: exchange` | `out: exchange`, `error: text` | `max_result_chars` (4000), `on_error` ("tell_model" or "fail"), `confirm` (false). Runs the pending tool calls at the end of the exchange and adds their results. Longer results are cut. With `confirm`, each call waits for the user to allow it (see *Asking the user*). |
 | `ask_user` | Ask me | `in: any` | `out: text`, `error: text` | `prompt` ("_INPUT_"; `_INPUT_` is replaced by the input, or the input is added after it), `timeout_minutes` (0 = wait as long as it takes; at most 10080), `default_answer` (""). Asks the user and sends the answer on. If the wait times out, `default_answer` is used, or the run stops if it's empty. |
 | `exchange` | Start exchange | `in: any` | `out: exchange` | `system` (""), `roles` (["user"]). Text becomes one message with the first role; a list becomes one message per item, with the roles in turn. |
 | `augment` | Add to exchange | `exchange: exchange`, `in: any` | `out: exchange` | `role` ("user"), `format` ("_INPUT_"). Adds the text as a message (`_INPUT_` replaced by it); a list adds one message per item. |
 | `read_exchange` | Read exchange | `in: exchange` | `last: text`, `all: text`, `calls: text` | `role` ("assistant"; or "user", "tool", "system", "any"). `last` is the last message from that role, `all` the transcript, `calls` the pending tool calls described for people (empty if none). |
 | `decline_calls` | Decline tool calls | `in: exchange`, `reason: text` | `out: exchange` | none. Answers each pending tool call with "Not run" and the reason, without running it. |
-| `find_call` | Find tool call | `exchange: exchange`, `in: text` | `call: exchange`, `none: text` | `tools` ([]), `network` (false). Finds tool calls in the text and adds them to the exchange for *Run tool*. Only tools in `tools` count; text without a usable call goes out of `none`. |
+| `find_call` | Find tool call | `exchange: exchange`, `in: text` | `call: exchange`, `none: text` | `tools` ("inherit"), `network` ("inherit"), as in Tool switches. Finds tool calls in the text and adds them to the exchange for *Run tool*. Only tools the block offers count; text without a usable call goes out of `none`. |
 | `outline` | Plan outline | `in: text` (start), `task: text` and `steps: list` (add steps), or `task: text` (mark) | `out: text` | `action` ("start", "add_steps" or "mark"), `status` ("done"), `limit` (5; 0 = all), `key` ("plan"). See *Plan outline*. |
 | `store` | Save to memory | `in: text` | `out: text` | `key` ("notes"), `max_chars` (4000; at least 100; longer text keeps its end). |
 | `recall` | Read memory | `in: any` | `out: text` | `key` ("notes"). |

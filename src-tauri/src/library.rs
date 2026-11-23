@@ -37,6 +37,39 @@ impl Library {
         }
     }
 
+    /// Copies of the built-in loops saved before loop format 3 are replaced
+    /// by the current built-in, keeping their id (so agents keep using them).
+    /// Format 3 made blocks inherit the agent's tools and the model's
+    /// settings, and fixed blank clarifying questions. Other loops are only
+    /// upgraded as they're read (see `LoopFile::from_json`).
+    pub fn upgrade_builtins(&self) -> Vec<String> {
+        let builtins = chummy_flow::templates();
+        let mut done = Vec::new();
+        for e in std::fs::read_dir(&self.dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.extension().is_none_or(|x| x != "json") {
+                continue;
+            }
+            let Ok(raw) = std::fs::read_to_string(&p) else {
+                continue;
+            };
+            let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) else {
+                continue;
+            };
+            if json.get("version").and_then(|v| v.as_u64()).unwrap_or(0) >= 3 {
+                continue;
+            }
+            let name = json.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let Some(t) = builtins.iter().find(|t| t.file.name == name) else {
+                continue;
+            };
+            if std::fs::write(&p, t.file.to_json()).is_ok() {
+                done.push(name.to_string());
+            }
+        }
+        done
+    }
+
     fn path(&self, id: &str) -> Result<PathBuf, String> {
         if !valid_id(id) {
             return Err("That loop id isn't valid.".into());
@@ -173,5 +206,30 @@ mod tests {
         lib.delete(&id).unwrap();
         assert!(lib.list().is_empty());
         assert!(lib.load("../../etc/passwd").is_err());
+    }
+
+    #[test]
+    fn old_copies_of_built_in_loops_are_replaced() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = Library::new(tmp.path());
+        let current = chummy_flow::templates()
+            .into_iter()
+            .find(|t| t.id == chummy_flow::ASSISTANT)
+            .unwrap()
+            .file;
+        let old = format!(
+            r#"{{"format":"chummy.loop","version":2,"name":"{}","blocks":[]}}"#,
+            current.name
+        );
+        std::fs::write(tmp.path().join("mine.json"), &old).unwrap();
+        let other = r#"{"format":"chummy.loop","version":2,"name":"My own","blocks":[]}"#;
+        std::fs::write(tmp.path().join("other.json"), other).unwrap();
+        assert_eq!(lib.upgrade_builtins(), std::slice::from_ref(&current.name));
+        assert_eq!(lib.load("mine").unwrap(), current);
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("other.json")).unwrap(),
+            other
+        );
+        assert!(lib.upgrade_builtins().is_empty(), "only once");
     }
 }
