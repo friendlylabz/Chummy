@@ -209,6 +209,19 @@
             <div><dt>Steps</dt><dd>{end.steps}</dd></div>
             <div><dt>Model calls</dt><dd>{end.llm_calls}</dd></div>
             <div><dt>Tool calls</dt><dd>{end.tool_calls}</dd></div>
+            {#if end.tokens_added}<div><dt>Tokens added</dt><dd>~{end.tokens_added.toLocaleString("en-US")}</dd></div>{/if}
+            {#if end.context_window}
+              <div>
+                <dt>Context</dt>
+                <dd>~{(end.context_tokens ?? 0).toLocaleString("en-US")} of {end.context_window.toLocaleString("en-US")}</dd>
+              </div>
+            {/if}
+            {#if end.daily_allowed}
+              <div>
+                <dt>Daily usage</dt>
+                <dd>{Math.round(((end.daily_used ?? 0) / end.daily_allowed) * 100)}%</dd>
+              </div>
+            {/if}
           {/if}
         </dl>
         {#if h.message}<div class="message" data-selectable><span class="label">Message</span>{h.message}</div>{/if}

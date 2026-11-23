@@ -110,7 +110,7 @@
     height: 36px;
     margin-bottom: var(--space-4);
     border-radius: 11px;
-    background: linear-gradient(135deg, #f6b27a, #e9795a);
+    background: linear-gradient(135deg, #3e9c76, #2b784e);
   }
   h1 {
     font-size: var(--text-xl);

@@ -181,6 +181,9 @@ fn add_local_provider(
         temperature: None,
         daily_tokens: Some(chummy_llm::DEFAULT_DAILY_TOKENS),
         max_tokens: chummy_llm::DEFAULT_MAX_TOKENS,
+        context_max: None,
+        context_tokens: None,
+        compact_at: None,
     };
     state.update(app, |s| {
         match s.providers.iter_mut().find(|p| p.id == id) {

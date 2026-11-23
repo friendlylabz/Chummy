@@ -71,8 +71,9 @@
   }
   .head {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: var(--space-3);
+    gap: 2px var(--space-3);
   }
   .toggle,
   .logs {

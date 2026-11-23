@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { DEFAULT_DAILY_TOKENS, DEFAULT_MAX_TOKENS, commands, errorText, type Preset, type ProbeReport, type ProviderView, type UsageView } from "$lib/ipc";
+  import { DEFAULT_DAILY_TOKENS, DEFAULT_MAX_TOKENS, commands, contextWindow, errorText, type Preset, type ProbeReport, type ProviderView, type UsageView } from "$lib/ipc";
   import { kindLabel, precisionLabel } from "$lib/format";
   import { settings } from "$lib/stores/settings.svelte";
   import { local } from "$lib/stores/local.svelte";
@@ -176,6 +176,7 @@
             {kindLabel[p.kind]} · {p.model}
             {#if p.local} · {precisionLabel[p.local.precision]}{/if}
             {#if p.has_key} · key saved{/if}
+            · {contextWindow(p).toLocaleString("en-US")}-token context{#if !p.context_max && !p.context_tokens} (assumed){/if}
           </div>
         </div>
         <div class="p-actions">

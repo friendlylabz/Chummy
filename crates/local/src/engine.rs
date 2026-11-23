@@ -361,6 +361,9 @@ mod tests {
             temperature: None,
             daily_tokens: Some(chummy_llm::DEFAULT_DAILY_TOKENS),
             max_tokens: chummy_llm::DEFAULT_MAX_TOKENS,
+            context_max: None,
+            context_tokens: None,
+            compact_at: None,
         };
         let report = probe(&Client::new(&provider, Some(ep.token.clone())).unwrap()).await;
         assert!(report.ok, "{:?}", report.steps);

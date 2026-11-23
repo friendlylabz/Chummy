@@ -25,6 +25,7 @@
 mod anthropic;
 mod client;
 mod config;
+mod context;
 mod error;
 mod gemini;
 mod openai;
@@ -34,8 +35,9 @@ mod types;
 
 pub use client::Client;
 pub use config::{
-    DEFAULT_DAILY_TOKENS, DEFAULT_MAX_TOKENS, LocalModel, Precision, Preset, ProviderConfig,
-    ProviderKind, endpoint_problem, presets, unencrypted_remote,
+    DEFAULT_COMPACT_PERCENT, DEFAULT_CONTEXT, DEFAULT_DAILY_TOKENS, DEFAULT_MAX_TOKENS, LocalModel,
+    MIN_CONTEXT, Precision, Preset, ProviderConfig, ProviderKind, endpoint_problem, presets,
+    unencrypted_remote,
 };
 pub use error::LlmError;
 pub use probe::{ProbeReport, ProbeStep, StepStatus, probe};

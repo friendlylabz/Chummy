@@ -334,7 +334,9 @@ export function summary(b: Block): string {
     case "exchange":
       return s(p.system).replace(/\s+/g, " ").trim() || (Array.isArray(p.roles) ? p.roles.join(", ") : "");
     case "read_exchange":
-      return `Last from ${s(p.role) || "assistant"}`;
+      return `Last from ${s(p.role) || "assistant"}${p.system_in_transcript === false ? " · transcript without system" : ""}`;
+    case "context_check":
+      return p.percent ? `Full at ${p.percent}% of the context` : "Full at the model's compaction point";
     case "for_each":
       return p.limit ? `At most ${p.limit}` : "";
     case "function":

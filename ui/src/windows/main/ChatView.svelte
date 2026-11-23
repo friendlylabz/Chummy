@@ -29,10 +29,18 @@
     return new Set(last.values());
   });
   function counts(r: NonNullable<ChatMessage["run"]>): string {
-    const n = (x: number, one: string) => `${x} ${one}${x === 1 ? "" : "s"}`;
-    return [n(r.llm_calls, "model call"), r.tool_calls ? n(r.tool_calls, "tool call") : "", n(r.steps, "step")]
-      .filter(Boolean)
-      .join(" · ");
+    const n = (x: number, one: string) => `${x.toLocaleString("en-US")} ${one}${x === 1 ? "" : "s"}`;
+    const pct = (a: number, b: number) => {
+      const v = (a / b) * 100;
+      return `${v > 0 && v < 1 ? "<1" : Math.round(v)}%`;
+    };
+    const parts = [n(r.llm_calls, "model call"), r.tool_calls ? n(r.tool_calls, "tool call") : "", n(r.steps, "step")];
+    // Token figures (estimates), for replies recorded since they were added.
+    if (r.tokens) parts.push(`${n(r.tokens, "token")} used`);
+    if (r.context_window) parts.push(`context ${pct(r.context_tokens ?? 0, r.context_window)}`);
+    // Only for models with a daily limit; unlimited ones show nothing.
+    if (r.daily_allowed) parts.push(`daily usage ${pct(r.daily_used ?? 0, r.daily_allowed)}`);
+    return parts.filter(Boolean).join(" · ");
   }
 
   // Keep the newest message in view.

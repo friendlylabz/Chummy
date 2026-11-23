@@ -34,6 +34,8 @@ pub struct ProbeReport {
     pub models: Vec<String>,
     /// True when the connection is usable (reply step passed).
     pub ok: bool,
+    /// The context length the server reports for the model, if it does.
+    pub context: Option<u32>,
 }
 
 fn step(
@@ -98,6 +100,7 @@ pub async fn probe(client: &Client) -> ProbeReport {
                 steps,
                 models,
                 ok: false,
+                context: None,
             };
         }
         Err(e) => steps.push(step(
@@ -156,6 +159,7 @@ pub async fn probe(client: &Client) -> ProbeReport {
                 steps,
                 models,
                 ok: false,
+                context: None,
             };
         }
     };
@@ -227,5 +231,44 @@ pub async fn probe(client: &Client) -> ProbeReport {
         )),
     }
 
-    ProbeReport { steps, models, ok }
+    // 4. The context length (most servers say, OpenAI's own API doesn't).
+    let t = Instant::now();
+    let context = client.context_length().await;
+    steps.push(match context {
+        Some(n) => step(
+            "Find the context length",
+            StepStatus::Pass,
+            format!("{} tokens, as the server reports.", thousands(n)),
+            t,
+        ),
+        None => step(
+            "Find the context length",
+            StepStatus::Warn,
+            format!(
+                "The server doesn't say. Chummy assumes {} tokens unless you set it here.",
+                thousands(crate::DEFAULT_CONTEXT)
+            ),
+            t,
+        ),
+    });
+
+    ProbeReport {
+        steps,
+        models,
+        ok,
+        context,
+    }
+}
+
+/// 32768 → "32,768".
+fn thousands(n: u32) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }

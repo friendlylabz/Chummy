@@ -43,6 +43,29 @@ export interface ProviderConfig {
   daily_tokens?: number | null;
   /** Longest answer, unless a model block sets its own. */
   max_tokens?: number;
+  /** Context length the server reports for the model (`null`: it doesn't say). */
+  context_max?: number | null;
+  /** Context length set by the user (capped at `context_max`). */
+  context_tokens?: number | null;
+  /** When loops make room, in tokens (`null`: 80% of the context). */
+  compact_at?: number | null;
+}
+
+export const DEFAULT_CONTEXT = 8192;
+export const DEFAULT_COMPACT_PERCENT = 80;
+export const MIN_CONTEXT = 512;
+
+/** The context length in use (mirrors `ProviderConfig::context_window`). */
+export function contextWindow(p: Pick<ProviderConfig, "context_max" | "context_tokens">): number {
+  const max = p.context_max && p.context_max > 0 ? p.context_max : null;
+  const mine = p.context_tokens && p.context_tokens > 0 ? p.context_tokens : null;
+  return mine != null && max != null ? Math.min(mine, max) : mine ?? max ?? DEFAULT_CONTEXT;
+}
+
+/** When loops make room (mirrors `ProviderConfig::compact_threshold`). */
+export function compactThreshold(p: Pick<ProviderConfig, "context_max" | "context_tokens" | "compact_at">): number {
+  const w = contextWindow(p);
+  return p.compact_at && p.compact_at > 0 ? Math.min(p.compact_at, w) : Math.floor((w * DEFAULT_COMPACT_PERCENT) / 100);
 }
 
 export const DEFAULT_DAILY_TOKENS = 1_000_000;
@@ -155,6 +178,8 @@ export interface ProbeReport {
   steps: ProbeStep[];
   models: string[];
   ok: boolean;
+  /** The context length the server reports, if it does. */
+  context?: number | null;
 }
 export interface TestOutcome {
   needs_runtime: boolean;
@@ -411,7 +436,7 @@ export interface ChatMessage {
   at: number;
   /** A job's name, for questions that came from a job. */
   from?: string;
-  run?: { run_id?: string; status: string; steps: number; llm_calls: number; tool_calls?: number };
+  run?: RunSummary;
 }
 export interface RunInfo {
   run_id: string;
@@ -500,6 +525,31 @@ export interface RunEnd {
   llm_calls: number;
   tool_calls: number;
   replies: number;
+  /** Estimated tokens the turn added to context. */
+  tokens_added?: number;
+  /** Estimated tokens in the latest model call's context, and its length. */
+  context_tokens?: number;
+  context_window?: number;
+  /** The model's tokens used today, and today's allowance (none: no limit). */
+  daily_used?: number;
+  daily_allowed?: number | null;
+}
+
+/** A finished run, as kept with its chat message. */
+export interface RunSummary {
+  run_id?: string;
+  status: string;
+  steps: number;
+  llm_calls: number;
+  tool_calls?: number;
+  /** Estimated tokens this turn added to context. */
+  tokens?: number;
+  /** Estimated tokens in the context at the end, and the model's context length. */
+  context_tokens?: number;
+  context_window?: number;
+  /** The model's tokens used today when the reply came, and today's allowance. */
+  daily_used?: number;
+  daily_allowed?: number | null;
 }
 export type LogEntry =
   | ({ type: "start" } & RunHeader)

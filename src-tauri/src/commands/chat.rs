@@ -37,6 +37,29 @@ pub struct RunSummary {
     pub llm_calls: u32,
     #[serde(default)]
     pub tool_calls: u32,
+    /// Estimated tokens this turn added to context.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub tokens: u64,
+    /// Estimated tokens in the context at the end, and the model's context
+    /// length (0: unknown).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub context_tokens: u64,
+    #[serde(default, skip_serializing_if = "is_zero32")]
+    pub context_window: u32,
+    /// The model's tokens used today when the reply came, and today's
+    /// allowance (`None`: no daily limit).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub daily_used: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daily_allowed: Option<u64>,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+fn is_zero32(n: &u32) -> bool {
+    *n == 0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -419,6 +442,7 @@ pub fn track(app: &AppHandle, state: &AppState, info: RunInfo, meta: RunMeta) ->
         log,
         started_at,
         title: info.title.clone(),
+        agent_id: info.agent_id.clone(),
     };
     let _ = app.emit(events::RUN_STARTED, info);
     guard
@@ -481,14 +505,14 @@ fn start(
     let id = run_id;
     tauri::async_runtime::spawn(async move {
         let outcome = run(&file, &host, &inputs, &cancel, emitter(&app, &guard)).await;
-        guard.finish(&outcome);
+        let end = guard.finish(&outcome);
 
         let state = app.state::<AppState>();
         lock(&state.runs).remove(&id);
         if source == "chat"
             && let Some(agent) = &agent
         {
-            for m in messages_for(&outcome, &id) {
+            for m in messages_for(&outcome, &id, &end) {
                 let _ = append(&app, &state, &agent.id, m);
             }
         }
@@ -513,12 +537,31 @@ pub struct RunGuard {
     log: Option<Arc<RunLog>>,
     started_at: u64,
     title: String,
+    agent_id: Option<String>,
 }
 
 impl RunGuard {
-    /// Records how the run ended, in its log and the system log.
-    pub fn finish(&self, o: &RunOutcome) {
-        let end = RunEnd::from_outcome(o);
+    /// Records how the run ended, in its log and the system log, and
+    /// returns that record (with today's use of the model).
+    pub fn finish(&self, o: &RunOutcome) -> RunEnd {
+        let mut end = RunEnd::from_outcome(o);
+        let state = self.app.state::<AppState>();
+        let settings = state.settings();
+        // The model the turn ended on: the block's, else the agent's, else the default.
+        let model = o
+            .usage
+            .model
+            .clone()
+            .or_else(|| {
+                self.agent_id
+                    .as_deref()
+                    .and_then(|a| settings.agent(a))
+                    .and_then(|a| a.model.clone())
+            })
+            .or_else(|| settings.default_provider.clone());
+        if let Some(p) = model.as_deref().and_then(|m| settings.provider(m)) {
+            (end.daily_used, end.daily_allowed) = state.usage.daily(p);
+        }
         let secs = format!(
             "{:.1}",
             end.ended_at.saturating_sub(self.started_at) as f64 / 1000.0
@@ -556,8 +599,9 @@ impl RunGuard {
             &fields,
         );
         if let Some(l) = &self.log {
-            l.end(end);
+            l.end(end.clone());
         }
+        end
     }
 }
 
@@ -570,7 +614,7 @@ impl Drop for RunGuard {
 }
 
 /// Chat messages that report a finished run.
-fn messages_for(o: &RunOutcome, run_id: &str) -> Vec<ChatMessage> {
+fn messages_for(o: &RunOutcome, run_id: &str, end: &RunEnd) -> Vec<ChatMessage> {
     let (status, notice) = match &o.status {
         RunStatus::Completed if o.replies.is_empty() => (
             "completed",
@@ -590,6 +634,11 @@ fn messages_for(o: &RunOutcome, run_id: &str) -> Vec<ChatMessage> {
         steps: o.steps,
         llm_calls: o.llm_calls,
         tool_calls: o.tool_calls,
+        tokens: end.tokens_added,
+        context_tokens: end.context_tokens,
+        context_window: end.context_window,
+        daily_used: end.daily_used,
+        daily_allowed: end.daily_allowed,
     };
     let mut out = Vec::new();
     if !o.replies.is_empty() {

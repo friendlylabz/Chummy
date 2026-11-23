@@ -217,6 +217,16 @@ without noticing.
   links only). Math goes through KaTeX with `trust` off (so `\href` and
   similar are refused) and size and macro-expansion limits.
 
+## Pass 11: context lengths
+
+- Finding a model's context length makes a few extra read-only requests,
+  only to the model connection's own address and with its own key (the
+  model list, and on local servers `/props`, `/api/show` or
+  `/api/v0/models/<model>`). They time out after a few seconds, so saving a
+  connection never hangs; nothing they return is shown as HTML or run.
+- Reported lengths are only used as numbers (capped at `u32`), and a user
+  setting can lower but not raise them.
+
 ## Known risks and what to do next
 
 In rough order of importance:

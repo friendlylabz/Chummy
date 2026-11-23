@@ -149,7 +149,14 @@ until you say so.
   OpenAI-compatible server, OpenAI, Anthropic, Gemini, OpenRouter, Groq,
   Mistral, DeepSeek, xAI and Together. API keys live in the OS keychain. **Test
   connection** checks that the server is reachable, that the model replies,
-  and whether it can call a tool.
+  whether it can call a tool, and how long its context is (most servers
+  report it; OpenAI's own API doesn't). Each connection has a context length
+  (the reported one, or less if you set it) and a *Make room at* point (80%
+  of the context by default), where the Chummy assistant summarises a long
+  conversation.
+- **Turn figures.** Under each reply: model calls, tool calls and steps, then
+  the tokens the turn added to context, how full the context is, and how
+  much of the model's daily token limit is used (all estimates).
 - **Built-in engine (basic).** Paste a Hugging Face repo and Chummy checks it
   before downloading: it must be a text model, run without custom code, ship
   safetensors weights, and have a chat template with tools in a format Chummy

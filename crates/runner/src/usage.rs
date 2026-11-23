@@ -120,6 +120,13 @@ impl UsageLedger {
     }
 
     /// `provider`'s use today.
+    /// Tokens used today by a connection, and how many are allowed today
+    /// (`None`: no daily limit).
+    pub fn daily(&self, p: &chummy_llm::ProviderConfig) -> (u64, Option<u64>) {
+        let d = self.today(&p.id);
+        (d.used, p.daily_tokens.map(|l| l + d.extra))
+    }
+
     pub fn today(&self, provider: &str) -> DayUse {
         let g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         g.days

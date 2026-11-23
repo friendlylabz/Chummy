@@ -31,10 +31,13 @@ pub use blocks::{
 };
 pub use config::{CONFIG_FORMAT, LoopConfig, Overrides, find_block};
 pub use engine::{
-    Answer, Ask, AskKind, BlockState, Budget, ChatTurn, Event, Host, LlmAnswer, LlmCall,
-    MalformedCall, RunInputs, RunLimits, RunOutcome, RunStatus, ToolOutput, Value, run,
+    Answer, Ask, AskKind, BlockState, Budget, ChatTurn, ContextLimits, DEFAULT_CONTEXT_WINDOW,
+    Event, Host, LlmAnswer, LlmCall, MalformedCall, RunInputs, RunLimits, RunOutcome, RunStatus,
+    ToolOutput, TurnUsage, Value, run,
 };
-pub use exchange::{ExMessage, Exchange, Role, ToolCall, ToolInfo, check_arguments};
+pub use exchange::{
+    ExMessage, Exchange, Role, ToolCall, ToolInfo, check_arguments, estimate_messages,
+};
 pub use format::{
     Block, FORMAT, FunctionDef, FunctionInput, FunctionOutput, Link, LoopFile, Note, PortRef,
     Position, VERSION,

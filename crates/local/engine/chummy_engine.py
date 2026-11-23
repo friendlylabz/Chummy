@@ -306,11 +306,27 @@ def _partial_suffix(s: str, markers: Iterable[str]) -> int:
 # --------------------------------------------------------------------------
 
 
+def read_context_length(model_dir):
+    """The model's context length from its config.json, or None."""
+    try:
+        with open(os.path.join(model_dir, "config.json"), encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
+        return None
+    for src in (cfg, cfg.get("text_config") or {}):
+        for key in ("max_position_embeddings", "n_positions", "max_sequence_length", "seq_length"):
+            v = src.get(key)
+            if isinstance(v, int) and v > 0:
+                return v
+    return None
+
+
 class FakeBackend:
     """Deterministic stand-in used by tests: no torch needed."""
 
     name = "fake-model"
     device = "cpu"
+    context_length = 32768
 
     def __init__(self, parser: Parser):
         self.parser = parser
@@ -391,6 +407,7 @@ class TransformersBackend:
         self.tok = None
         self.model = None
         self.lock = threading.Lock()
+        self.context_length = read_context_length(model_dir)
 
     def load(self):
         import torch
@@ -593,7 +610,11 @@ def make_handler(state: State):
                                  "model": state.backend.name, "device": state.backend.device,
                                  "parser": state.parser.name})
             elif self.path == "/v1/models":
-                self._json(200, {"object": "list", "data": [{"id": state.backend.name, "object": "model"}]})
+                card = {"id": state.backend.name, "object": "model"}
+                if getattr(state.backend, "context_length", None):
+                    # Not in OpenAI's own API; vLLM, SGLang and others report it like this.
+                    card["max_model_len"] = state.backend.context_length
+                self._json(200, {"object": "list", "data": [card]})
             else:
                 self._json(404, {"error": {"message": "not found"}})
 

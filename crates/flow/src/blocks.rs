@@ -485,11 +485,39 @@ pub struct AugmentParams {
     pub format: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReadExchangeParams {
     #[serde(default)]
     pub role: RoleFilter,
+    /// Whether the Transcript output starts with the system message.
+    #[serde(default = "d_true")]
+    pub system_in_transcript: bool,
+}
+
+impl Default for ReadExchangeParams {
+    fn default() -> Self {
+        Self {
+            role: RoleFilter::default(),
+            system_in_transcript: true,
+        }
+    }
+}
+
+fn d_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextCheckParams {
+    /// Model connection whose context is measured. `None`: the agent's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Full at this share of the model's context (1–100). `None`: the
+    /// model's own compaction point (Settings → Models).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub percent: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -588,6 +616,7 @@ pub enum BlockKind {
     Exchange(StartExchangeParams),
     Augment(AugmentParams),
     ReadExchange(ReadExchangeParams),
+    ContextCheck(ContextCheckParams),
     /// A block made of other blocks. Its ports come from the function, so
     /// [`BlockKind::inputs`] and [`BlockKind::outputs`] are empty here; see
     /// [`crate::analyze`].
@@ -640,7 +669,7 @@ impl BlockKind {
                 port("exchange", "Exchange", ValueKind::Exchange),
                 port("in", "Add", Any),
             ],
-            ReadExchange(_) => vec![port("in", "Exchange", ValueKind::Exchange)],
+            ReadExchange(_) | ContextCheck(_) => vec![port("in", "Exchange", ValueKind::Exchange)],
             Forward(_) | Remember(_) => vec![port("in", "In", Any)],
             ForEach(_) | Separate(_) | Join(_) => vec![port("in", "List", List)],
             Combine(p) => (1..=p.inputs.clamp(1, 10))
@@ -683,6 +712,10 @@ impl BlockKind {
                 port("all", "Transcript", Text),
                 port("calls", "Tool calls", Text),
                 port("newest", "Newest message", Text),
+            ],
+            ContextCheck(_) => vec![
+                port("room", "Has room", ValueKind::Exchange),
+                port("full", "Full", ValueKind::Exchange),
             ],
             Input(_) | History(_) | Fixed(_) | Combine(_) | ForEach(_) | Join(_) => {
                 vec![port("out", "Out", Text)]
@@ -745,6 +778,7 @@ impl BlockKind {
             Exchange(_) => "exchange",
             Augment(_) => "augment",
             ReadExchange(_) => "read_exchange",
+            ContextCheck(_) => "context_check",
             Function(_) => "function",
         }
     }
@@ -1212,19 +1246,54 @@ pub fn catalog() -> Vec<BlockInfo> {
             "Read exchange",
             Exchange,
             "Gets text out of an exchange: the last message (from a chosen role), the whole transcript, and the tool calls waiting at its end (for checking them before they run). Last message skips messages that only call tools; Newest message doesn't, so it's empty when the newest message from that role only calls tools (handy for showing what the model says before its tool calls, without repeating older text).",
-            vec![p(
-                "role",
-                "Last message from",
-                choice(&[
-                    ("assistant", "Assistant"),
-                    ("user", "User"),
-                    ("tool", "Tool"),
-                    ("system", "System"),
-                    ("any", "Anyone"),
-                ]),
-                "",
-            )],
-            json!({ "role": "assistant" }),
+            vec![
+                p(
+                    "role",
+                    "Last message from",
+                    choice(&[
+                        ("assistant", "Assistant"),
+                        ("user", "User"),
+                        ("tool", "Tool"),
+                        ("system", "System"),
+                        ("any", "Anyone"),
+                    ]),
+                    "",
+                ),
+                p(
+                    "system_in_transcript",
+                    "Transcript includes the system message",
+                    K::Bool,
+                    "Turn off to get just the conversation (for summaries, notes and the like).",
+                ),
+            ],
+            json!({ "role": "assistant", "system_in_transcript": true }),
+        ),
+        info(
+            "context_check",
+            "Context full?",
+            Exchange,
+            "Estimates how many tokens an exchange takes (about four characters a token, system message included) and compares it with the model's context. Under the limit, the exchange goes out of Has room; at or over it, out of Full, for example to summarise it before the next model call.",
+            vec![
+                ParamSpec {
+                    optional: true,
+                    ..p(
+                        "model",
+                        "Model",
+                        K::Model,
+                        "The model whose context to measure against. Leave on the agent's model unless the next model block uses another.",
+                    )
+                },
+                ParamSpec {
+                    optional: true,
+                    ..p(
+                        "percent",
+                        "Full at (% of the context)",
+                        K::Integer { min: 1, max: 100 },
+                        "Leave empty to use the model's own compaction point (Settings → Models; 80% of its context unless you change it).",
+                    )
+                },
+            ],
+            json!({}),
         ),
         info(
             "combine",

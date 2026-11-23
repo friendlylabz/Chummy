@@ -92,7 +92,27 @@ pub struct ProviderConfig {
     /// Longest answer, in tokens, unless a model block sets its own.
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u32,
+    /// The context length the server reports for this model, in tokens
+    /// (`None`: it doesn't say). Found when the connection is saved, tested
+    /// or asked; the settings below can't go past it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_max: Option<u32>,
+    /// Context length the user set, in tokens (`None`: the reported one, or
+    /// [`DEFAULT_CONTEXT`]). Capped at `context_max`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_tokens: Option<u32>,
+    /// When loops should make room (summarise), in tokens (`None`:
+    /// [`DEFAULT_COMPACT_PERCENT`] of the context). Capped at the context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compact_at: Option<u32>,
 }
+
+/// Context length assumed when neither the server nor the user says.
+pub const DEFAULT_CONTEXT: u32 = 8192;
+/// Loops make room at this share of the context unless set otherwise.
+pub const DEFAULT_COMPACT_PERCENT: u32 = 80;
+/// The smallest context or compaction point accepted.
+pub const MIN_CONTEXT: u32 = 512;
 
 /// The answer length new connections start with.
 pub const DEFAULT_MAX_TOKENS: u32 = 1024;
@@ -112,6 +132,29 @@ impl ProviderConfig {
     /// Keychain entry name for this provider's API key.
     pub fn secret_key(&self) -> String {
         format!("provider:{}", self.id)
+    }
+
+    /// The context length in use, in tokens: the user's setting (never more
+    /// than the server reports), else the reported one, else [`DEFAULT_CONTEXT`].
+    pub fn context_window(&self) -> u32 {
+        let reported = self.context_max.filter(|n| *n > 0);
+        let n = match (self.context_tokens.filter(|n| *n > 0), reported) {
+            (Some(mine), Some(max)) => mine.min(max),
+            (Some(mine), None) => mine,
+            (None, Some(max)) => max,
+            (None, None) => DEFAULT_CONTEXT,
+        };
+        n.max(MIN_CONTEXT.min(reported.unwrap_or(MIN_CONTEXT)))
+    }
+
+    /// When loops should make room, in tokens: the user's setting (never
+    /// more than the context), else [`DEFAULT_COMPACT_PERCENT`] of it.
+    pub fn compact_threshold(&self) -> u32 {
+        let window = self.context_window();
+        match self.compact_at.filter(|n| *n > 0) {
+            Some(n) => n.min(window),
+            None => (u64::from(window) * u64::from(DEFAULT_COMPACT_PERCENT) / 100) as u32,
+        }
     }
 }
 
@@ -271,6 +314,44 @@ pub fn presets() -> Vec<Preset> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn context_and_compaction_points() {
+        let mut p = ProviderConfig {
+            id: "x".into(),
+            name: "x".into(),
+            kind: ProviderKind::OpenAiCompatible,
+            base_url: "http://localhost:1/v1".into(),
+            model: "m".into(),
+            local: None,
+            temperature: None,
+            daily_tokens: None,
+            max_tokens: 1024,
+            context_max: None,
+            context_tokens: None,
+            compact_at: None,
+        };
+        // Nothing known: the default, made room for at 80%.
+        assert_eq!(p.context_window(), DEFAULT_CONTEXT);
+        assert_eq!(p.compact_threshold(), 6553);
+        // The server says.
+        p.context_max = Some(32768);
+        assert_eq!((p.context_window(), p.compact_threshold()), (32768, 26214));
+        // The user can lower it but not go past what the server reports.
+        p.context_tokens = Some(16384);
+        assert_eq!(p.context_window(), 16384);
+        p.context_tokens = Some(65536);
+        assert_eq!(p.context_window(), 32768);
+        // The compaction point, capped at the context.
+        p.compact_at = Some(20000);
+        assert_eq!(p.compact_threshold(), 20000);
+        p.compact_at = Some(99999);
+        assert_eq!(p.compact_threshold(), 32768);
+        // Without a report, the user's context is used as is.
+        p.context_max = None;
+        p.compact_at = None;
+        assert_eq!((p.context_window(), p.compact_threshold()), (65536, 52428));
+    }
+
     use super::*;
 
     #[test]
@@ -285,6 +366,9 @@ mod tests {
             temperature: None,
             daily_tokens: Some(crate::DEFAULT_DAILY_TOKENS),
             max_tokens: crate::DEFAULT_MAX_TOKENS,
+            context_max: None,
+            context_tokens: None,
+            compact_at: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         assert!(json.contains("\"kind\":\"ollama\""));

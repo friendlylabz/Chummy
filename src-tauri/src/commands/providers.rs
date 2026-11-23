@@ -64,7 +64,37 @@ fn validate(cfg: &ProviderConfig) -> Result<(), String> {
     if cfg.daily_tokens.is_some_and(|n| n < 1000) {
         return Err("The daily token limit must be at least 1,000 (or turned off).".into());
     }
+    let min = chummy_llm::MIN_CONTEXT;
+    if cfg.context_tokens.is_some_and(|n| n < min) {
+        return Err(format!("The context length must be at least {min} tokens."));
+    }
+    if cfg.compact_at.is_some_and(|n| n < min) {
+        return Err(format!(
+            "The compaction point must be at least {min} tokens."
+        ));
+    }
     Ok(())
+}
+
+/// Keeps the user's context settings within what the server reports.
+fn cap_context(cfg: &mut ProviderConfig) {
+    if let (Some(mine), Some(max)) = (cfg.context_tokens, cfg.context_max) {
+        cfg.context_tokens = Some(mine.min(max));
+    }
+    let window = cfg.context_window();
+    if let Some(at) = cfg.compact_at {
+        cfg.compact_at = Some(at.min(window));
+    }
+}
+
+/// Asks the server for the model's context length, giving up after a few
+/// seconds (saving shouldn't hang on an unreachable server).
+async fn detect_context(cfg: &ProviderConfig, key: Option<String>) -> Option<u32> {
+    let client = Client::new(cfg, key).ok()?;
+    tokio::time::timeout(std::time::Duration::from_secs(6), client.context_length())
+        .await
+        .ok()
+        .flatten()
 }
 
 /// Adds or updates a provider. `api_key`: `None` keeps the stored key,
@@ -132,6 +162,23 @@ pub async fn save_provider(
         config.local = old.local.clone();
         config.kind = ProviderKind::Local;
     }
+
+    // The context length the server reports: asked again whenever the
+    // address or model changes (a different model has a different one).
+    if config.kind != ProviderKind::Local {
+        let changed = existing
+            .provider(&config.id)
+            .is_none_or(|old| old.base_url != config.base_url || old.model != config.model);
+        if changed || config.context_max.is_none() {
+            let key = key_for(&state, &config, api_key.clone());
+            match detect_context(&config, key).await {
+                Some(n) => config.context_max = Some(n),
+                None if changed => config.context_max = None,
+                None => {}
+            }
+        }
+    }
+    cap_context(&mut config);
 
     if let Some(key) = api_key {
         let key = key.trim();
@@ -228,6 +275,7 @@ pub async fn test_provider(
     config: ProviderConfig,
     api_key: Option<String>,
 ) -> CmdResult<TestOutcome> {
+    let (url, model) = (config.base_url.clone(), config.model.clone());
     let (cfg, key) = if config.kind == ProviderKind::Local {
         let saved = state
             .settings()
@@ -252,9 +300,27 @@ pub async fn test_provider(
         (config, key)
     };
     let client = Client::new(&cfg, key).map_err(err)?;
+    let report = probe(&client).await;
+    // Remember a reported context length for the saved connection.
+    if let Some(n) = report.context {
+        let id = cfg.id.clone();
+        let saved = state.settings().provider(&id).is_some_and(|p| {
+            p.context_max != Some(n)
+                && p.model == model
+                && (p.kind == ProviderKind::Local || p.base_url == url)
+        });
+        if saved {
+            let _ = state.update(&app, move |s| {
+                if let Some(p) = s.providers.iter_mut().find(|p| p.id == id) {
+                    p.context_max = Some(n);
+                    cap_context(p);
+                }
+            });
+        }
+    }
     Ok(TestOutcome {
         needs_runtime: false,
-        report: Some(probe(&client).await),
+        report: Some(report),
     })
 }
 
@@ -280,6 +346,9 @@ mod tests {
             temperature: None,
             daily_tokens: Some(chummy_llm::DEFAULT_DAILY_TOKENS),
             max_tokens: chummy_llm::DEFAULT_MAX_TOKENS,
+            context_max: None,
+            context_tokens: None,
+            compact_at: None,
         };
         assert!(validate(&c).is_err());
         c.base_url = "http://localhost:8080/v1".into();

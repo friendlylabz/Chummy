@@ -95,6 +95,29 @@ pub struct RunEnd {
     pub llm_calls: u32,
     pub tool_calls: u32,
     pub replies: u32,
+    /// Estimated tokens the turn added to context (see `TurnUsage`).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub tokens_added: u64,
+    /// Estimated tokens in the latest model call's context, and that
+    /// model's context length (0: no model was called).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub context_tokens: u64,
+    #[serde(skip_serializing_if = "is_zero32")]
+    pub context_window: u32,
+    /// The model's tokens used today when the run ended, and how many are
+    /// allowed today (`None`: no daily limit).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub daily_used: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daily_allowed: Option<u64>,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+fn is_zero32(n: &u32) -> bool {
+    *n == 0
 }
 
 impl RunEnd {
@@ -114,6 +137,11 @@ impl RunEnd {
             llm_calls: o.llm_calls,
             tool_calls: o.tool_calls,
             replies: o.replies.len() as u32,
+            tokens_added: o.usage.tokens_added,
+            context_tokens: o.usage.context_tokens,
+            context_window: o.usage.context_window,
+            daily_used: 0,
+            daily_allowed: None,
         }
     }
 

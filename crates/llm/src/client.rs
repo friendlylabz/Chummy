@@ -90,6 +90,26 @@ impl Client {
         &self.model
     }
 
+    pub(crate) fn kind(&self) -> ProviderKind {
+        self.kind
+    }
+
+    pub(crate) fn http(&self) -> &reqwest::Client {
+        &self.http
+    }
+
+    pub(crate) fn auth_headers(&self) -> HeaderMap {
+        self.headers()
+    }
+
+    pub(crate) fn root_url(&self, suffix: &str) -> &str {
+        self.root(suffix)
+    }
+
+    pub(crate) fn model_list_url(&self) -> String {
+        self.models_url()
+    }
+
     fn headers(&self) -> HeaderMap {
         let mut h = HeaderMap::new();
         let key = self.api_key.as_deref().unwrap_or_default();
@@ -330,6 +350,9 @@ mod tests {
             temperature: None,
             daily_tokens: Some(crate::DEFAULT_DAILY_TOKENS),
             max_tokens: crate::DEFAULT_MAX_TOKENS,
+            context_max: None,
+            context_tokens: None,
+            compact_at: None,
         }
     }
 

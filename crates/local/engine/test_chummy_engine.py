@@ -186,6 +186,18 @@ class ServerTests(unittest.TestCase):
     def get(cls, path):
         return json.loads(cls.req(path).read())
 
+    def test_models_report_the_context_length(self):
+        card = self.get("/v1/models")["data"][0]
+        self.assertEqual(card["max_model_len"], 32768)
+
+    def test_context_length_from_config(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(ce.read_context_length(d))
+            with open(os.path.join(d, "config.json"), "w") as f:
+                json.dump({"text_config": {"max_position_embeddings": 40960}}, f)
+            self.assertEqual(ce.read_context_length(d), 40960)
+
     def test_requires_token(self):
         with self.assertRaises(urllib.error.HTTPError) as e:
             self.req("/health", token="wrong-token-wrong-token")

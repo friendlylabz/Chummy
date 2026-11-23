@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import { DEFAULT_DAILY_TOKENS, DEFAULT_MAX_TOKENS, commands, errorText, type Preset, type ProbeReport, type ProviderConfig, type ProviderView } from "$lib/ipc";
+  import { DEFAULT_COMPACT_PERCENT, DEFAULT_CONTEXT, DEFAULT_DAILY_TOKENS, DEFAULT_MAX_TOKENS, MIN_CONTEXT, commands, compactThreshold, contextWindow, errorText, type Preset, type ProbeReport, type ProviderConfig, type ProviderView } from "$lib/ipc";
   import { kindLabel } from "$lib/format";
   import Button from "$lib/components/Button.svelte";
   import Icon from "$lib/components/Icon.svelte";
@@ -55,6 +55,26 @@
   let limit = $state(String(limit0 ?? DEFAULT_DAILY_TOKENS));
   const limitValue = $derived(Math.round(Number(limit.replace(/[,_\s]/g, ""))));
   const limitBad = $derived(limitOn && (!Number.isFinite(limitValue) || limitValue < 1000));
+  // Context: what the server reports (filled in by Test connection too), the
+  // user's own length (never more), and when loops make room.
+  let contextMax = $state<number | null>(start?.context_max ?? null);
+  let contextTokens = $state(start?.context_tokens != null ? String(start.context_tokens) : "");
+  let compactAt = $state(start?.compact_at != null ? String(start.compact_at) : "");
+  const num = (t: string) => (t.trim() === "" ? null : Math.round(Number(t.replace(/[,_\s]/g, ""))));
+  const contextValue = $derived(num(contextTokens));
+  const compactValue = $derived(num(compactAt));
+  const contextBad = $derived(
+    contextValue !== null && (!Number.isFinite(contextValue) || contextValue < MIN_CONTEXT || (contextMax !== null && contextValue > contextMax)),
+  );
+  const compactBad = $derived(compactValue !== null && (!Number.isFinite(compactValue) || compactValue < MIN_CONTEXT));
+  const effective = $derived({
+    context_max: contextMax,
+    context_tokens: contextBad ? null : contextValue,
+    compact_at: compactBad ? null : compactValue,
+  });
+  const windowNow = $derived(contextWindow(effective));
+  const compactNow = $derived(compactThreshold(effective));
+  const fmt = (n: number) => n.toLocaleString("en-US");
   let removeKey = $state(false);
   const kind = start?.kind ?? p0?.kind ?? "open_ai_compatible";
   const needsKey = p0?.needs_key ?? (start ? start.has_key : false);
@@ -80,6 +100,9 @@
       temperature: t != null && !isNaN(t) ? t : null,
       daily_tokens: limitOn ? limitValue : null,
       max_tokens: maxBad ? DEFAULT_MAX_TOKENS : maxValue,
+      context_max: contextMax,
+      context_tokens: contextBad ? null : contextValue,
+      compact_at: compactBad ? null : compactValue,
     };
   }
 
@@ -109,6 +132,7 @@
     try {
       const out = await commands.testProvider(draft(), keyArg() || null);
       report = out.report;
+      if (report?.context) contextMax = report.context;
     } catch (e) {
       error = errorText(e);
     } finally {
@@ -200,6 +224,45 @@
   </div>
 
   <div class="field">
+    <label for="pf-ctx">Context length (tokens)</label>
+    <input
+      id="pf-ctx"
+      class="input"
+      style="width: 150px"
+      bind:value={contextTokens}
+      inputmode="numeric"
+      placeholder={fmt(contextMax ?? DEFAULT_CONTEXT)}
+      aria-invalid={contextBad}
+    />
+    <span class="hint">
+      {#if contextBad}{contextMax !== null ? `${fmt(MIN_CONTEXT)} to ${fmt(contextMax)} tokens (the most the server offers).` : `At least ${fmt(MIN_CONTEXT)} tokens.`}
+      {:else if contextMax !== null}The server reports {fmt(contextMax)} tokens. Leave empty to use all of it, or set less if
+        your server runs the model with a shorter context.
+      {:else}The server doesn't say (OpenAI's own API never does; Test connection asks again). Leave empty to assume
+        {fmt(DEFAULT_CONTEXT)} tokens, or set the length your server runs the model with.{/if}
+    </span>
+  </div>
+
+  <div class="field">
+    <label for="pf-compact">Make room at (tokens)</label>
+    <input
+      id="pf-compact"
+      class="input"
+      style="width: 150px"
+      bind:value={compactAt}
+      inputmode="numeric"
+      placeholder={fmt(Math.floor((windowNow * DEFAULT_COMPACT_PERCENT) / 100))}
+      aria-invalid={compactBad}
+    />
+    <span class="hint">
+      {#if compactBad}At least {fmt(MIN_CONTEXT)} tokens.
+      {:else}When a conversation reaches about {fmt(compactNow)} tokens, loops that check (like the Chummy assistant's
+        Make room) summarise it so it fits. Empty means {DEFAULT_COMPACT_PERCENT}% of the context; it's never more than the
+        context length.{/if}
+    </span>
+  </div>
+
+  <div class="field">
     <span class="label">Daily token limit</span>
     <div class="input-row limit">
       <label class="inline first"><input type="checkbox" bind:checked={limitOn} /> Limit to</label>
@@ -234,7 +297,7 @@
     </Button>
     <span class="spacer"></span>
     <Button variant="ghost" onclick={oncancel}>Cancel</Button>
-    <Button variant="primary" onclick={save} disabled={saving || !name.trim() || !model.trim() || limitBad || maxBad}>
+    <Button variant="primary" onclick={save} disabled={saving || !name.trim() || !model.trim() || limitBad || maxBad || contextBad || compactBad}>
       {start ? "Save" : "Add model"}
     </Button>
   </div>

@@ -613,6 +613,9 @@ fn param_problems(k: &BlockKind) -> Vec<String> {
                 v.push("write the question".into());
             }
         }
+        BlockKind::ContextCheck(p) if p.percent.is_some_and(|x| !(1..=100).contains(&x)) => {
+            v.push("“Full at” must be between 1 and 100 percent".into())
+        }
         BlockKind::Exchange(p) if p.roles.is_empty() => v.push("choose at least one role".into()),
         BlockKind::Function(p) if p.function.is_empty() => v.push("no function chosen".into()),
         BlockKind::Regex(p) | BlockKind::Branch(p) => regex_check(&p.pattern, &mut v),

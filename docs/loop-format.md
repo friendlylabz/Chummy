@@ -250,6 +250,23 @@ Before each call a model block checks it. When the day's tokens are used up,
 mechanism as *Ask me*; refusing stops the run), `wait` (wait until midnight,
 then carry on) or `stop` (stop the run).
 
+## Context length and turn figures
+
+Each model connection has a context length: the one the server reports
+(found when the connection is saved or tested; OpenAI's own API doesn't
+report one, but vLLM, SGLang, llama.cpp, LM Studio, Ollama, OpenRouter,
+Gemini and Anthropic do), or one you set (never more than the reported
+one), or 8,192 tokens if nothing says. Its *Make room at* point (80% of
+the context unless set, never more than it) is what *Context full?* blocks
+measure against.
+
+Every run records three estimates (about four characters a token), shown
+under its reply in chat and in the run's log: the tokens the turn added to
+context (your message, every model answer with its tool calls, every tool
+result), how full the context of the latest model call was (what it was
+sent plus its answer, against that model's context length), and the
+model's daily token use when the reply came.
+
 How tools themselves are written, installed and sandboxed is described in
 [tool-format.md](tool-format.md).
 
@@ -267,7 +284,8 @@ Ports are written `name: kind`.
 | `ask_user` | Ask me | `in: any` | `out: text`, `error: text` | `prompt` ("_INPUT_"; `_INPUT_` is replaced by the input, or the input is added after it), `timeout_minutes` (0 = wait as long as it takes; at most 10080), `default_answer` (""). Asks the user and sends the answer on. If the wait times out, `default_answer` is used, or the run stops if it's empty. |
 | `exchange` | Start exchange | `in: any` | `out: exchange` | `system` (""), `roles` (["user"]). Text becomes one message with the first role; a list becomes one message per item, with the roles in turn. |
 | `augment` | Add to exchange | `exchange: exchange`, `in: any` | `out: exchange` | `role` ("user"), `format` ("_INPUT_"). Adds the text as a message (`_INPUT_` replaced by it); a list adds one message per item. |
-| `read_exchange` | Read exchange | `in: exchange` | `last: text`, `all: text`, `calls: text`, `newest: text` | `role` ("assistant"; or "user", "tool", "system", "any"). `last` is the last message from that role with any text (messages that only call tools are skipped), `newest` the newest message from that role even if it only calls tools (then it's empty), `all` the transcript, `calls` the pending tool calls described for people (empty if none). |
+| `read_exchange` | Read exchange | `in: exchange` | `last: text`, `all: text`, `calls: text`, `newest: text` | `role` ("assistant"; or "user", "tool", "system", "any"). `last` is the last message from that role with any text (messages that only call tools are skipped), `newest` the newest message from that role even if it only calls tools (then it's empty), `all` the transcript (without the system message when `system_in_transcript` is false; default true), `calls` the pending tool calls described for people (empty if none). |
+| `context_check` | Context full? | `in: exchange` | `room: exchange`, `full: exchange` | `model` (optional; the agent's by default), `percent` (optional, 1–100). Estimates the exchange's tokens (about four characters a token; system messages counted as they'd be sent, memory filled in) and sends it out of `full` when that reaches the model's compaction point (Settings → Models → *Make room at*, 80% of the context by default) or `percent` of its context, otherwise out of `room`. Going full adds a notice to the run. |
 | `decline_calls` | Decline tool calls | `in: exchange`, `reason: text` | `out: exchange` | none. Answers each pending tool call with "Not run" and the reason, without running it. |
 | `find_call` | Find tool call | `exchange: exchange`, `in: text` | `call: exchange`, `none: text` | `tools` ("inherit"), `network` ("inherit"), as in Tool switches. Finds tool calls in the text and adds them to the exchange for *Run tool*. Only tools the block offers count; text without a usable call goes out of `none`. |
 | `outline` | Plan outline | `in: text` (start), `task: text` and `steps: list` (add steps), or `task: text` (mark) | `out: text` | `action` ("start", "add_steps" or "mark"), `status` ("done"), `limit` (5; 0 = all), `key` ("plan"). See *Plan outline*. |
@@ -436,8 +454,8 @@ a function with comments, labels and notes, so it reads well in the editor.
    folder, like a project instruction file), lists the folder's top level
    (first 60 entries) into `{{folder}}`, and starts `{{todos}}` and
    `{{progress}}`.
-2. **Agent loop.** The exchange holds only your message; the *Work* block's
-   system message tells the model how to work (say what you're about to do,
+2. **Agent loop.** The exchange starts with a system message that tells
+   the model how to work (say what you're about to do,
    read before changing, don't repeat refused calls, ask before anything
    hard to undo, ask one question if unclear, check your work, report
    honestly) and holds the to-do list, folder, instructions and
@@ -450,12 +468,14 @@ a function with comments, labels and notes, so it reads well in the editor.
    `- [ ] step` / `- [x] step`, *Keep the to-do list* saves them as
    `{{todos}}`, replacing the old list; the model sees the current list in
    every call. Simple requests skip it.
-4. **Make room.** After each round of tool results the transcript is saved
-   as `{{progress}}` (newest 8,000 characters). If it has grown past about
-   20,000 characters (it's cut into 2,000-character chunks and the cuts are
-   counted, since a regular expression can't count that many characters),
-   the model summarises it, you see a short note, and the work carries on
-   in a fresh exchange from the summary.
+4. **Make room.** After each round of tool results the transcript (without
+   the instructions) is saved as `{{progress}}` (newest 8,000 characters).
+   A *Context full?* block then estimates the exchange's tokens, system
+   message included; once they reach the model's compaction point
+   (Settings → Models → *Make room at*: 80% of the context length the
+   server reports, unless you change it), the model summarises the work,
+   you see a short note, and the work carries on in a fresh exchange: the
+   same instructions, then the summary.
 5. **Done?** An answer without tool calls ends the loop: one that ends with
    a question waits for your reply (the run ends; your next message carries
    on); an empty one, or one given while `{{todos}}` still has unchecked

@@ -100,6 +100,12 @@ pub fn thinking(s: &str) -> String {
 }
 
 /// Cuts text to `max` characters, saying so.
+/// A rough token count for text: about four characters a token. Good enough
+/// for context and usage figures; real tokenizers differ by model.
+pub fn estimate_tokens(text: &str) -> u64 {
+    (text.chars().count() as u64).div_ceil(4)
+}
+
 pub fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()

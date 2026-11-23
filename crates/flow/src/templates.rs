@@ -187,6 +187,8 @@ mod tests {
         files: std::collections::HashMap<String, String>,
         /// Model calls whose messages contain this fail.
         fail_on: Option<&'static str>,
+        /// The model's context (default: 8,192 tokens, room made at 80%).
+        limits: Option<crate::engine::ContextLimits>,
     }
 
     fn says(t: &str) -> LlmAnswer {
@@ -300,6 +302,9 @@ mod tests {
         }
         async fn ask(&self, _: crate::Ask) -> Result<crate::Answer, String> {
             Err("nobody to ask".into())
+        }
+        fn context(&self, _: Option<&str>) -> crate::engine::ContextLimits {
+            self.limits.unwrap_or_default()
         }
     }
 
@@ -422,6 +427,10 @@ mod tests {
             "{msg}"
         );
         assert!(msg.contains("Tool (echo): hi"), "the work so far: {msg}");
+        assert!(
+            !msg.contains("You are Chummy"),
+            "progress leaves out the instructions"
+        );
         assert_eq!(
             out.replies.last().unwrap(),
             "- [x] Read a\n- [x] Write b\n\nAll done."
@@ -491,9 +500,38 @@ mod tests {
             .iter()
             .position(|c| c.messages[1].text.contains("SUMMARY of the work"))
             .expect("a call carrying on from the summary");
-        assert!(i >= 5, "summarised too early: call {i}");
+        // ~980 tokens a result: the default point (6,553 of 8,192) comes after
+        // about six of them.
+        assert!((5..=7).contains(&i), "summarised at call {i}");
         assert!(work[i].messages[1].text.contains("Read everything"));
         assert_eq!(work[i].messages.len(), 2);
+        assert!(work[i].messages[0].text.starts_with("You are Chummy"));
+    }
+
+    #[tokio::test]
+    async fn assistant_makes_room_at_the_models_own_point() {
+        let mut host = Agentic::with(
+            (1..=8)
+                .map(|n| echo("", n))
+                .chain([says("Finished.")])
+                .collect(),
+        );
+        host.tool_text = "x".repeat(3900);
+        host.limits = Some(crate::engine::ContextLimits {
+            window: 4096,
+            compact_at: 2500,
+        });
+        let out = assist(&host, "Read everything").await;
+        assert_eq!(out.status, RunStatus::Completed, "{out:?}");
+        let work = host.work.lock().unwrap();
+        let i = work
+            .iter()
+            .position(|c| c.messages[1].text.contains("SUMMARY of the work"))
+            .expect("a summary");
+        assert!(i <= 3, "summarised at call {i}");
+        // The turn's figures: context measured against this model.
+        assert_eq!(out.usage.context_window, 4096);
+        assert!(out.usage.tokens_added > 8 * 900, "{:?}", out.usage);
     }
 
     #[tokio::test]

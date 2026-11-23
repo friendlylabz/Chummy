@@ -29,8 +29,10 @@ What it copies from the original loop, at a basic level:
   and puts it in the system message of every call.
 - Tool errors and refused calls go back to the model as the tool's result;
   bad calls are explained and asked again (the engine does this).
-- When the conversation gets long, it is summarised and the work carries on
-  from the summary (like auto-compaction).
+- When the conversation reaches the model's compaction point (estimated
+  tokens against Settings → Models: 80% of the context the server reports,
+  by default), it is summarised and the work carries on from the summary
+  (like auto-compaction).
 - Project instructions: a CHUMMY.md file at the top of the agent's folder is
   read into the system message (like CLAUDE.md), with a short folder listing.
 - Asking you: the model just asks in its answer, and the turn ends; your next
@@ -113,12 +115,6 @@ QUESTION = r"\?[\s*_)\"'”»]*$"
 SPENT = r"x{2}"
 # The first 60 lines (the folder listing shown to the model).
 HEAD = r"\A(?:[^\n]*(?:\n|\z)){1,60}"
-# "Too long": the transcript is cut into ~2,000-character chunks joined with a marker; 10 markers means 11 or
-# more chunks, about 20,000+ characters (~5,000 tokens). Regular expressions can't count characters that far
-# directly, so the chunks do the counting. Change the chunk size or the {10} to make room sooner or later.
-MARK = "\n⟦chunk⟧\n"
-BIG = r"(?s)(?:⟦chunk⟧.*?){10}"
-CHUNK = 2000
 
 
 def keep_todos_fn():
@@ -233,46 +229,47 @@ def make_room_fn():
     return fn(
         "make_room", "Make room",
         "After each round of tool results: saves the latest work as {{progress}}, and if the conversation has "
-        "grown past about 20,000 characters, the model summarises it and the work carries on from the summary "
-        "in a fresh exchange. If summarising fails, the conversation goes on as it was.",
+        "reached the model's compaction point (Settings → Models: 80% of its context unless you change it), the "
+        "model summarises it and the work carries on from the summary in a fresh exchange. If summarising "
+        "fails, the conversation goes on as it was.",
         [("exchange", "Results", "ex", "in")],
         [("exchange", "Exchange", "out", "out")],
         [
             b("ex", "forward", "Results", 0, 0),
-            b("read", "read_exchange", "The work so far", 260, 0, {"role": "any"}),
+            b("read", "read_exchange", "The work so far", 260, -200,
+              {"role": "any", "system_in_transcript": False}),
             b("save", "store", "Save the progress", 520, -200, {"key": "progress", "max_chars": 8000},
               "{{progress}} keeps the newest 8,000 characters."),
-            b("chunks", "split", "Cut into chunks", 520, 0, {"chunk_size": CHUNK, "overlap": 0}),
-            b("marked", "join", "Mark the cuts", 780, 0, {"separator": MARK}),
-            b("big", "branch", "Too long?", 1040, -100, {"pattern": BIG},
-              "11 or more chunks: about 20,000+ characters."),
-            b("small", "branch", "Short enough", 1040, 150, {"pattern": BIG}),
-            b("ask", "combine", "Ask for a summary", 1300, -100, {"inputs": 1, "format": SUMMARIZE}),
-            b("summ", "llm", "Summarise the work", 1560, -100, {"temperature": 0.2}),
-            b("resume", "combine", "Carry on from it", 1820, -100, {"inputs": 1, "format": RESUME}),
-            b("restart", "exchange", "Fresh exchange", 2080, -100, {"roles": ["user"]}),
-            b("say", "combine", "Tell you", 1820, -300, {"inputs": 1, "format": COMPACTED}),
-            b("show", "output", "Show that", 2080, -300),
-            b("keep", "branch", "If that fails", 1820, 150, {"pattern": ANY},
+            b("check", "context_check", "Context full?", 260, 100, {},
+              "Estimated tokens (system message included) against the model's compaction point."),
+            b("read_full", "read_exchange", "Everything so far", 560, -50,
+              {"role": "any", "system_in_transcript": False}),
+            b("ask", "combine", "Ask for a summary", 820, -50, {"inputs": 1, "format": SUMMARIZE}),
+            b("summ", "llm", "Summarise the work", 1080, -50, {"temperature": 0.2}),
+            b("resume", "combine", "Carry on from it", 1340, -50, {"inputs": 1, "format": RESUME}),
+            b("restart", "exchange", "Fresh exchange", 1600, -50, {"system": SYSTEM, "roles": ["user"]},
+              "The same instructions, then the summary."),
+            b("say", "combine", "Tell you", 1340, -250, {"inputs": 1, "format": COMPACTED}),
+            b("show", "output", "Show that", 1600, -250),
+            b("keep", "branch", "If that fails", 1340, 200, {"pattern": ANY},
               "Carry on with the long conversation."),
-            b("out", "forward", "Exchange", 2340, 0),
+            b("out", "forward", "Exchange", 1860, 100),
         ],
         [
             l("ex", "out", "read", "in"), l("read", "all", "save", "in"),
-            l("read", "all", "chunks", "in"), l("chunks", "out", "marked", "in"),
-            l("read", "all", "big", "value"), l("marked", "out", "big", "test"),
-            l("ex", "out", "small", "value"), l("marked", "out", "small", "test"),
-            l("small", "no", "out", "in", "short enough"),
-            l("big", "yes", "ask", "in1", "too long"), l("ask", "out", "summ", "in"),
+            l("ex", "out", "check", "in"),
+            l("check", "room", "out", "in", "has room"),
+            l("check", "full", "read_full", "in", "full"), l("read_full", "all", "ask", "in1"),
+            l("ask", "out", "summ", "in"),
             l("summ", "out", "resume", "in1"), l("resume", "out", "restart", "in"),
             l("restart", "out", "out", "in", "from the summary"),
             l("summ", "out", "say", "in1"), l("say", "out", "show", "in"),
-            l("ex", "out", "keep", "value"), l("summ", "error", "keep", "test"),
+            l("check", "full", "keep", "value"), l("summ", "error", "keep", "test"),
             l("keep", "yes", "out", "in", "summary failed"),
         ],
-        [note("n1", 0, 300, "Like auto-compaction: a long conversation is summarised so a small model's context "
-                            "doesn't overflow. Change the chunk size in Cut into chunks, or the {10} in the "
-                            "Too long? patterns, to summarise sooner or later.", 420, 130)],
+        [note("n1", 0, 350, "Like auto-compaction: a long conversation is summarised so the model's context "
+                            "doesn't overflow. When it happens is set per model in Settings → Models (Make room "
+                            "at), or here with Context full?'s own percentage.", 420, 130)],
     )
 
 
@@ -336,9 +333,9 @@ def agent_fn():
         [("answer", "Final answer", "answer", "out"), ("failed", "Failed", "failed", "out")],
         [
             b("req", "forward", "Request", 0, 0),
-            b("start", "exchange", "Start the exchange", 260, 0, {"roles": ["user"]},
-              "Just your message: the instructions are the work block's system message."),
-            b("work", "llm", "Work", 560, 0, {"system": SYSTEM, "retries": 3, "on_limit": "ask"},
+            b("start", "exchange", "Start the exchange", 260, 0, {"system": SYSTEM, "roles": ["user"]},
+              "The instructions (filled in fresh at every call), then your message."),
+            b("work", "llm", "Work", 560, 0, {"retries": 3, "on_limit": "ask"},
               "Uses the tools this agent allows. The system message (with {{todos}}) is filled in fresh at "
               "every call."),
             b("show", "function", "Show what it says", 860, 250, {"function": "show"}),
@@ -347,7 +344,7 @@ def agent_fn():
             b("room", "function", "Make room", 1460, 250, {"function": "make_room"},
               "Summarises a long conversation."),
             b("check", "function", "Done?", 860, -200, {"function": "done_check"}),
-            b("restart", "exchange", "Carry on", 1160, -350, {"roles": ["user"]}),
+            b("restart", "exchange", "Carry on", 1160, -350, {"system": SYSTEM, "roles": ["user"]}),
             b("answer", "forward", "Final answer", 1160, -150),
             b("failed", "forward", "Failed", 860, 500),
         ],

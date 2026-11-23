@@ -311,6 +311,46 @@ pub trait Host: Send + Sync {
     }
     /// The user allowed `tokens` more for the model today.
     fn grant(&self, _model: Option<&str>, _tokens: u64) {}
+    /// How long the model's (`None`: the agent's) context is, and when a
+    /// loop should make room in it.
+    fn context(&self, _model: Option<&str>) -> ContextLimits {
+        ContextLimits::default()
+    }
+}
+
+/// Context length assumed when nothing says otherwise.
+pub const DEFAULT_CONTEXT_WINDOW: u32 = 8192;
+
+/// A model's context length and the point at which loops should make room
+/// (Context full? blocks), both in tokens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ContextLimits {
+    pub window: u32,
+    pub compact_at: u32,
+}
+
+impl Default for ContextLimits {
+    fn default() -> Self {
+        Self {
+            window: DEFAULT_CONTEXT_WINDOW,
+            compact_at: DEFAULT_CONTEXT_WINDOW / 10 * 8,
+        }
+    }
+}
+
+/// Token figures for one run (one turn of a chat), all estimates.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct TurnUsage {
+    /// Tokens this turn added to context: the message, every model answer
+    /// (with its tool calls) and every tool result.
+    pub tokens_added: u64,
+    /// Tokens in the latest model call's context: what it was sent plus its
+    /// answer.
+    pub context_tokens: u64,
+    /// That model's context length (0: no model was called).
+    pub context_window: u32,
+    /// That model's connection id (`None`: the agent's model).
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -446,6 +486,7 @@ pub struct RunOutcome {
     pub tool_calls: u32,
     /// Blocks left with some, but not all, of their inputs.
     pub waiting: Vec<String>,
+    pub usage: TurnUsage,
 }
 
 type Outputs = Vec<(String, Value)>;
@@ -583,6 +624,7 @@ struct Runner<'a, H: Host> {
     memory: Memory,
     /// Plan outlines, by memory name.
     outlines: HashMap<String, crate::outline::Outline>,
+    usage: TurnUsage,
 }
 
 /// Runs `l` to completion (or until stopped or limited).
@@ -609,6 +651,7 @@ pub async fn run<H: Host>(
             llm_calls: 0,
             tool_calls: 0,
             waiting: vec![],
+            usage: TurnUsage::default(),
         };
     }
 
@@ -625,6 +668,10 @@ pub async fn run<H: Host>(
         noticed: Default::default(),
         memory: Memory::new(),
         outlines: HashMap::new(),
+        usage: TurnUsage {
+            tokens_added: 4 + crate::text::estimate_tokens(&inputs.message),
+            ..Default::default()
+        },
     };
     let mut frame = Frame::new(&l.blocks, &l.links, String::new(), &r.analysis);
     let status = match r.drive(&mut frame, &mut on_event).await {
@@ -643,6 +690,7 @@ pub async fn run<H: Host>(
         llm_calls: r.llm_calls,
         tool_calls: r.tool_calls,
         waiting: frame.waiting(),
+        usage: r.usage,
     }
 }
 
@@ -1020,6 +1068,7 @@ impl<'a, H: Host> Runner<'a, H> {
                         return Err(BlockErr::Failed(format!("{}: {}", call.name, out.text)));
                     }
                     let text = truncate(&out.text, p.max_result_chars as usize);
+                    self.usage.tokens_added += 4 + crate::text::estimate_tokens(&text);
                     on_event(Event::ToolResult {
                         block: path.clone(),
                         tool: call.name.clone(),
@@ -1258,10 +1307,62 @@ impl<'a, H: Host> Runner<'a, H> {
                     .join("\n\n");
                 Ok(vec![
                     ("last".into(), Value::Text(last)),
-                    ("all".into(), Value::Text(ex.transcript())),
+                    (
+                        "all".into(),
+                        Value::Text(if p.system_in_transcript {
+                            ex.transcript()
+                        } else {
+                            Exchange {
+                                messages: ex
+                                    .messages
+                                    .iter()
+                                    .filter(|m| m.role != Role::System)
+                                    .cloned()
+                                    .collect(),
+                            }
+                            .transcript()
+                        }),
+                    ),
                     ("calls".into(), Value::Text(calls)),
                     ("newest".into(), Value::Text(newest)),
                 ])
+            }
+            BlockKind::ContextCheck(p) => {
+                let Value::Exchange(ex) = arg(0) else {
+                    return Err(BlockErr::Failed("it needs an exchange".into()));
+                };
+                // System messages are filled in at each model call, so count
+                // them as they'd be sent now.
+                let sent: Vec<ExMessage> = ex
+                    .messages
+                    .iter()
+                    .map(|m| {
+                        if m.role == Role::System {
+                            ExMessage::new(Role::System, fill_template(&m.text, None, &self.memory))
+                        } else {
+                            m.clone()
+                        }
+                    })
+                    .collect();
+                let tokens = crate::exchange::estimate_messages(&sent);
+                let model = p.model.as_deref().filter(|m| !m.is_empty());
+                let limits = self.host.context(model);
+                let at = match p.percent {
+                    Some(pc) => u64::from(limits.window) * u64::from(pc.clamp(1, 100)) / 100,
+                    None => u64::from(limits.compact_at),
+                };
+                if tokens >= at {
+                    on_event(Event::Notice {
+                        block: path,
+                        text: format!(
+                            "The exchange is about {tokens} tokens, past {at} of the model's {}.",
+                            limits.window
+                        ),
+                    });
+                    Ok(vec![("full".into(), Value::Exchange(ex))])
+                } else {
+                    Ok(vec![("room".into(), Value::Exchange(ex))])
+                }
             }
             BlockKind::Function(p) => {
                 self.function_block(frame, id, &p.function, args, on_event)
@@ -1715,6 +1816,14 @@ impl<'a, H: Host> Runner<'a, H> {
                 reasoning.push_str(&inline);
             }
             let text = strip_thinking(&answer.text);
+            let answered = crate::exchange::estimate_messages(&[ExMessage {
+                calls: answer.calls.clone(),
+                ..ExMessage::new(Role::Assistant, text.clone())
+            }]);
+            self.usage.tokens_added += answered;
+            self.usage.context_tokens = crate::exchange::estimate_messages(&messages) + answered;
+            self.usage.context_window = self.host.context(model.as_deref()).window;
+            self.usage.model = model.clone();
             on_event(Event::ModelCall(Box::new(ModelLog {
                 block: path.to_string(),
                 attempt: attempt + 1,
@@ -2614,6 +2723,89 @@ mod tests {
         let host = Fake::script(vec![calls("echo", json!({ "text": "x" }))]);
         let (o, _) = go(&l, &host, "hello").await;
         assert_eq!(o.replies, vec!["[|Earlier words\n\nhello]"], "{o:?}");
+    }
+
+    #[tokio::test]
+    async fn context_check_measures_against_the_models_compaction_point() {
+        // Default limits: 8,192 tokens, full at 80% (6,552). The system
+        // message counts, filled in as it would be sent.
+        let l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b("start", "exchange", json!({ "system": "Notes: {{notes}}" })),
+                b("check", "context_check", json!({})),
+                b("r", "forward", json!({})),
+                b("f", "forward", json!({})),
+                b("room", "combine", json!({ "inputs": 1, "format": "room" })),
+                b("full", "combine", json!({ "inputs": 1, "format": "full" })),
+                b("o", "output", json!({})),
+            ],
+            vec![
+                ln("in", "out", "start", "in"),
+                ln("start", "out", "check", "in"),
+                ln("check", "room", "r", "in"),
+                ln("check", "full", "f", "in"),
+                ln("r", "out", "room", "in1"),
+                ln("f", "out", "full", "in1"),
+                ln("room", "out", "o", "in"),
+                ln("full", "out", "o", "in"),
+            ],
+        );
+        let host = Fake::with(&[]);
+        let (o, _) = go(&l, &host, "short").await;
+        assert_eq!(o.replies, ["room"], "{o:?}");
+        // ~6,600 tokens of message: past 80%.
+        let long = "word ".repeat(5300);
+        let (o, ev) = go(&l, &host, &long).await;
+        assert_eq!(o.replies, ["full"]);
+        assert!(ev.iter().any(
+            |e| matches!(e, Event::Notice { text, .. } if text.contains("of the model's 8192"))
+        ));
+        // A share of the context instead: 90% (7,372 tokens) has room.
+        let mut l = l;
+        l.blocks[2].params = json!({ "percent": 90 });
+        assert_eq!(go(&l, &host, &long).await.0.replies, ["room"]);
+        assert!(
+            BlockKind::parse("context_check", &json!({ "percent": 0 })).is_ok()
+                && !analyze(&{
+                    let mut x = l.clone();
+                    x.blocks[2].params = json!({ "percent": 0 });
+                    x
+                })
+                .ok
+        );
+    }
+
+    #[tokio::test]
+    async fn runs_report_turn_usage() {
+        // Message → model (calls echo) → Run tool → model answers.
+        let l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b("m", "llm", json!({ "tools": ["echo"] })),
+                b("run", "run_tool", json!({})),
+                b("o", "output", json!({})),
+            ],
+            vec![
+                ln("in", "out", "m", "in"),
+                ln("m", "tool", "run", "in"),
+                ln("run", "out", "m", "in"),
+                ln("m", "out", "o", "in"),
+            ],
+        );
+        let host = Fake::script(vec![
+            calls("echo", json!({ "text": "hi" })),
+            text("12345678"),
+        ]);
+        let (o, _) = go(&l, &host, "abcd").await;
+        assert_eq!(o.status, RunStatus::Completed, "{o:?}");
+        let u = &o.usage;
+        // message (4 + 1) + call (4 + 4 + echo{"text":"hi"} ≈ 5) + result (4 + 3) + answer (4 + 2)
+        assert!(u.tokens_added > 20 && u.tokens_added < 40, "{u:?}");
+        assert_eq!(u.context_window, crate::DEFAULT_CONTEXT_WINDOW);
+        // The last call's context holds the message, the call, the result and the answer.
+        assert!(u.context_tokens >= u.tokens_added - 1, "{u:?}");
+        assert_eq!(u.model, None);
     }
 
     fn func(

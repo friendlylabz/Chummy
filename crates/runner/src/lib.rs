@@ -20,8 +20,8 @@ use std::future::Future;
 use std::sync::Arc;
 
 use chummy_flow::{
-    Answer, Ask, Budget, Event, ExMessage, Host, LlmAnswer, LlmCall, LoopFile, MalformedCall, Role,
-    RunInputs, RunOutcome, RunStatus, ToolInfo, ToolOutput, run,
+    Answer, Ask, Budget, ContextLimits, Event, ExMessage, Host, LlmAnswer, LlmCall, LoopFile,
+    MalformedCall, Role, RunInputs, RunOutcome, RunStatus, ToolInfo, ToolOutput, run,
 };
 use chummy_llm::{ChatEvent, ChatRequest, Client, Message, ProviderConfig, ProviderKind, ToolSpec};
 use chummy_log::system::{self as syslog, Level};
@@ -514,6 +514,16 @@ impl<S: Services> Host for AgentHost<S> {
         }
     }
 
+    fn context(&self, model: Option<&str>) -> ContextLimits {
+        match self.provider(model) {
+            Some(p) => ContextLimits {
+                window: p.context_window(),
+                compact_at: p.compact_threshold(),
+            },
+            None => ContextLimits::default(),
+        }
+    }
+
     fn grant(&self, model: Option<&str>, tokens: u64) {
         if let (Some(ledger), Some(p)) = (&self.usage, self.provider(model)) {
             ledger.grant(&p.id, tokens);
@@ -793,6 +803,9 @@ mod tests {
             temperature: None,
             daily_tokens: limit,
             max_tokens: chummy_llm::DEFAULT_MAX_TOKENS,
+            context_max: None,
+            context_tokens: None,
+            compact_at: None,
         };
         let ledger = Arc::new(usage::UsageLedger::in_memory());
         let mut s = setup(None);

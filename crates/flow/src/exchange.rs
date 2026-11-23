@@ -76,6 +76,23 @@ pub struct Exchange {
     pub messages: Vec<ExMessage>,
 }
 
+/// Roughly how many tokens messages take in a model's context: their text,
+/// their tool calls, and a few tokens of overhead each.
+pub fn estimate_messages(messages: &[ExMessage]) -> u64 {
+    messages
+        .iter()
+        .map(|m| {
+            4 + crate::text::estimate_tokens(&m.text)
+                + m.calls
+                    .iter()
+                    .map(|c| {
+                        4 + crate::text::estimate_tokens(&format!("{}{}", c.name, c.arguments))
+                    })
+                    .sum::<u64>()
+        })
+        .sum()
+}
+
 impl Exchange {
     /// The tool calls still waiting for results: those in the last
     /// assistant message that no later tool message answers.
@@ -97,6 +114,11 @@ impl Exchange {
             .filter(|c| !answered.contains(&c.id.as_str()))
             .cloned()
             .collect()
+    }
+
+    /// Roughly how many tokens these messages take in a model's context.
+    pub fn estimate_tokens(&self) -> u64 {
+        estimate_messages(&self.messages)
     }
 
     /// "User: …\n\nAssistant: …", for text blocks and previews.
