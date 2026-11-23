@@ -41,6 +41,9 @@ pub struct ToolManifest {
     pub parameters: Json,
     /// The tool asks for internet access.
     pub network: bool,
+    /// Marked "potentially unsafe" (e.g. the command tool).
+    #[serde(default)]
+    pub risky: bool,
     pub timeout_secs: u32,
     pub dependencies: Vec<String>,
     pub packages: Vec<Package>,
@@ -80,7 +83,10 @@ pub fn builtins() -> Vec<Builtin> {
         tool!("read_file"),
         tool!("write_file"),
         tool!("list_files"),
+        tool!("edit_file"),
         tool!("search_files"),
+        tool!("find_files"),
+        tool!("run_command"),
         tool!("calculator"),
         tool!("current_time", lock),
         tool!("fetch_page", lock),
@@ -300,6 +306,7 @@ async fn build(
         description,
         parameters,
         network: meta.network,
+        risky: meta.risky,
         timeout_secs: meta.timeout_secs,
         dependencies: meta.dependencies.clone(),
         packages,

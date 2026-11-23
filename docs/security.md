@@ -150,6 +150,24 @@ without noticing.
 - Calls still ask first as before (tools set to ask, and online calls when
   “Ask before tools go online” is on).
 
+## The command tool (potentially unsafe)
+
+`run_command` gives the model a shell-style command line, because models are
+used to working that way. It is **not** a real shell and never runs anything
+on your computer: it is a small shell written in Python that runs in the same
+WebAssembly sandbox as every other tool, in the agent's folder, with no
+network (`python` runs in the sandbox's own interpreter; `pip` can't install
+anything). Paths outside the folder are refused, and so is deleting the
+folder itself.
+
+What it *can* do is a lot of damage inside the folder in one call (`rm -rf
+src`, a `python` script that rewrites every file). So it is marked
+**Potentially unsafe** (`risky = true` in its header): it starts off like
+every tool, switching it on shows a native confirmation that says so, and
+switching it on the first time also turns on **Ask me before each use**, so
+each command waits for your OK in chat until you turn that off. Keep a copy
+of anything important in a folder you give an agent with this tool.
+
 ## Pass 6 changes
 
 - **Per-agent tool and internet switches.** A tool runs only when it is on

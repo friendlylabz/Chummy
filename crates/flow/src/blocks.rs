@@ -63,7 +63,7 @@ fn d_newline() -> String {
     "\n".into()
 }
 fn d_result_chars() -> u32 {
-    4000
+    12000
 }
 fn d_roles() -> Vec<Role> {
     vec![Role::User]
@@ -1073,7 +1073,7 @@ pub fn catalog() -> Vec<BlockInfo> {
                     "Each call waits until you allow it in chat. Chummy always asks for tools that use the internet unless you turned that off in Settings → Tools.",
                 ),
             ],
-            json!({ "max_result_chars": 4000, "on_error": "tell_model", "confirm": false }),
+            json!({ "max_result_chars": 12000, "on_error": "tell_model", "confirm": false }),
         ),
         info(
             "ask_user",

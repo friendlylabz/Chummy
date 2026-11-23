@@ -41,8 +41,12 @@ until you say so.
   agent's workspace. It can't go online except through Chummy, and only if
   it asks for that, Internet access is on, and you allowed that tool. There
   is no unsandboxed mode. Dependencies come from a checksummed PEP 751 lock
-  and must be pure Python. Seven built-in tools ship with Chummy: read,
-  write, list and search files, calculator, current time, and fetch web page.
+  and must be pure Python. Ten built-in tools ship with Chummy: read (in
+  chunks, by line), write, edit (exact text replacement, like Claude Code's
+  Edit), list, search (grep-like) and find files, calculator, current time,
+  fetch web page, and **run command**, a small shell (pipes, redirects,
+  common commands, `python`) that runs in the same sandbox and is marked
+  *potentially unsafe*: it asks before it's switched on and before each use.
   See [docs/tool-format.md](docs/tool-format.md).
 - **Model block with tools.** Ask the model has outputs **Answer**,
   **Tool call** (fires instead of Answer when the model calls a tool),

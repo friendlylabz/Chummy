@@ -667,6 +667,7 @@ mod tests {
             description: "d".into(),
             parameters: json!({ "type": "object", "properties": {} }),
             network,
+            risky: false,
             timeout_secs: 5,
             dependencies: vec![],
             packages: vec![],

@@ -59,7 +59,9 @@ SYSTEM = (
     "- If a tool fails or the user doesn't allow a call, read why. Don't repeat the same call: try another way, "
     "or explain what's in the way.\n"
     "- Do what was asked, no more. Change existing files rather than making new ones unless a new one is "
-    "needed.\n"
+    "needed. To change part of a file, edit just that part (with edit_file, if you have it) instead of writing "
+    "the whole file again.\n"
+    "- Long files and results come in parts. If a result says there's more, read on from where it says.\n"
     "- Before anything hard to undo, like deleting or overwriting the user's work, ask the user first.\n"
     "- If the request is unclear, ask one short question and stop there.\n\n"
     "# Planning\n"
@@ -339,7 +341,7 @@ def agent_fn():
               "Uses the tools this agent allows. The system message (with {{todos}}) is filled in fresh at "
               "every call."),
             b("show", "function", "Show what it says", 860, 250, {"function": "show"}),
-            b("run", "run_tool", "Run tool", 1160, 250, {"max_result_chars": 4000},
+            b("run", "run_tool", "Run tool", 1160, 250, {"max_result_chars": 12000},
               "Errors and calls you don't allow go back to the model as the result."),
             b("room", "function", "Make room", 1460, 250, {"function": "make_room"},
               "Summarises a long conversation."),

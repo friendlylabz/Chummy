@@ -64,7 +64,7 @@
         <label class="row tool">
           <input type="checkbox" checked={on} disabled={busy} onchange={(e) => toggle(t.name, (e.currentTarget as HTMLInputElement).checked)} />
           <span class="t-main">
-            <span class="row-title">{t.title}</span>
+            <span class="row-title">{t.title}{#if t.risky}<span class="risky" title="One call can change or delete many files in the workspace"> · potentially unsafe</span>{/if}</span>
             <span class="row-sub">{t.description}</span>
           </span>
           <span class="levels" aria-label="Where it is on">
@@ -90,6 +90,10 @@
 </div>
 
 <style>
+  .risky {
+    color: var(--warn);
+    font-weight: normal;
+  }
   .section-title {
     display: flex;
     align-items: center;

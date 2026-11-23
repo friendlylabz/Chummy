@@ -39,6 +39,10 @@ const RETIRED: &[&str] = &[
     // Chummy assistant "one go, or plan fully first" (pass 10), replaced by the
     // one agent loop (pass 11, Nov 2026).
     "5feeeda2a0c5fd2c5e899f8544000e0ff224be2900b59c43007bd012a76edd63",
+    // The agent loop as first shipped as the Chummy assistant (pass 12).
+    "07af41a040cee6b6ea09a42a4d95effebf6dae06834b53bfd92b519b00e1295d",
+    // With token-based compaction (pass 13), before the tooling upgrade.
+    "d6415d0b4df576cd1c6fa6b6aa4640a59cffc3a6f58c31b1809c6b253be1463b",
 ];
 
 /// A loop's content as a SHA-256 hex string.

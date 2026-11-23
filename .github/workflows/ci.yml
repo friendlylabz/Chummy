@@ -36,6 +36,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m unittest discover -s crates/local/engine -v
+      - name: Built-in tools (logic, on the host Python)
+        run: python -m unittest discover -s crates/tools/tests -p 'test_*.py' -v
 
   rust:
     name: Rust (${{ matrix.os }})

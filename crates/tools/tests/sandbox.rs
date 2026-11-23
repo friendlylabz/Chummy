@@ -90,7 +90,14 @@ async fn builtin_file_tools_work_inside_the_workspace_only() {
     }
     let rf = chummy_tools::manifest(&paths, "read_file").unwrap();
     assert_eq!(rf.parameters["required"], json!(["path"]));
-    assert_eq!(rf.parameters["properties"]["max_chars"]["type"], "integer");
+    assert_eq!(
+        rf.parameters["properties"]["line_number"]["type"],
+        "integer"
+    );
+    assert_eq!(rf.parameters["properties"]["max_lines"]["type"], "integer");
+    let rc = chummy_tools::manifest(&paths, "run_command").unwrap();
+    assert!(rc.risky, "run_command is marked potentially unsafe");
+    assert!(!rf.risky);
 
     let ws = tempfile::tempdir().unwrap();
     std::fs::write(ws.path().join("notes.md"), "hello from the workspace").unwrap();
@@ -106,7 +113,113 @@ async fn builtin_file_tools_work_inside_the_workspace_only() {
         )
         .await
         .unwrap();
-    assert_eq!(r.text, "hello from the workspace");
+    assert_eq!(
+        r.text,
+        "notes.md: lines 1–1 of 1\n     1\thello from the workspace"
+    );
+
+    // Reading in chunks.
+    let long: String = (1..=500).map(|i| format!("line {i}\n")).collect();
+    std::fs::write(ws.path().join("long.txt"), long).unwrap();
+    let r = h
+        .run(
+            "read_file",
+            json!({ "path": "long.txt", "line_number": 300, "max_lines": 3 }),
+            Some(ws.path()),
+            none(),
+            vec![],
+        )
+        .await
+        .unwrap();
+    assert!(
+        r.text.starts_with("long.txt: lines 300–302 of 500"),
+        "{r:?}"
+    );
+    assert!(r.text.contains("   301\tline 301"), "{r:?}");
+    assert!(r.text.contains("line_number=303"), "{r:?}");
+
+    // Editing by exact replacement.
+    let r = h
+        .run(
+            "edit_file",
+            json!({ "path": "long.txt", "old_text": "line 301\n", "new_text": "LINE 301\n" }),
+            Some(ws.path()),
+            none(),
+            vec![],
+        )
+        .await
+        .unwrap();
+    assert!(
+        !r.is_error && r.text.starts_with("Edited long.txt"),
+        "{r:?}"
+    );
+    let r = h
+        .run(
+            "edit_file",
+            json!({ "path": "long.txt", "old_text": "line 1", "new_text": "x" }),
+            Some(ws.path()),
+            none(),
+            vec![],
+        )
+        .await
+        .unwrap();
+    assert!(r.is_error, "\"line 1\" matches many lines: {r:?}");
+
+    let r = h
+        .run(
+            "search_files",
+            json!({ "pattern": "LINE 301" }),
+            Some(ws.path()),
+            none(),
+            vec![],
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.text, "long.txt:301: LINE 301");
+    let r = h
+        .run(
+            "find_files",
+            json!({ "pattern": "*.txt" }),
+            Some(ws.path()),
+            none(),
+            vec![],
+        )
+        .await
+        .unwrap();
+    assert!(r.text.contains("long.txt"), "{r:?}");
+
+    // The command tool: a small shell, still inside the sandbox.
+    std::fs::write(
+        ws.path().join("hi.py"),
+        "import sys\nprint('py', sys.argv[1:])\n",
+    )
+    .unwrap();
+    let run = |cmd: &str| {
+        let h = &h;
+        let ws = ws.path().to_path_buf();
+        let cmd = cmd.to_string();
+        async move {
+            h.run(
+                "run_command",
+                json!({ "command": cmd }),
+                Some(&ws),
+                NetPolicy::off("off"),
+                vec![],
+            )
+            .await
+            .unwrap()
+        }
+    };
+    let r = run("grep -c line long.txt && python hi.py a b | wc -l").await;
+    assert_eq!(r.text, "499\n1\n[exit code 0]", "{r:?}");
+    let r = run("cat /etc/passwd").await;
+    assert!(r.text.contains("outside the workspace"), "{r:?}");
+    let r = run("cd .. && ls").await;
+    assert!(r.text.contains("outside the workspace"), "{r:?}");
+    let r = run("python -c 'open(\"/etc/passwd\").read()'").await;
+    assert!(!r.text.contains("root:"), "{r:?}");
+    std::fs::remove_file(ws.path().join("long.txt")).unwrap();
+    std::fs::remove_file(ws.path().join("hi.py")).unwrap();
 
     let r = h
         .run(

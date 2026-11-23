@@ -77,6 +77,51 @@ fn changed(app: &AppHandle, state: &AppState) {
     let _ = app.emit(events::TOOLS_CHANGED, status(state));
 }
 
+/// At start-up, once tools are set up: installs built-in tools that are new
+/// in this version of Chummy and reinstalls ones whose file changed, so an
+/// update brings its tools without setting up again. Their switches stay as
+/// they were, and new tools start off like every tool.
+pub fn refresh_builtins(app: &AppHandle) {
+    use tauri::Manager;
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        if chummy_tools::python_status(&state.tool_paths).is_none() {
+            return;
+        }
+        {
+            let mut busy = lock(&state.tools_installing);
+            if *busy {
+                return;
+            }
+            *busy = true;
+        }
+        let result = async {
+            let host = state.tool_host().await?;
+            chummy_tools::install_builtins(&host, &mut |m| {
+                let _ = app.emit(
+                    events::TOOLS_PROGRESS,
+                    ToolsProgress::Step { message: m.into() },
+                );
+            })
+            .await
+            .map_err(err)
+        }
+        .await;
+        *lock(&state.tools_installing) = false;
+        match result {
+            Ok(_) => {
+                let _ = app.emit(events::TOOLS_PROGRESS, ToolsProgress::Finished);
+            }
+            Err(e) => chummy_log::system::warn(
+                "tools",
+                format!("Couldn't update the built-in tools: {e}"),
+            ),
+        }
+        changed(&app, &state);
+    });
+}
+
 /// Downloads the WebAssembly Python and installs the built-in tools. Asks
 /// first. Returns false if the user said no.
 #[tauri::command]
@@ -154,20 +199,43 @@ pub async fn setup_tools(
     Ok(true)
 }
 
-/// Switches a tool on or off for agents.
+/// Switches a tool on or off for agents. Turning on a tool marked
+/// "potentially unsafe" (the command tool) asks first, and switches on
+/// "Ask me before each use" for it. Returns whether the tool is now on.
 #[tauri::command]
-pub fn set_tool_enabled(
+pub async fn set_tool_enabled(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, AppState>,
     name: String,
     enabled: bool,
-) -> CmdResult<()> {
-    if chummy_tools::manifest(&state.tool_paths, &name).is_none() {
-        return Err(format!("The tool “{name}” isn't installed."));
+) -> CmdResult<bool> {
+    let m = chummy_tools::manifest(&state.tool_paths, &name)
+        .ok_or_else(|| format!("The tool “{name}” isn't installed."))?;
+    let was_on = state.settings().tool(&name).enabled;
+    let first_risky_on = enabled && m.risky && !was_on;
+    if first_risky_on {
+        let msg = format!(
+            "“{}” is potentially unsafe.\n\n{}\n\nIt still runs in the sandbox, so it can't see anything outside the \
+             agent's workspace or go online, but inside the workspace one command can change or delete many files \
+             at once. Keep a copy of anything important in that folder.\n\nChummy will ask you before each use; you \
+             can turn that off below the tool.",
+            m.title, m.description
+        );
+        let title = format!("Turn on “{}”?", m.title);
+        if !dialogs::confirm(&app, window.label(), &title, &msg, "Turn on", true).await {
+            return Ok(false);
+        }
     }
-    state.update(&app, |s| s.tools.entry(name).or_default().enabled = enabled)?;
+    state.update(&app, |s| {
+        let pref = s.tools.entry(name).or_default();
+        pref.enabled = enabled;
+        if first_risky_on {
+            pref.ask = true;
+        }
+    })?;
     changed(&app, &state);
-    Ok(())
+    Ok(enabled)
 }
 
 /// Lets a tool that asks for it use the internet. Asks first.

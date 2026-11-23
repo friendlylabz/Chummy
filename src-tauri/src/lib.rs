@@ -59,6 +59,7 @@ pub fn run() {
             let handle = app.handle().clone();
             logs::start(&handle, &state);
             app.manage(state);
+            commands::tools::refresh_builtins(&handle);
             if let Err(e) = tray::create(&handle) {
                 chummy_log::system::warn(
                     "app",

@@ -121,6 +121,7 @@
               {t.title}
               <span class="mono faint xs">{t.name}</span>
               {#if t.network}<span class="badge" title="Asks for internet access"><Icon name="globe" size={11} /> Internet</span>{/if}
+              {#if t.risky}<span class="badge risky" title="One call can change or delete many files in the workspace"><Icon name="alert" size={11} /> Potentially unsafe</span>{/if}
             </div>
             <div class="row-sub">{t.description}</div>
           </button>
@@ -190,6 +191,10 @@
     align-items: center;
     gap: var(--space-2);
     flex-wrap: wrap;
+  }
+  .badge.risky {
+    background: color-mix(in srgb, var(--warn) 16%, transparent);
+    color: var(--warn);
   }
   .badge {
     display: inline-flex;

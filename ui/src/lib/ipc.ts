@@ -636,6 +636,8 @@ export interface ToolView {
   description: string;
   parameters: { properties?: Record<string, { type?: string; description?: string }>; required?: string[] };
   network: boolean;
+  /** Marked "potentially unsafe" (the command tool). */
+  risky: boolean;
   timeout_secs: number;
   dependencies: string[];
   packages: { name: string; version: string }[];
@@ -904,7 +906,7 @@ export const commands = {
       builtin_count: 7,
     })),
   setupTools: () => call<boolean>("setup_tools", undefined, () => false),
-  setToolEnabled: (name: string, enabled: boolean) => call<void>("set_tool_enabled", { name, enabled }),
+  setToolEnabled: (name: string, enabled: boolean) => call<boolean>("set_tool_enabled", { name, enabled }),
   setToolNetwork: (name: string, enabled: boolean) => call<boolean>("set_tool_network", { name, enabled }),
   setToolAsk: (name: string, ask: boolean) => call<void>("set_tool_ask", { name, ask }),
   setGeneral: (general: General) => call<void>("set_general", { general }),

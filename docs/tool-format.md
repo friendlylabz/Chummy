@@ -5,7 +5,9 @@ official CPython build for WASI, under Wasmtime. There is no way to run a
 tool outside the sandbox.
 
 Chummy ships with a set of built-in tools, installed when you set up tools in
-Settings → Tools. Every tool is off until you switch it on, and the Tools
+Settings → Tools. After an update, Chummy installs new built-ins and
+reinstalls changed ones when it starts (switches are kept; new tools start
+off). Every tool is off until you switch it on, and the Tools
 permission must be on too. Installing tools from files isn't offered in the
 app yet; the installer below is what it will use.
 
@@ -56,6 +58,7 @@ you agree to is known before anything is installed.
 | `version` | Shown in Settings. |
 | `network` | `true` if the tool needs the internet. It still can't go online until the user allows it. |
 | `timeout` | Seconds a call may run (default 30, at most 300). |
+| `risky` | `true` for a tool that can do a lot of damage inside the workspace in one call (like `run_command`). Settings shows it as **Potentially unsafe**, switching it on asks for confirmation, and it then asks before each use until you turn that off. It is still sandboxed like every other tool. |
 
 Unknown keys in `[tool.chummy]` are errors. Other tools' tables are ignored.
 The names of built-in tools are reserved.
@@ -153,10 +156,38 @@ update, tools are reinstalled). Installs run one at a time.
 
 | Tool | What it does | Internet |
 |------|--------------|----------|
-| `read_file` | Reads a text file in the workspace. | no |
-| `write_file` | Writes or appends to a file in the workspace. | no |
+| `read_file` | Reads a text file, numbered lines, in chunks: `line_number` (where to start, default 1) and `max_lines` (default 200, at most 2000). Long lines are cut at 1,000 characters and a call returns at most 10,000; the result says how to read on. | no |
+| `write_file` | Creates or replaces a whole file (or appends with `append`). Says how many lines it wrote and what it replaced. | no |
+| `edit_file` | Changes part of a file: replaces `old_text`, copied exactly from the file, with `new_text`, like Claude Code's Edit tool. `old_text` must match once (or set `replace_all`); otherwise the error lists where it matched or the closest line. Forgives `read_file`'s line-number prefixes and trailing spaces, keeps Windows line endings, and shows the changed lines afterwards. | no |
 | `list_files` | Lists a workspace folder. | no |
-| `search_files` | Finds lines containing some text in the workspace's files. | no |
+| `search_files` | Searches files' contents, like grep: plain text or a `regex`, `file_glob` (e.g. `*.py`), `ignore_case`, `context_lines`, `max_results`. Answers `file:line: text`. Skips `.git`, `node_modules`, build folders, hidden files and files over 2 MB. | no |
+| `find_files` | Finds files by name with a glob (`*.md`, `src/**/*.ts`), newest first, up to 200. | no |
+| `run_command` | **Potentially unsafe.** Runs a shell-style command line in the workspace (see below). | no |
 | `calculator` | Works out arithmetic exactly (no `eval`). | no |
 | `current_time` | Today's date and the time, in any time zone (uses `tzdata`). | no |
 | `fetch_page` | Gets the readable text of a web page (uses `beautifulsoup4`). | yes |
+
+### `run_command`
+
+Models are used to working in a shell, so Chummy has a command tool. It can't
+be a real bash: Chummy never runs anything outside the WebAssembly sandbox, and
+there's no shell inside it. Instead `run_command` is a small shell written in
+Python that runs in the same sandbox as every other tool, in the agent's
+workspace, with no network:
+
+- **Syntax:** quotes, globs (`*.py`, `**/*.md`), pipes `|`, `&&`, `||`, `;`,
+  redirects `<`, `>`, `>>`, `2>&1`, `2>/dev/null`, `cd`. Background jobs (`&`),
+  subshells and variables aren't supported.
+- **Commands:** `echo`, `cat`, `head`, `tail`, `wc`, `grep`, `ls`, `find`,
+  `mkdir`, `rm`, `cp`, `mv`, `touch`, `sort`, `uniq`, `cut`, `tr`, `diff`,
+  `pwd`, `date`, `sleep`, `true`, `false`, `bash -c`/`sh -c`, and
+  `python`/`python3` (a script, `-c`, `-m` or stdin), which runs in the
+  sandbox's own Python. Common flags work; anything else gets exit code 127
+  and the list of commands. `pip` can't install anything.
+- **Paths** stay inside the workspace; anything else is refused. `rm -r` on
+  the workspace itself is refused.
+- **Result:** the output (stdout and stderr), cut to 10,000 characters
+  (beginning and end kept), then `[exit code N]`.
+
+It is marked `risky`: inside the workspace, one command can delete or change
+many files, so switching it on asks first and every call asks you by default.

@@ -37,6 +37,9 @@ pub struct ToolMeta {
     pub version: String,
     /// The tool wants to use the internet (still off until the user allows it).
     pub network: bool,
+    /// The tool can change or delete many files at once (e.g. a shell), so
+    /// Chummy marks it "potentially unsafe" and asks before turning it on.
+    pub risky: bool,
     /// Longest a call may run, in seconds.
     pub timeout_secs: u32,
     pub requires_python: Option<String>,
@@ -77,6 +80,8 @@ struct ChummyTable {
     version: String,
     #[serde(default)]
     network: bool,
+    #[serde(default)]
+    risky: bool,
     #[serde(default = "d_timeout")]
     timeout: u32,
 }
@@ -213,6 +218,7 @@ pub fn parse_meta(source: &str) -> Result<ToolMeta, ToolError> {
         title,
         version: c.version,
         network: c.network,
+        risky: c.risky,
         timeout_secs: c.timeout,
         requires_python: block.requires_python,
         dependencies: block.dependencies,
@@ -317,6 +323,9 @@ import chummy
         assert!(m.network);
         assert_eq!(m.timeout_secs, 30);
         assert_eq!(m.dependencies.len(), 2);
+        assert!(!m.risky);
+        let risky = parse_meta(&GOOD.replace("network = true", "network = true\n# risky = true"));
+        assert!(risky.unwrap().risky);
     }
 
     #[test]
