@@ -161,6 +161,8 @@ export interface AppInfo {
   data_dir_custom: boolean;
   /** Only you can open it. */
   data_dir_locked: boolean;
+  /** Windows with --data-dir: others on the computer may be able to open it. */
+  data_dir_maybe_shared: boolean;
   recovery: { kind: "used_backup" | "used_defaults"; reason: string } | null;
 }
 
@@ -879,6 +881,7 @@ export const commands = {
       data_dir: "(browser preview)",
       data_dir_custom: false,
       data_dir_locked: true,
+      data_dir_maybe_shared: false,
       recovery: null,
     })),
   revealDataDir: () => call<void>("reveal_data_dir"),
@@ -984,7 +987,8 @@ export const commands = {
   setupTools: () => call<boolean>("setup_tools", undefined, () => false),
   setToolEnabled: (name: string, enabled: boolean) => call<boolean>("set_tool_enabled", { name, enabled }),
   setToolNetwork: (name: string, enabled: boolean) => call<boolean>("set_tool_network", { name, enabled }),
-  setToolAsk: (name: string, ask: boolean) => call<void>("set_tool_ask", { name, ask }),
+  /** Turning it off for a potentially unsafe tool asks natively. False: cancelled. */
+  setToolAsk: (name: string, ask: boolean) => call<boolean>("set_tool_ask", { name, ask }, () => true),
 
   sandboxStatus: () =>
     call<SandboxStatus>("sandbox_status", undefined, () => ({

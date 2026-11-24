@@ -1695,14 +1695,8 @@ impl<'a, H: Host> Runner<'a, H> {
                 }
                 continue;
             };
-            let agent = self.host.agent_allows(&name);
-            if !s.resolve(agent) {
+            if !s.resolve(self.host.agent_allows(&name)) {
                 continue;
-            }
-            if s == Switch::On && !agent {
-                notes.push(format!(
-                    "This block turns on “{name}”, which is off for this agent."
-                ));
             }
             out.push(info);
         }
@@ -3177,11 +3171,16 @@ mod tests {
         // Inherit (the default): what the agent allows.
         assert_eq!(offered(json!({}), true).await.0, ["echo"]);
         assert!(offered(json!({}), false).await.0.is_empty());
-        // Off: never. On: even when the agent's switch is off (and says so).
+        // Off: never.
         assert!(offered(json!({ "tools": "off" }), true).await.0.is_empty());
+        // A block can't turn on what the agent has off: an older loop's "on"
+        // reads as "same as the agent".
         let (on, notice) = offered(json!({ "tools": "on" }), false).await;
-        assert_eq!(on, ["echo"]);
-        assert!(notice);
+        assert!(on.is_empty(), "{on:?}");
+        assert!(!notice);
+        assert_eq!(offered(json!({ "tools": "on" }), true).await.0, ["echo"]);
+        let each = json!({ "tools": { "each": { "echo": "on" } } });
+        assert!(offered(each, false).await.0.is_empty());
         // Per tool.
         let each = json!({ "tools": { "all": "off", "each": { "echo": "inherit" } } });
         assert_eq!(offered(each, true).await.0, ["echo"]);
@@ -3629,8 +3628,8 @@ mod tests {
         );
         assert_eq!(
             *host.online_runs.lock().unwrap(),
-            [Switch::On],
-            "the block's internet switch rides with the call"
+            [Switch::Inherit],
+            "the block's internet switch rides with the call (an old \"on\" reads as inherit)"
         );
     }
 

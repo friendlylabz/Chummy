@@ -155,23 +155,26 @@ A model block (`llm`) with tools works like this:
 ### Tool switches
 
 Two switches decide which tools a block offers: the **app-wide** one (tools
-on in Permissions, and the tool on in Settings → Tools) and the **agent's**
-(its tool and internet switches). The app-wide one always applies; nothing in
-a loop can get past it. A block follows the agent by default and can override
-it, one tool at a time:
+on in Security and Privacy, and the tool on in Settings → Tools) and the
+**agent's** (its tool and internet switches). The app-wide one always applies;
+nothing in a loop can get past it. A block follows the agent by default and
+can only **turn things off** for itself (the editor shows this as "Disable
+tools"), never on, so a loop file from someone else can't widen what an agent
+may do:
 
 | Switch    | Meaning                                                            |
 |-----------|--------------------------------------------------------------------|
 | `inherit` | What the agent allows (the default, also when the key is left out). |
-| `on`      | On for this block, even when the agent's switch is off. The run shows a notice when this happens. |
 | `off`     | Never in this block.                                               |
 
-`tools` is one switch for every tool (`"inherit"`, `"on"` or `"off"`), or an
-object when single tools differ: `{"all": "off", "each": {"calculator":
-"inherit"}}` offers only the calculator, if the agent allows it. `network` is
-one switch (`"inherit"`, `"on"` or `"off"`). Old forms still load: a list of
-tool names means those tools inherit and every other is off, and `true` /
-`false` mean `inherit` / `off`.
+`tools` is one switch for every tool (`"inherit"` or `"off"`), or an object
+when single tools differ: `{"all": "inherit", "each": {"run_shell": "off"}}`
+disables only run_shell; `{"all": "off", "each": {"calculator": "inherit"}}`
+disables everything but the calculator (which is still offered only if the
+agent allows it). `network` is one switch (`"inherit"` or `"off"`). Old forms
+still load: `"on"` (from before blocks became disable-only) reads as
+`"inherit"`, a list of tool names means those tools inherit and every other is
+off, and `true` / `false` mean `inherit` / `off`.
 
 Model settings inherit the same way: `max_tokens` and `temperature` left out
 use the model connection's own settings (Settings → Models), and `model` left

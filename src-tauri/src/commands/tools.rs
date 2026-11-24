@@ -286,18 +286,33 @@ pub async fn set_tool_network(
 }
 
 /// Makes every call to a tool wait for the user's OK (or stop waiting).
-/// Asking is the safe side, so neither direction needs a confirmation.
+/// Asking is the safe side: turning it on never asks. Turning it off for a
+/// potentially unsafe tool asks natively first. Returns false if the user
+/// said no.
 #[tauri::command]
-pub fn set_tool_ask(
+pub async fn set_tool_ask(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, AppState>,
     name: String,
     ask: bool,
-) -> CmdResult<()> {
-    if chummy_tools::manifest(&state.tool_paths, &name).is_none() {
+) -> CmdResult<bool> {
+    let Some(m) = chummy_tools::manifest(&state.tool_paths, &name) else {
         return Err(format!("The tool “{name}” isn't installed."));
+    };
+    if !ask && m.risky && state.settings().tool(&name).ask {
+        let msg = format!(
+            "“{}” is potentially unsafe: inside the agent's workspace one call can change or delete many files at \
+             once.\n\nWithout asking, agents will use it whenever the model decides to, including in scheduled \
+             jobs while you're away, and a file or web page the model reads could talk it into a harmful command.",
+            m.title
+        );
+        let title = format!("Stop asking before each use of “{}”?", m.title);
+        if !dialogs::confirm(&app, window.label(), &title, &msg, "Stop asking", true).await {
+            return Ok(false);
+        }
     }
     state.update(&app, |s| s.tools.entry(name).or_default().ask = ask)?;
     changed(&app, &state);
-    Ok(())
+    Ok(true)
 }

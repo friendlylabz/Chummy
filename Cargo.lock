@@ -673,7 +673,7 @@ dependencies = [
 
 [[package]]
 name = "chummy"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chummy-flow",
  "chummy-llm",
@@ -704,7 +704,7 @@ dependencies = [
 
 [[package]]
 name = "chummy-flow"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "regex",
  "serde",
@@ -715,7 +715,7 @@ dependencies = [
 
 [[package]]
 name = "chummy-llm"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "futures-util",
  "reqwest 0.12.28",
@@ -728,7 +728,7 @@ dependencies = [
 
 [[package]]
 name = "chummy-local"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chummy-llm",
  "flate2",
@@ -747,7 +747,7 @@ dependencies = [
 
 [[package]]
 name = "chummy-log"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -764,7 +764,7 @@ dependencies = [
 
 [[package]]
 name = "chummy-runner"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chummy-flow",
  "chummy-llm",
@@ -782,7 +782,7 @@ dependencies = [
 
 [[package]]
 name = "chummy-sandbox"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cap-std",
  "dirs 6.0.0",
@@ -795,7 +795,7 @@ dependencies = [
 
 [[package]]
 name = "chummy-scheduler"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chummy-flow",
  "chummy-log",
@@ -811,7 +811,7 @@ dependencies = [
 
 [[package]]
 name = "chummy-store"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "getrandom 0.3.4",
  "keyring",
@@ -823,7 +823,7 @@ dependencies = [
 
 [[package]]
 name = "chummy-tools"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chummy-sandbox",
  "futures-util",

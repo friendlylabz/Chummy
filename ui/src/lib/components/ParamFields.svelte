@@ -9,7 +9,8 @@
   import { tools } from "$lib/stores/tools.svelte";
   import Button from "./Button.svelte";
   import Icon from "./Icon.svelte";
-  import { readTools, writeTools, switchFor, switchLabels, readSwitch, type Switch } from "$lib/switches";
+  import Toggle from "./Toggle.svelte";
+  import { readTools, writeTools, isDisabled, setDisabled, readSwitch } from "$lib/switches";
 
   let {
     info,
@@ -46,19 +47,20 @@
     const v = params.roles;
     return Array.isArray(v) ? (v as string[]) : ["user"];
   }
-  const switches: Switch[] = ["inherit", "on", "off"];
   function toolSwitches() {
     return readTools(params.tools);
   }
-  function setAll(all: Switch) {
-    onset("tools", writeTools({ ...toolSwitches(), all }));
+  /** Disables every tool in this block (or follows the agent again). */
+  function setAllDisabled(off: boolean) {
+    onset("tools", writeTools({ all: off ? "off" : "inherit", each: {} }));
   }
-  /** `null` goes back to following "All tools". */
-  function setTool(name: string, s: Switch | null) {
+  function setToolDisabled(name: string, off: boolean) {
+    onset("tools", writeTools(setDisabled(toolSwitches(), name, off)));
+  }
+  function forget(name: string) {
     const t = toolSwitches();
     const each = { ...t.each };
-    if (s === null) delete each[name];
-    else each[name] = s;
+    delete each[name];
     onset("tools", writeTools({ all: t.all, each }));
   }
   function numberInput(p: ParamSpec, raw: string) {
@@ -70,11 +72,7 @@
   function verdict(t: { enabled: boolean; name: string }): { on: boolean; text: string } {
     if (!settings.current.permissions.tools) return { on: false, text: "tools off in Security and Privacy" };
     if (!t.enabled) return { on: false, text: "off in Settings → Tools" };
-    const s = switchFor(toolSwitches(), t.name);
-    if (s === "off") return { on: false, text: "off here" };
-    if (s === "on") {
-      return { on: true, text: agentTools && !agentTools.includes(t.name) ? "on here, though off for the agent" : "on here" };
-    }
+    if (isDisabled(toolSwitches(), t.name)) return { on: false, text: "disabled in this block" };
     if (!agentTools) return { on: true, text: "if the agent allows" };
     return agentTools.includes(t.name) ? { on: true, text: "on for the agent" } : { on: false, text: "off for the agent" };
   }
@@ -156,44 +154,37 @@
               <p class="hint">No tools yet. Set them up in Settings → Tools.</p>
               <Button variant="ghost" icon="wrench" onclick={() => commands.openWindow("settings", "tools")}>Open Tools settings</Button>
             {:else}
-              <select
-                id="{idPrefix}-{p.key}"
-                class="input"
-                value={toolSwitches().all}
-                onchange={(e) => setAll((e.currentTarget as HTMLSelectElement).value as Switch)}
-              >
-                <option value="inherit">Same as the agent</option>
-                <option value="on">All on</option>
-                <option value="off">All off</option>
-              </select>
+              <p class="hint">
+                Blocks use the agent's tools. Here you can only turn tools off for this block, never on.
+              </p>
+              <div class="check all-off">
+                <Toggle
+                  checked={toolSwitches().all === "off"}
+                  label="Disable all tools in this block"
+                  onchange={(v) => setAllDisabled(v)}
+                />
+                <span>Disable all tools in this block</span>
+              </div>
               <div class="tools">
                 {#each tools.installed as t (t.name)}
                   {@const v = verdict(t)}
-                  {@const own = toolSwitches().each[t.name]}
                   <div class="tool" title={t.description}>
                     <span class="dot" class:on={v.on}></span>
                     <span class="tmain">
                       <span class="tname">{t.title}</span>
                       <span class="off">{v.text}</span>
                     </span>
-                    <select
-                      class="input tiny"
-                      aria-label="{t.title} in this block"
-                      value={own ?? ""}
-                      onchange={(e) => {
-                        const x = (e.currentTarget as HTMLSelectElement).value;
-                        setTool(t.name, x ? (x as Switch) : null);
-                      }}
-                    >
-                      <option value="">Like all tools</option>
-                      {#each switches as sw (sw)}<option value={sw}>{switchLabels[sw]}</option>{/each}
-                    </select>
+                    <Toggle
+                      checked={isDisabled(toolSwitches(), t.name)}
+                      label="Disable {t.title} in this block"
+                      onchange={(off) => setToolDisabled(t.name, off)}
+                    />
                   </div>
                 {/each}
                 {#each Object.keys(toolSwitches().each).filter((n) => !tools.installed.some((t) => t.name === n)) as missing (missing)}
                   <div class="tool">
                     <span class="dot"></span><span class="tmain"><span class="tname mono">{missing}</span><span class="off">not installed</span></span>
-                    <button type="button" class="mini" aria-label="Forget {missing}" onclick={() => setTool(missing, null)}><Icon name="minus" size={13} /></button>
+                    <button type="button" class="mini" aria-label="Forget {missing}" onclick={() => forget(missing)}><Icon name="minus" size={13} /></button>
                   </div>
                 {/each}
               </div>
@@ -282,6 +273,12 @@
     line-height: 1.5;
   }
   .roles,
+  .all-off {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin: var(--space-2) 0;
+  }
   .tools {
     display: grid;
     gap: 4px;
@@ -325,12 +322,6 @@
     flex: 1;
     min-width: 0;
     line-height: 1.3;
-  }
-  .input.tiny {
-    width: auto;
-    height: 26px;
-    padding: 0 var(--space-2);
-    font-size: var(--text-xs);
   }
   .dot {
     flex: none;

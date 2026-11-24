@@ -9,6 +9,11 @@
 //!   the installed NVIDIA driver, or the CPU/Metal build otherwise;
 //! - transformers, accelerate, safetensors and tokenizer helpers.
 //!
+//! Every version is pinned in [`crate::pins`] (`scripts/update-engine-pins.py`
+//! moves them to the latest): uv is checked against a SHA-256 built into
+//! Chummy, and the packages' dependencies are limited to releases from before
+//! the pins were made, so a package published later can't sneak in.
+//!
 //! Removing the runtime is just deleting `runtime/`.
 
 use std::path::{Path, PathBuf};
@@ -24,16 +29,11 @@ use tokio::process::Command;
 use crate::download::hex;
 use crate::{LocalError, http_client, python_env, read_lines};
 
-const UV_RELEASES: &str = "https://github.com/astral-sh/uv/releases/latest/download";
-const PYTHON_VERSION: &str = "3.12";
-const PACKAGES: &[&str] = &[
-    "transformers>=4.56",
-    "accelerate>=1.0",
-    "safetensors",
-    "jinja2>=3.1",
-    "sentencepiece",
-    "protobuf",
-];
+use crate::pins::{
+    BITSANDBYTES, EXCLUDE_NEWER, PACKAGES, PYTHON_VERSION, TORCH, UV_ASSETS, UV_VERSION,
+};
+
+const UV_RELEASES: &str = "https://github.com/astral-sh/uv/releases/download";
 
 /// Where the runtime lives, under the Chummy folder's `runtime/`.
 #[derive(Debug, Clone)]
@@ -135,7 +135,7 @@ pub async fn install(
     std::fs::create_dir_all(&paths.root).map_err(LocalError::io("creating the runtime folder"))?;
 
     phase(0, &mut on);
-    if !paths.uv.exists() {
+    if !paths.uv.exists() || uv_installed_version(paths).as_deref() != Some(UV_VERSION) {
         fetch_uv(paths).await?;
     }
 
@@ -166,7 +166,7 @@ pub async fn install(
             "--python",
             &py,
             "--torch-backend=auto",
-            "torch",
+            TORCH,
         ],
         cancel,
         2,
@@ -175,7 +175,14 @@ pub async fn install(
     .await?;
 
     phase(3, &mut on);
-    let mut args = vec!["pip", "install", "--python", &py];
+    let mut args = vec![
+        "pip",
+        "install",
+        "--python",
+        &py,
+        "--exclude-newer",
+        EXCLUDE_NEWER,
+    ];
     args.extend_from_slice(PACKAGES);
     run_uv(paths, &args, cancel, 3, &mut on).await?;
 
@@ -198,7 +205,15 @@ pub async fn ensure_bitsandbytes(
     let py = paths.python.to_string_lossy().into_owned();
     run_uv(
         paths,
-        &["pip", "install", "--python", &py, "bitsandbytes>=0.45"],
+        &[
+            "pip",
+            "install",
+            "--python",
+            &py,
+            "--exclude-newer",
+            EXCLUDE_NEWER,
+            BITSANDBYTES,
+        ],
         cancel,
         3,
         &mut on,
@@ -243,15 +258,29 @@ async fn get_bytes(url: &str) -> Result<Vec<u8>, LocalError> {
     Ok(out)
 }
 
+/// The pinned SHA-256 of a uv download.
+fn uv_sha256(asset: &str) -> Option<&'static str> {
+    UV_ASSETS
+        .iter()
+        .find(|(a, _)| *a == asset)
+        .map(|(_, sha)| *sha)
+}
+
+fn uv_version_file(paths: &RuntimePaths) -> PathBuf {
+    paths.root.join("bin").join("uv.version")
+}
+
+/// The uv version Chummy last installed, so a new pin replaces it.
+fn uv_installed_version(paths: &RuntimePaths) -> Option<String> {
+    let v = std::fs::read_to_string(uv_version_file(paths)).ok()?;
+    Some(v.trim().to_string())
+}
+
 async fn fetch_uv(paths: &RuntimePaths) -> Result<(), LocalError> {
     let asset = uv_asset()?;
-    let archive = get_bytes(&format!("{UV_RELEASES}/{asset}")).await?;
-    let sums = get_bytes(&format!("{UV_RELEASES}/{asset}.sha256")).await?;
-    let expected = String::from_utf8_lossy(&sums)
-        .split_whitespace()
-        .next()
-        .unwrap_or_default()
-        .to_lowercase();
+    let expected = uv_sha256(asset)
+        .ok_or_else(|| LocalError::Runtime(format!("no pinned checksum for {asset}")))?;
+    let archive = get_bytes(&format!("{UV_RELEASES}/{UV_VERSION}/{asset}")).await?;
     if hex(&Sha256::digest(&archive)) != expected {
         return Err(LocalError::Checksum { file: asset.into() });
     }
@@ -296,6 +325,7 @@ async fn fetch_uv(paths: &RuntimePaths) -> Result<(), LocalError> {
         let _ = std::fs::set_permissions(&paths.uv, std::fs::Permissions::from_mode(0o755));
     }
     let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::write(uv_version_file(paths), UV_VERSION).map_err(LocalError::io("installing uv"))?;
     Ok(())
 }
 
@@ -444,6 +474,29 @@ mod tests {
         assert!(p.python.starts_with("/x/runtime/venv"));
         assert!(p.uv.starts_with("/x/runtime/bin"));
         assert!(status(&p).is_none());
+    }
+
+    #[test]
+    fn every_platform_has_a_pinned_checksum() {
+        for asset in [
+            "uv-x86_64-unknown-linux-gnu.tar.gz",
+            "uv-aarch64-unknown-linux-gnu.tar.gz",
+            "uv-x86_64-apple-darwin.tar.gz",
+            "uv-aarch64-apple-darwin.tar.gz",
+            "uv-x86_64-pc-windows-msvc.zip",
+            "uv-aarch64-pc-windows-msvc.zip",
+        ] {
+            let sha = uv_sha256(asset).expect(asset);
+            assert_eq!(sha.len(), 64);
+            assert!(sha.bytes().all(|b| b.is_ascii_hexdigit()));
+        }
+        if let Ok(asset) = uv_asset() {
+            assert!(uv_sha256(asset).is_some());
+        }
+        for p in PACKAGES.iter().chain([&TORCH, &BITSANDBYTES]) {
+            assert!(p.contains("=="), "{p} isn't pinned");
+        }
+        assert_eq!(PYTHON_VERSION.split('.').count(), 3);
     }
 
     #[test]

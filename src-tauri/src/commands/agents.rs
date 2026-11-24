@@ -89,7 +89,9 @@ pub async fn pick_workspace(
     let advice = chummy_sandbox::workspace_advice(&path);
     let mut msg = format!(
         "{}\n\nThis agent will be able to read, create, change and delete files in this folder and its \
-         subfolders. It won't be able to see anything outside it.",
+         subfolders. It won't be able to see anything outside it.\n\nFiles the agent writes come from a model. \
+         Check them before you open, run or share them, especially scripts, programs, shortcuts and project \
+         settings (like a .git or .vscode folder): opening those outside Chummy isn't sandboxed.",
         path.display()
     );
     if !advice.is_empty() {

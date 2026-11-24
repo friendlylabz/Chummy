@@ -484,3 +484,40 @@ impl StdoutStream for ChannelOut {
         Box::new(self.clone())
     }
 }
+
+/// Compiles and runs a tiny WebAssembly function with the same engine
+/// setup tools use. The release workflow runs the signed macOS app with
+/// `--self-test` to make sure the OS lets Chummy compile code (the hardened
+/// runtime needs the JIT entitlements for that).
+pub fn self_test() -> Result<(), String> {
+    // (module (func (export "answer") (result i32) i32.const 42))
+    const WASM: &[u8] = &[
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, // header
+        0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f, // type: () -> i32
+        0x03, 0x02, 0x01, 0x00, // function 0 has type 0
+        0x07, 0x0a, 0x01, 0x06, b'a', b'n', b's', b'w', b'e', b'r', 0x00, 0x00, // export
+        0x0a, 0x06, 0x01, 0x04, 0x00, 0x41, 0x2a, 0x0b, // code: i32.const 42
+    ];
+    let mut cfg = Config::new();
+    cfg.epoch_interruption(true);
+    let engine = Engine::new(&cfg).map_err(|e| e.to_string())?;
+    let module = Module::new(&engine, WASM).map_err(|e| e.to_string())?;
+    let mut store = Store::new(&engine, ());
+    store.set_epoch_deadline(1_000_000);
+    let instance = wasmtime::Instance::new(&mut store, &module, &[]).map_err(|e| e.to_string())?;
+    let answer = instance
+        .get_typed_func::<(), i32>(&mut store, "answer")
+        .map_err(|e| e.to_string())?;
+    match answer.call(&mut store, ()).map_err(|e| e.to_string())? {
+        42 => Ok(()),
+        n => Err(format!("expected 42, got {n}")),
+    }
+}
+
+#[cfg(test)]
+mod self_test_tests {
+    #[test]
+    fn the_self_test_passes() {
+        super::self_test().unwrap();
+    }
+}

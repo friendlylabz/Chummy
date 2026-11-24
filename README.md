@@ -82,8 +82,9 @@ until you say so.
   See [docs/tool-format.md](docs/tool-format.md).
 - **Model block with tools.** Ask the model has outputs **Answer**,
   **Tool call** (fires instead of Answer when the model calls a tool),
-  **Reasoning** and **Failed**. Each block picks its own tools, which keeps
-  prompts short for small models. **Tool handling** is *Native* (the
+  **Reasoning** and **Failed**. Each block uses the agent's tools and can
+  disable some or all of them (never turn more on), which keeps prompts short
+  for small models. **Tool handling** is *Native* (the
   server's tool calling, the default), *Prompted* (tools described in the
   system message and calls parsed from the text, for models or servers
   without tool calling) or *Off* (the loop handles tools itself with
@@ -398,7 +399,7 @@ OpenAI-compatible endpoint (127.0.0.1, random bearer token, offline).
 8. **Formatted replies (Markdown and math), encrypted and configurable logs
    with an exportable key, and answer length per model.** Done.
 9. **Inherited settings: tools follow the app and the agent, with an
-   inherit / on / off override per block; answer length and temperature
+   inherit / on / off override per block (since v0.1.1 blocks can only turn tools off); answer length and temperature
    follow the model unless a block sets them. Blank clarifying questions
    fixed.** Done.
 10. **A new default assistant: one go if it can, otherwise the whole plan

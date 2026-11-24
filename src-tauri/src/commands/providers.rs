@@ -148,6 +148,11 @@ pub async fn save_provider(
             &[("address", &config.base_url)],
         );
     }
+    if config.kind != ProviderKind::Local
+        && !saved_key_may_go(&app, window.label(), &state, &config, &api_key).await
+    {
+        return Err(format!("Not saved. {KEY_REFUSED}"));
+    }
     let existing = state.settings();
     // Local models are made only by downloading one (commands::local), which
     // decides their folder; a window can't make one up or point an
@@ -242,6 +247,87 @@ pub fn set_default_provider(
 }
 
 /// The key to use for a draft: the one typed in, else the stored one.
+/// scheme://host:port of an address, to tell whether it's the same server.
+fn origin(url: &str) -> Option<String> {
+    let u = tauri::Url::parse(url).ok()?;
+    Some(format!(
+        "{}://{}:{}",
+        u.scheme(),
+        u.host_str()?.to_ascii_lowercase(),
+        u.port_or_known_default()?
+    ))
+}
+
+/// Before a connection's saved API key goes to a different server than the
+/// one it was saved for, asks natively. True: go ahead (same server, no
+/// saved key, a key was typed, or the user agreed).
+async fn saved_key_may_go(
+    app: &AppHandle,
+    window: &str,
+    state: &AppState,
+    cfg: &ProviderConfig,
+    typed: &Option<String>,
+) -> bool {
+    if typed.as_deref().is_some_and(|k| !k.trim().is_empty()) || cfg.id.is_empty() {
+        return true;
+    }
+    let s = state.settings();
+    let Some(saved) = s.provider(&cfg.id) else {
+        return true;
+    };
+    if saved.kind == ProviderKind::Local
+        || origin(&saved.base_url) == origin(&cfg.base_url)
+        || !state.has_secret(&saved.secret_key())
+    {
+        return true;
+    }
+    let host = |u: &str| {
+        tauri::Url::parse(u)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_string))
+            .unwrap_or_else(|| u.to_string())
+    };
+    // Asked once per connection and server until Chummy restarts, so
+    // listing models, testing and saving don't each ask again.
+    static ALLOWED: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+    let pair = (cfg.id.clone(), origin(&cfg.base_url).unwrap_or_default());
+    if ALLOWED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(&pair)
+    {
+        return true;
+    }
+    let (old, new) = (host(&saved.base_url), host(&cfg.base_url));
+    let msg = format!(
+        "{}\n\nThe API key saved for “{}” was given for {old}. This address is a different server: {new}.\n\n\
+         Anyone running that server would get your key. Only send it if you changed the address yourself and \
+         trust the new server; otherwise type the key for the new server instead.",
+        cfg.base_url, saved.name
+    );
+    let ok = crate::dialogs::confirm(
+        app,
+        window,
+        &format!("Send your saved API key to {new}?"),
+        &msg,
+        "Send it",
+        true,
+    )
+    .await;
+    if ok {
+        ALLOWED.lock().unwrap_or_else(|e| e.into_inner()).push(pair);
+        chummy_log::system::log(
+            chummy_log::system::Level::Warn,
+            "security",
+            format!("Saved API key of {} allowed for a new address", saved.name),
+            &[("address", &cfg.base_url)],
+        );
+    }
+    ok
+}
+
+const KEY_REFUSED: &str = "The saved API key wasn't sent to the new address. Type the key for that server, or change the address back.";
+
 fn key_for(state: &AppState, cfg: &ProviderConfig, typed: Option<String>) -> Option<String> {
     typed.filter(|k| !k.trim().is_empty()).or_else(|| {
         (!cfg.id.is_empty())
@@ -253,6 +339,8 @@ fn key_for(state: &AppState, cfg: &ProviderConfig, typed: Option<String>) -> Opt
 /// Lists models offered by a (possibly unsaved) connection.
 #[tauri::command]
 pub async fn list_models(
+    app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, AppState>,
     config: ProviderConfig,
     api_key: Option<String>,
@@ -265,6 +353,11 @@ pub async fn list_models(
         && let Some(why) = chummy_llm::endpoint_problem(&cfg.base_url)
     {
         return Err(why);
+    }
+    if cfg.kind != ProviderKind::Local
+        && !saved_key_may_go(&app, window.label(), &state, &cfg, &api_key).await
+    {
+        return Err(KEY_REFUSED.into());
     }
     let key = key_for(&state, &cfg, api_key);
     let client = Client::new(&cfg, key).map_err(err)?;
@@ -282,6 +375,7 @@ pub struct TestOutcome {
 #[tauri::command]
 pub async fn test_provider(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, AppState>,
     config: ProviderConfig,
     api_key: Option<String>,
@@ -306,6 +400,9 @@ pub async fn test_provider(
     } else {
         if let Some(why) = chummy_llm::endpoint_problem(&config.base_url) {
             return Err(why);
+        }
+        if !saved_key_may_go(&app, window.label(), &state, &config, &api_key).await {
+            return Err(KEY_REFUSED.into());
         }
         let key = key_for(&state, &config, api_key);
         (config, key)
@@ -337,6 +434,24 @@ pub async fn test_provider(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn origins_tell_servers_apart() {
+        use super::origin;
+        assert_eq!(
+            origin("https://api.example.com/v1"),
+            origin("https://API.example.com:443/other")
+        );
+        assert_ne!(
+            origin("https://api.example.com/v1"),
+            origin("https://evil.example/v1")
+        );
+        assert_ne!(
+            origin("http://10.0.0.2:8000/v1"),
+            origin("http://10.0.0.2:8001/v1")
+        );
+        assert_ne!(origin("http://host/v1"), origin("https://host/v1"));
+    }
     use super::*;
 
     #[test]

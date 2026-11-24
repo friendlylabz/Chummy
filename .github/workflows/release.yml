@@ -15,7 +15,7 @@ on:
       tag:
         description: "Version to release (becomes the tag), like v0.1.0"
         required: true
-        default: "v0.1.0"
+        default: "v0.1.1"
 
 permissions:
   contents: write
@@ -89,6 +89,19 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      # The signed Mac app must be allowed to compile WebAssembly (tools),
+      # which the hardened runtime only permits with our entitlements. Run
+      # the real bundle's self-test on the Intel build (the Apple Silicon one
+      # can't run on this runner); a failure stops the release from being
+      # published.
+      - name: macOS self-test of the signed app
+        if: matrix.args == '--target x86_64-apple-darwin'
+        run: |
+          app=$(find target/x86_64-apple-darwin/release/bundle/macos -maxdepth 1 -name '*.app' | head -1)
+          echo "Checking $app"
+          codesign -d --entitlements - --xml "$app" | grep -q allow-unsigned-executable-memory
+          "$app/Contents/MacOS/chummy" --self-test
 
   # Publish only once every platform has built and uploaded.
   publish:

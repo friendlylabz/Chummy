@@ -26,6 +26,20 @@ use commands::{
 use state::AppState;
 
 pub fn run() {
+    // `chummy --self-test`: checks that this build may compile WebAssembly
+    // (on macOS the hardened runtime needs the JIT entitlements), then exits.
+    if std::env::args().any(|a| a == "--self-test") {
+        match chummy_tools::host::self_test() {
+            Ok(()) => {
+                println!("chummy self-test: ok");
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("chummy self-test failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
     let app = tauri::Builder::default()
         // First, so a second launch only focuses this one: two copies would
         // run the same scheduled jobs and write the same files.

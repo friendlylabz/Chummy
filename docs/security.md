@@ -140,11 +140,13 @@ without noticing.
 
 - A tool is offered only when it is on **app-wide**: tools on in Permissions
   and the tool on in Settings → Tools. Nothing in a loop can get past this.
-- Then the **agent's** switch decides. Loop blocks inherit it by default; a
-  block can turn a tool **on** for itself even when it is off for the agent
-  (the run shows “This block turns on …, which is off for this agent.”), or
-  **off**. The same goes for the block's internet switch, which can never get
-  past Internet access in Permissions or the tool's own internet switch.
+- Then the **agent's** switch decides. Loop blocks use the agent's tools; a
+  block can only **disable** tools for itself (all of them, or chosen ones),
+  never turn on one the agent has off. The same goes for the block's internet
+  switch, which can only turn internet off. A loop downloaded from someone
+  else therefore can't give itself more than the agent allows. (Until
+  v0.1.1 a block could also turn a tool on; old loops that did now just
+  use the agent's setting.)
 - The built-in loops only give tools to the blocks that do the work; checks,
   plans and notes have tools off.
 - Calls still ask first as before (tools set to ask, and online calls when
@@ -351,6 +353,36 @@ Fixed:
   empty) panicked the setup task and left the window waiting; ids no longer
   silently become all zeros if the system's random source fails, and the
   workspace token refuses instead.
+
+### Decisions after the audit (v0.1.1)
+
+- **Saved API keys don't follow a changed address.** If a model
+  connection's address moves to a different server (scheme, host or port)
+  and its saved key would be sent there, Chummy asks first in a native
+  dialog that a window can't answer for you. Typing the key again counts as
+  consent. A yes is remembered for that connection and server until Chummy
+  quits.
+- **Per-block tools are disable-only** (see Tool switches above).
+- **Turning off "Ask me before each use"** for a risky tool (one that writes
+  files, runs commands or goes online) needs a native confirmation.
+- **Workspaces stay the agent's to change.** Choosing a folder now warns
+  that files the agent writes come from a model and should be checked
+  before being opened, run or shared outside Chummy, especially scripts,
+  programs, shortcuts and project settings such as `.git` or `.vscode`.
+- **Pinned engine downloads.** The built-in engine's uv is a fixed release
+  checked against SHA-256 sums built into Chummy (before: the latest
+  release, checked against a sum downloaded from the same place). Python,
+  PyTorch and the packages are exact versions, and the packages'
+  dependencies can't be newer than the pin date (`--exclude-newer`; not
+  applied to PyTorch's own index, which publishes no dates).
+  `scripts/update-engine-pins.py` moves every pin to the latest version.
+- **Custom data folders on Windows** get a warning in Security and Privacy:
+  Chummy can't lock those down there, so other accounts may be able to read
+  or change settings and logs.
+- **macOS** builds are signed with the entitlements Wasmtime needs under
+  the hardened runtime (`allow-jit`, `allow-unsigned-executable-memory`);
+  without them v0.1.0 crashed when setting up tools. The release workflow
+  now runs the signed app's `--self-test` before publishing.
 
 ## Known risks and what to do next
 

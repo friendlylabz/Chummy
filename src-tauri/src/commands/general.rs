@@ -101,6 +101,9 @@ pub struct AppInfo {
     pub data_dir_custom: bool,
     /// Only you can open it (Unix: 0700, everything inside private too).
     pub data_dir_locked: bool,
+    /// Windows with a `--data-dir` folder: Chummy doesn't change Windows
+    /// permissions, so others on the computer may be able to open it.
+    pub data_dir_maybe_shared: bool,
     /// Set if settings had to be recovered from a backup or reset at startup.
     pub recovery: Option<Recovery>,
 }
@@ -112,6 +115,8 @@ pub fn app_info(app: AppHandle, state: State<'_, AppState>) -> AppInfo {
     AppInfo {
         version: env!("CARGO_PKG_VERSION"),
         data_dir_custom: default.as_deref() != Some(state.dirs.root.as_path()),
+        data_dir_maybe_shared: cfg!(windows)
+            && default.as_deref() != Some(state.dirs.root.as_path()),
         data_dir_locked: chummy_store::is_locked(&state.dirs.root),
         data_dir: state.dirs.root.clone(),
         recovery: state.recovery.clone(),

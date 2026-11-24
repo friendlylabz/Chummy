@@ -283,14 +283,16 @@ fn d_outline_limit() -> u32 {
     5
 }
 
-/// A block's override of a setting the app and agent decide: inherit what
-/// they say (the default), or turn it on or off for this block.
+/// A block's say over a setting the app and agent decide: follow them (the
+/// default), or turn it off for this block. A block can only narrow what the
+/// agent may do, never widen it, so a loop file from someone else can't turn
+/// on tools or internet you turned off. (Loops from before this rule may say
+/// "on"; that now reads as "inherit".)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Switch {
     #[default]
     Inherit,
-    On,
     Off,
 }
 
@@ -303,7 +305,6 @@ impl Switch {
     pub fn resolve(self, agent: bool) -> bool {
         match self {
             Switch::Inherit => agent,
-            Switch::On => true,
             Switch::Off => false,
         }
     }
@@ -322,8 +323,9 @@ impl<'de> Deserialize<'de> for Switch {
             Any::Bool(true) => Switch::Inherit,
             Any::Bool(false) => Switch::Off,
             Any::Name(n) => match n.as_str() {
-                "inherit" => Switch::Inherit,
-                "on" => Switch::On,
+                // "on" could once turn something on over the agent's off;
+                // blocks can't do that any more.
+                "inherit" | "on" => Switch::Inherit,
                 "off" => Switch::Off,
                 other => {
                     return Err(serde::de::Error::custom(format!(
@@ -335,10 +337,10 @@ impl<'de> Deserialize<'de> for Switch {
     }
 }
 
-/// Which tools a block may use: a switch for all of them, and switches for
-/// single tools. A tool is used when its switch says so: inherit means "if
-/// the agent may use it"; on means "even if it's off for the agent". The
-/// app-wide switches (Permissions and Settings → Tools) always apply.
+/// Which tools a block turns off: a switch for all of them, and switches for
+/// single tools. A tool is offered when its switch is inherit and the agent
+/// may use it; off means never in this block. The app-wide switches (Security
+/// and Privacy, Settings → Tools) always apply.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ToolSwitches {
     pub all: Switch,
@@ -837,7 +839,7 @@ pub struct ChoiceOption {
 
 /// Inherit / On / Off, as a three-way choice.
 fn switch_choice(inherit: &'static str) -> ParamKind {
-    choice(&[("inherit", inherit), ("on", "On"), ("off", "Off")])
+    choice(&[("inherit", inherit), ("off", "Off")])
 }
 
 fn choice(options: &[(&'static str, &'static str)]) -> ParamKind {
@@ -989,9 +991,9 @@ pub fn catalog() -> Vec<BlockInfo> {
                     optional: true,
                     ..p(
                         "tools",
-                        "Tools",
+                        "Disable tools",
                         K::Tools,
-                        "Same as the agent offers the tools the agent allows. Set a tool On to offer it even when the agent's switch is off, or Off to never offer it here. A tool off app-wide (Security and Privacy or Settings → Tools) is never offered. Fewer tools means a shorter prompt and fewer mistakes.",
+                        "The block offers the tools the agent allows. Disable all or some of them for this block; a block can't turn on a tool the agent has off. A tool off app-wide (Security and Privacy or Settings → Tools) is never offered. Fewer tools means a shorter prompt and fewer mistakes.",
                     )
                 },
                 p(
@@ -1030,7 +1032,7 @@ pub fn catalog() -> Vec<BlockInfo> {
                     "network",
                     "Tools may use the internet",
                     switch_choice("Same as the agent"),
-                    "Same as the agent uses the agent's Internet switch. On works even when the agent's is off; Off never. Internet access in Settings → Security and Privacy and the tool's own internet switch must always allow it too.",
+                    "Same as the agent uses the agent's Internet switch; Off turns the internet off for this block. A block can't turn it on. Internet access in Settings → Security and Privacy and the tool's own internet switch must always allow it too.",
                 ),
                 p(
                     "on_limit",
@@ -1123,16 +1125,16 @@ pub fn catalog() -> Vec<BlockInfo> {
                     optional: true,
                     ..p(
                         "tools",
-                        "Tools",
+                        "Disable tools",
                         K::Tools,
-                        "Tools the text may call: the agent's by default, or set per tool. A tool off app-wide is never run.",
+                        "Tools the text may call: the agent's, minus any you disable here. A tool off app-wide is never run.",
                     )
                 },
                 p(
                     "network",
                     "Tools may use the internet",
                     switch_choice("Same as the agent"),
-                    "Same as the agent uses the agent's Internet switch. On works even when the agent's is off; Off never. Internet access in Settings → Security and Privacy and the tool's own internet switch must always allow it too.",
+                    "Same as the agent uses the agent's Internet switch; Off turns the internet off for this block. A block can't turn it on. Internet access in Settings → Security and Privacy and the tool's own internet switch must always allow it too.",
                 ),
             ],
             json!({}),

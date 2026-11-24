@@ -1,6 +1,6 @@
 // Tests for block switches. Run: npm run test:ui
 import assert from "node:assert/strict";
-import { describeTools, readSwitch, readTools, switchFor, writeTools } from "./switches.ts";
+import { describeTools, isDisabled, readSwitch, readTools, setDisabled, switchFor, writeTools } from "./switches.ts";
 
 let n = 0;
 function test(name: string, f: () => void) {
@@ -15,13 +15,29 @@ test("left out means the agent's tools", () => {
   assert.equal(describeTools(undefined), "Agent's tools");
 });
 
-test("per-tool switches round-trip", () => {
-  const t = { all: "off" as const, each: { calc: "on" as const, fetch: "off" as const } };
-  // A tool set the same as "all" isn't stored.
-  assert.deepEqual(writeTools(t), { all: "off", each: { calc: "on" } });
-  assert.equal(switchFor(readTools(writeTools(t)), "calc"), "on");
-  assert.equal(switchFor(readTools(writeTools(t)), "fetch"), "off");
-  assert.equal(describeTools(writeTools(t)), "1 tool");
+test("tools are disabled one by one", () => {
+  let t = readTools(undefined);
+  t = setDisabled(t, "run_shell", true);
+  assert.deepEqual(writeTools(t), { all: "inherit", each: { run_shell: "off" } });
+  assert.ok(isDisabled(readTools(writeTools(t)), "run_shell"));
+  assert.ok(!isDisabled(readTools(writeTools(t)), "calc"));
+  assert.equal(describeTools(writeTools(t)), "Agent's tools, 1 disabled");
+  // Re-enabling stores nothing (it's the same as "all").
+  assert.equal(writeTools(setDisabled(t, "run_shell", false)), undefined);
+});
+
+test("all disabled, with exceptions", () => {
+  const t = setDisabled({ all: "off", each: {} }, "calc", false);
+  assert.deepEqual(writeTools(t), { all: "off", each: { calc: "inherit" } });
+  assert.ok(!isDisabled(t, "calc") && isDisabled(t, "other"));
+  assert.equal(describeTools("off"), "No tools");
+  assert.equal(describeTools(writeTools(t)), "Tools off but 1");
+});
+
+test("blocks can't turn things on: old \"on\" follows the agent", () => {
+  assert.equal(readSwitch("on"), "inherit");
+  assert.deepEqual(readTools("on"), { all: "inherit", each: {} });
+  assert.deepEqual(readTools({ all: "off", each: { calc: "on" } }).each, { calc: "inherit" });
 });
 
 test("old forms still read", () => {

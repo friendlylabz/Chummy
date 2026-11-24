@@ -335,9 +335,13 @@
   </p>
   <div class="mono small path" data-selectable>{info?.data_dir}</div>
   {#if info}
-    <p class="small lock" class:warn-text={!info.data_dir_locked}>
-      <Icon name={info.data_dir_locked ? "shield" : "alert"} size={14} />
-      {#if info.data_dir_locked}
+    <p class="small lock" class:warn-text={!info.data_dir_locked || info.data_dir_maybe_shared}>
+      <Icon name={info.data_dir_locked && !info.data_dir_maybe_shared ? "shield" : "alert"} size={14} />
+      {#if info.data_dir_maybe_shared}
+        On Windows Chummy doesn't change a folder's permissions, so other people with an account on this computer
+        may be able to see or change your settings, chats and logs here (run logs stay encrypted). Chummy's default
+        folder, inside your user profile, is private to you.
+      {:else if info.data_dir_locked}
         Only you can open it: Chummy keeps the folder and everything in it private to your user account (folders 700,
         files 600 on macOS and Linux) and checks again every time it starts.
       {:else}

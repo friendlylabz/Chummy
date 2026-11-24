@@ -1,15 +1,16 @@
 /**
- * Block switches that inherit. A block's tools (and its tools' internet) are
- * "inherit" by default: the agent's own switches decide. "on" turns something
- * on for that block even when the agent's switch is off; "off" never. The
- * app-wide switches (Security and Privacy, Settings → Tools) always apply on top.
+ * Block switches. A block's tools (and its tools' internet) follow the
+ * agent's own switches by default ("inherit"); a block can only turn things
+ * off ("off"), never on, so a loop from someone else can't widen what an
+ * agent may do. The app-wide switches (Security and Privacy, Settings →
+ * Tools) always apply on top. Older loops may say "on": it reads as "inherit".
  *
- * In a loop file, `tools` is a switch for all tools ("inherit" | "on" | "off"),
- * or `{ all, each: { tool: switch } }` when single tools differ. Left out, it
+ * In a loop file, `tools` is a switch for all tools ("inherit" | "off"), or
+ * `{ all, each: { tool: switch } }` when single tools differ. Left out, it
  * means "inherit". The same shape as `ToolSwitches` in crates/flow/src/blocks.rs.
  */
 
-export type Switch = "inherit" | "on" | "off";
+export type Switch = "inherit" | "off";
 
 export interface ToolSwitches {
   all: Switch;
@@ -17,7 +18,8 @@ export interface ToolSwitches {
 }
 
 function asSwitch(v: unknown, fallback: Switch = "inherit"): Switch {
-  if (v === "inherit" || v === "on" || v === "off") return v;
+  if (v === "inherit" || v === "off") return v;
+  if (v === "on") return "inherit";
   if (v === true) return "inherit";
   if (v === false) return "off";
   return fallback;
@@ -52,19 +54,22 @@ export function readSwitch(v: unknown): Switch {
   return asSwitch(v);
 }
 
+/** Whether a tool is disabled in this block. */
+export function isDisabled(t: ToolSwitches, tool: string): boolean {
+  return switchFor(t, tool) === "off";
+}
+
+/** Disables or re-enables one tool (relative to "all"). */
+export function setDisabled(t: ToolSwitches, tool: string, disabled: boolean): ToolSwitches {
+  return { all: t.all, each: { ...t.each, [tool]: disabled ? "off" : "inherit" } };
+}
+
 /** Short text for a block's summary line. */
 export function describeTools(v: unknown): string {
   const t = readTools(v);
-  const n = Object.keys(t.each).length;
-  const base = t.all === "inherit" ? "Agent's tools" : t.all === "on" ? "All tools" : n ? "" : "No tools";
-  if (!n) return base;
-  const on = Object.values(t.each).filter((s) => s !== "off").length;
-  if (t.all === "off") return `${on} tool${on === 1 ? "" : "s"}`;
-  return `${base}, ${n} changed`;
+  const off = Object.values(t.each).filter((s) => s === "off").length;
+  const kept = Object.values(t.each).filter((s) => s !== "off").length;
+  if (t.all === "off") return kept ? `Tools off but ${kept}` : "No tools";
+  if (!off) return "Agent's tools";
+  return `Agent's tools, ${off} disabled`;
 }
-
-export const switchLabels: Record<Switch, string> = {
-  inherit: "Same as the agent",
-  on: "On",
-  off: "Off",
-};

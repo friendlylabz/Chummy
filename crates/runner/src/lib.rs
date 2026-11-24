@@ -773,7 +773,7 @@ mod tests {
 
     #[test]
     fn tools_need_every_switch_and_online_tools_ask() {
-        use chummy_flow::Switch::{Inherit, Off, On};
+        use chummy_flow::Switch::{Inherit, Off};
         // Tools off in the app: nothing offered, whatever else says.
         let mut s = all_on();
         s.permissions.tools = false;
@@ -798,7 +798,8 @@ mod tests {
         assert!(!h.net_policy(&manifest("fetch", true), Off).allowed);
         assert!(!h.must_confirm("fetch", Off));
 
-        // The agent's switches are what blocks inherit; a block can turn them on.
+        // The agent's switches are what blocks inherit; a block can only turn
+        // things off.
         let mut s = all_on();
         s.agent = Some(AgentGrant {
             tools: ["fetch".to_string()].into(),
@@ -808,11 +809,10 @@ mod tests {
         assert!(!h.agent_allows("calc") && h.agent_allows("fetch"));
         assert!(
             h.tool_info("calc").is_some(),
-            "on app-wide, so a block may turn it on"
+            "on app-wide (the engine still won't offer it: the agent has it off)"
         );
         let why = h.net_policy(&manifest("fetch", true), Inherit);
         assert!(!why.allowed && why.refusal.contains("this agent"));
-        assert!(h.net_policy(&manifest("fetch", true), On).allowed);
         // No agent (a test run without one): no tools.
         let mut s = all_on();
         s.agent = None;
@@ -826,12 +826,12 @@ mod tests {
         let mut s = all_on();
         s.tool_grants.get_mut("fetch").unwrap().network = false;
         let h = AgentHost::new(Arc::new(NoServices), s);
-        assert!(!h.must_confirm("fetch", On));
-        assert!(!h.net_policy(&manifest("fetch", true), On).allowed);
+        assert!(!h.must_confirm("fetch", Inherit));
+        assert!(!h.net_policy(&manifest("fetch", true), Inherit).allowed);
         let mut s = all_on();
         s.permissions.network = false;
         let h = AgentHost::new(Arc::new(NoServices), s);
-        assert!(!h.net_policy(&manifest("fetch", true), On).allowed);
+        assert!(!h.net_policy(&manifest("fetch", true), Inherit).allowed);
         // A tool off in Settings → Tools isn't there for any block.
         let mut s = all_on();
         s.tool_grants.get_mut("calc").unwrap().enabled = false;
