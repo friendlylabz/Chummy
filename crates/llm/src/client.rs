@@ -90,7 +90,7 @@ impl Client {
                 "choose a model for this connection".into(),
             ));
         }
-        let http = reqwest::Client::builder()
+        let http = chummy_http::builder()
             .connect_timeout(Duration::from_secs(10))
             // Time between bytes, not total: local models can think for a while.
             .read_timeout(Duration::from_secs(300))

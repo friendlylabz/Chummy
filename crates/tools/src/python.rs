@@ -88,7 +88,7 @@ pub async fn install_python(
         .get(PYTHON_URL)
         .send()
         .await
-        .map_err(|_| ToolError::Network("github.com".into()))?;
+        .map_err(|e| ToolError::Network(chummy_http::reached("github.com".into(), &e)))?;
     if !resp.status().is_success() {
         return Err(ToolError::Runtime(format!(
             "github.com answered {} when downloading Python",
@@ -99,7 +99,10 @@ pub async fn install_python(
     let mut bytes = Vec::with_capacity(total as usize);
     let mut s = resp.bytes_stream();
     while let Some(chunk) = s.next().await {
-        bytes.extend_from_slice(&chunk.map_err(|_| ToolError::Network("github.com".into()))?);
+        bytes.extend_from_slice(
+            &chunk
+                .map_err(|e| ToolError::Network(chummy_http::reached("github.com".into(), &e)))?,
+        );
         on(bytes.len() as u64, total);
         if bytes.len() as u64 > 4 * PYTHON_DOWNLOAD_BYTES {
             return Err(ToolError::Runtime(

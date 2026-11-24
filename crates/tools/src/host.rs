@@ -322,7 +322,7 @@ pub(crate) fn parse_done(done: Option<Json>) -> Result<Result<Json, (String, Str
 /// The client for tools' web requests: it never follows redirects by
 /// itself, so every hop is checked (see [`crate::net`]).
 pub(crate) fn web_client() -> Result<reqwest::Client, ToolError> {
-    reqwest::Client::builder()
+    chummy_http::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(15))
         .user_agent(concat!("Chummy/", env!("CARGO_PKG_VERSION"), " (tool)"))

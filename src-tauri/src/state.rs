@@ -421,7 +421,7 @@ impl AppState {
 
 /// The HTTP client for the tool runtime's downloads.
 pub fn tools_http() -> reqwest::Client {
-    reqwest::Client::builder()
+    chummy_http::builder()
         .connect_timeout(std::time::Duration::from_secs(15))
         .user_agent(concat!("Chummy/", env!("CARGO_PKG_VERSION")))
         .build()

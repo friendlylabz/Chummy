@@ -1,0 +1,19 @@
+[package]
+name = "chummy-http"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Chummy's HTTP clients: the OS verifies certificates, and errors say what went wrong."
+
+[dependencies]
+reqwest.workspace = true
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-platform-verifier = "0.6"
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

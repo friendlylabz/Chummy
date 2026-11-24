@@ -210,7 +210,7 @@ pub async fn http_request(
         // no effect, but hosts the proxy skips (NO_PROXY) connect directly.
         let pinned;
         let client = if !addrs.is_empty() {
-            pinned = reqwest::Client::builder()
+            pinned = chummy_http::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .connect_timeout(Duration::from_secs(15))
                 .user_agent(concat!("Chummy/", env!("CARGO_PKG_VERSION"), " (tool)"))

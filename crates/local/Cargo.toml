@@ -13,6 +13,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 reqwest.workspace = true
+chummy-http.workspace = true
 tokio.workspace = true
 futures-util.workspace = true
 chummy-llm.workspace = true

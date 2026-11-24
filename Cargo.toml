@@ -27,6 +27,7 @@ chummy-store = { path = "crates/store" }
 chummy-local = { path = "crates/local" }
 chummy-runner = { path = "crates/runner" }
 chummy-log = { path = "crates/log" }
+chummy-http = { path = "crates/http" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -90,6 +90,10 @@ jobs:
           echo "CHUMMY_TEST_DOCKER_IMAGE=python:3.14-slim" >> "$GITHUB_ENV"
       - name: Test
         run: cargo test --workspace --locked
+      # Real HTTPS to github.com and PyPI with the operating system checking
+      # certificates (Windows fetches missing root certificates on demand).
+      - name: HTTPS with the OS certificate verifier
+        run: cargo test -p chummy-http --locked -- --ignored
       # Apple Silicon kills apps under the hardened runtime that run JIT code
       # without these entitlements ("Code Signature Invalid"; v0.1.0 crashed
       # setting up tools). Intel Macs don't enforce it, so this runner can

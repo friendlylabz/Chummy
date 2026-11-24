@@ -193,7 +193,7 @@ async fn fetch_file(
     let resp = rq
         .send()
         .await
-        .map_err(|_| LocalError::Network(hub.base().into()))?;
+        .map_err(|e| LocalError::Network(chummy_http::reached(hub.base().into(), &e)))?;
     let status = resp.status().as_u16();
     // A 206 must continue exactly where the partial file ends.
     if status == 206 {
@@ -234,7 +234,8 @@ async fn fetch_file(
                 let _ = file.flush().await;
                 return Err(LocalError::Cancelled);
             }
-            let chunk = chunk.map_err(|_| LocalError::Network(hub.base().into()))?;
+            let chunk = chunk
+                .map_err(|e| LocalError::Network(chummy_http::reached(hub.base().into(), &e)))?;
             hasher.update(&chunk);
             file.write_all(&chunk)
                 .await

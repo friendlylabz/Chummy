@@ -157,14 +157,12 @@ impl Hub {
             .request(url)
             .send()
             .await
-            .map_err(|_| LocalError::Network(self.base.clone()))?;
+            .map_err(|e| LocalError::Network(chummy_http::reached(self.base.clone(), &e)))?;
         let status = resp.status().as_u16();
         match status {
-            200..=299 => Ok(Some(
-                resp.text()
-                    .await
-                    .map_err(|_| LocalError::Network(self.base.clone()))?,
-            )),
+            200..=299 => Ok(Some(resp.text().await.map_err(|e| {
+                LocalError::Network(chummy_http::reached(self.base.clone(), &e))
+            })?)),
             404 => Ok(None),
             401 | 403 if self.token.is_some() => {
                 // With a token, 403 usually means the license wasn't accepted.

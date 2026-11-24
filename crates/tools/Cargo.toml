@@ -15,6 +15,7 @@ thiserror.workspace = true
 tokio.workspace = true
 futures-util.workspace = true
 reqwest.workspace = true
+chummy-http.workspace = true
 chummy-sandbox.workspace = true
 toml = { version = "1", default-features = false, features = ["parse", "serde"] }
 sha2 = "0.10"

@@ -112,7 +112,7 @@ pub(crate) fn python_env(cmd: &mut tokio::process::Command) {
 
 /// Shared HTTP client settings.
 pub(crate) fn http_client() -> reqwest::Client {
-    reqwest::Client::builder()
+    chummy_http::builder()
         .connect_timeout(std::time::Duration::from_secs(15))
         .read_timeout(std::time::Duration::from_secs(60))
         .user_agent(concat!("Chummy/", env!("CARGO_PKG_VERSION")))

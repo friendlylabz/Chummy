@@ -384,6 +384,14 @@ Fixed:
   agent can reach the others' files. Turning on internet, or giving a
   potentially unsafe tool, to an agent that shares its folder warns again.
   Under OpenShell, agents in the same folder share its sandbox.
+- **The operating system checks certificates.** Every connection Chummy
+  makes (models, downloads, tools' web requests) has its certificate checked
+  by the OS (Windows' certificate APIs, the macOS Keychain, the system store
+  on Linux), never skipped. Before, Chummy compared against a snapshot of
+  the system's root certificates, which on Windows can miss roots that
+  Windows only fetches when first needed; tool setup then couldn't reach
+  github.com. Connection errors now say why (certificate, proxy, time-out,
+  no connection).
 - **Custom data folders on Windows** get a warning in Security and Privacy:
   Chummy can't lock those down there, so other accounts may be able to read
   or change settings and logs.

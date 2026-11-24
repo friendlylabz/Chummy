@@ -242,7 +242,7 @@ async fn get_bytes(url: &str) -> Result<Vec<u8>, LocalError> {
         .get(url)
         .send()
         .await
-        .map_err(|_| LocalError::Network("github.com".into()))?;
+        .map_err(|e| LocalError::Network(chummy_http::reached("github.com".into(), &e)))?;
     let status = resp.status().as_u16();
     if !(200..300).contains(&status) {
         return Err(LocalError::Http {
@@ -253,7 +253,9 @@ async fn get_bytes(url: &str) -> Result<Vec<u8>, LocalError> {
     let mut out = Vec::new();
     let mut s = resp.bytes_stream();
     while let Some(c) = s.next().await {
-        out.extend_from_slice(&c.map_err(|_| LocalError::Network("github.com".into()))?);
+        out.extend_from_slice(
+            &c.map_err(|e| LocalError::Network(chummy_http::reached("github.com".into(), &e)))?,
+        );
     }
     Ok(out)
 }

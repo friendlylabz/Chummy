@@ -16,20 +16,10 @@ pub enum LlmError {
 
 impl LlmError {
     pub(crate) fn from_reqwest(url: &str, e: reqwest::Error) -> Self {
-        let detail = if e.is_timeout() {
-            "timed out".to_string()
-        } else if e.is_connect() {
-            "connection refused or host not found. Is the server running?".to_string()
-        } else {
-            let mut s = e.to_string();
-            let mut src = std::error::Error::source(&e);
-            while let Some(inner) = src {
-                s.push_str(": ");
-                s.push_str(&inner.to_string());
-                src = inner.source();
-            }
-            s
-        };
+        let mut detail = chummy_http::describe(&e);
+        if detail.starts_with("no connection could be made") || detail.starts_with("its address") {
+            detail.push_str(". Is the server running, and is the address right?");
+        }
         LlmError::Connect {
             url: url.to_string(),
             detail,

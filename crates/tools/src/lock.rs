@@ -187,7 +187,7 @@ async fn download(http: &reqwest::Client, url: &str) -> Result<Vec<u8>, ToolErro
         .get(url)
         .send()
         .await
-        .map_err(|_| ToolError::Network(host.clone()))?;
+        .map_err(|e| ToolError::Network(chummy_http::reached(host.clone(), &e)))?;
     if !resp.status().is_success() {
         return Err(ToolError::Dependencies(format!(
             "{host} answered {} for a package download",
@@ -197,7 +197,9 @@ async fn download(http: &reqwest::Client, url: &str) -> Result<Vec<u8>, ToolErro
     let mut out = Vec::new();
     let mut s = resp.bytes_stream();
     while let Some(chunk) = s.next().await {
-        out.extend_from_slice(&chunk.map_err(|_| ToolError::Network(host.clone()))?);
+        out.extend_from_slice(
+            &chunk.map_err(|e| ToolError::Network(chummy_http::reached(host.clone(), &e)))?,
+        );
         if out.len() as u64 > MAX_WHEEL {
             return Err(ToolError::Dependencies("a package is too large".into()));
         }
