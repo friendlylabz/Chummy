@@ -786,6 +786,7 @@ version = "0.1.0"
 dependencies = [
  "cap-std",
  "dirs 6.0.0",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",
@@ -812,6 +813,7 @@ dependencies = [
 name = "chummy-store"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.3.4",
  "keyring",
  "serde",
  "serde_json",

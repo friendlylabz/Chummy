@@ -43,7 +43,7 @@ pub async fn set_agent_access(
     if network && !agent.network {
         let msg = format!(
             "Tools that “{}” uses will be able to reach the internet, if internet access is also on \
-             in Permissions, for that tool, and in the loop's block.\n\nA web page can contain \
+             in Security and Privacy, for that tool, and in the loop's block.\n\nA web page can contain \
              instructions meant to trick the model. Tools that go online ask you first unless you \
              turned that off.",
             agent.name

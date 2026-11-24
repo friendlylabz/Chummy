@@ -112,8 +112,9 @@ export function inline(raw: string, opts: FormatOptions, stash = new Stash()): s
     stash.put(`<code>${escapeHtml(code.replace(/^ (.*) $/, "$1"))}</code>`),
   );
   if (opts.math) {
-    s = s.replace(/\\\((.+?)\\\)/g, (_, tex: string) => stash.put(renderMath(tex, false)));
-    s = s.replace(/\$\$([^$]+?)\$\$/g, (_, tex: string) => stash.put(renderMath(tex, true)));
+    // Spans are bounded so a crafted reply can't make matching slow.
+    s = s.replace(/\\\((.{1,4000}?)\\\)/g, (_, tex: string) => stash.put(renderMath(tex, false)));
+    s = s.replace(/\$\$([^$]{1,4000}?)\$\$/g, (_, tex: string) => stash.put(renderMath(tex, true)));
     // $…$ only when it can't be money: no space just inside the dollars,
     // and no digit right after the closing one.
     s = s.replace(/(^|[^\\$\w])\$(?![\s$])((?:[^$\n\\]|\\.)*?[^\s\\$])\$(?![\w$])/g, (_, pre: string, tex: string) =>
@@ -121,7 +122,7 @@ export function inline(raw: string, opts: FormatOptions, stash = new Stash()): s
     );
   }
   // Links: [text](url) and bare URLs.
-  s = s.replace(/\[([^\]\n]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, (_, text: string, url: string) =>
+  s = s.replace(/\[([^\]\n]{1,1000})\]\(([^)\s]{1,4000})(?:\s+"[^"\n]{0,1000}")?\)/g, (_, text: string, url: string) =>
     stash.put(link(url, inline(text, { ...opts, math: false }, stash))),
   );
   s = s.replace(/\bhttps?:\/\/[^\s<>()"']+[^\s<>()"'.,;:!?]/g, (url) => stash.put(link(url, escapeHtml(url))));
@@ -319,8 +320,8 @@ export function format(text: string, opts: FormatOptions): string {
     const stash = new Stash();
     const t = text.replace(/\u0000/g, "");
     const withMath = t
-      .replace(/\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]/g, (_, a, b) => stash.put(renderMath(a ?? b, true)))
-      .replace(/\\\((.+?)\\\)/g, (_, tex) => stash.put(renderMath(tex, false)));
+      .replace(/\$\$([\s\S]{1,4000}?)\$\$|\\\[([\s\S]{1,4000}?)\\\]/g, (_, a, b) => stash.put(renderMath(a ?? b, true)))
+      .replace(/\\\((.{1,4000}?)\\\)/g, (_, tex) => stash.put(renderMath(tex, false)));
     return `<p class="plain">${stash.restore(escapeHtml(withMath))}</p>`;
   }
   return blocks(text, opts);

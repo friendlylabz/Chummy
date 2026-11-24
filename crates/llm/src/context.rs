@@ -96,7 +96,10 @@ impl Client {
         if !resp.status().is_success() {
             return None;
         }
-        resp.json().await.ok()
+        let text = crate::client::body_text(resp, crate::client::MAX_SMALL_BYTES)
+            .await
+            .ok()?;
+        serde_json::from_str(&text).ok()
     }
 
     /// Asks the server how long this model's context is. `None`: it

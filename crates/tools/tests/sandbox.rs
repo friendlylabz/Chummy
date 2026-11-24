@@ -453,6 +453,18 @@ async fn timeouts_and_definition_errors() {
     assert!(matches!(e, Err(ToolError::Timeout(2))), "{e:?}");
     assert!(t.elapsed() < Duration::from_secs(10));
 
+    // A tool waiting on stdin is blocked in the host, not running Python,
+    // so only the wall-clock limit stops it.
+    let wait = tool_src("waits", "\n@chummy.tool\ndef waits() -> str:\n    \"\"\"Waits.\"\"\"\n    import sys\n    return sys.stdin.read()\n")
+        .replace("timeout = 5", "timeout = 2");
+    quick_install(&h, &wait).await;
+    let t = std::time::Instant::now();
+    let e = h
+        .run("waits", json!({}), None, NetPolicy::off("off"), vec![])
+        .await;
+    assert!(matches!(e, Err(ToolError::Timeout(2))), "{e:?}");
+    assert!(t.elapsed() < Duration::from_secs(15));
+
     let two = tool_src(
         "two",
         "\n@chummy.tool\ndef a() -> str:\n    \"\"\"A.\"\"\"\n\n@chummy.tool\ndef b() -> str:\n    \"\"\"B.\"\"\"\n",

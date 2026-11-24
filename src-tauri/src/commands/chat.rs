@@ -120,9 +120,7 @@ pub fn active_chat(state: &AppState, agent_id: &str) -> CmdResult<String> {
 }
 
 pub fn msg_id() -> String {
-    let mut b = [0u8; 6];
-    let _ = getrandom::fill(&mut b);
-    b.iter().map(|x| format!("{x:02x}")).collect()
+    chummy_store::random_id(6)
 }
 
 /// An agent's chats (at least one) and which is open.

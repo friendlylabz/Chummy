@@ -117,12 +117,7 @@ fn lock() -> std::sync::MutexGuard<'static, ()> {
 }
 
 fn new_id() -> String {
-    let mut b = [0u8; 6];
-    let _ = getrandom::fill(&mut b);
-    format!(
-        "c-{}",
-        b.iter().map(|x| format!("{x:02x}")).collect::<String>()
-    )
+    format!("c-{}", chummy_store::random_id(6))
 }
 
 fn valid(id: &str) -> Result<(), String> {

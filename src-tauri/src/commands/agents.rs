@@ -30,10 +30,12 @@ fn overlapping_agent<'a>(s: &'a Settings, path: &Path, except: Option<&str>) -> 
         .find(|a| chummy_sandbox::paths_overlap(&a.workspace.path, path))
 }
 
-fn random_hex(n: usize) -> String {
-    let mut b = vec![0u8; n];
-    let _ = getrandom::fill(&mut b);
-    b.iter().map(|x| format!("{x:02x}")).collect()
+/// A one-time token standing for a picked folder: refused if the system
+/// can't give secure random numbers (an all-zero token could be guessed).
+fn token() -> Result<String, String> {
+    let mut b = [0u8; 16];
+    getrandom::fill(&mut b).map_err(|e| format!("No secure random numbers: {e}"))?;
+    Ok(b.iter().map(|x| format!("{x:02x}")).collect())
 }
 
 /// Lets the user pick and confirm a workspace folder for an agent. Returns
@@ -105,7 +107,7 @@ pub async fn pick_workspace(
         return Ok(None);
     }
 
-    let token = random_hex(16);
+    let token = token()?;
     let display = path.display().to_string();
     lock(&state.picked_workspaces).insert(token.clone(), path);
     Ok(Some(PickedWorkspace {
@@ -184,7 +186,7 @@ pub fn save_agent(
     let id = existing
         .as_ref()
         .map(|a| a.id.clone())
-        .unwrap_or_else(|| format!("agent-{}", random_hex(4)));
+        .unwrap_or_else(|| format!("agent-{}", chummy_store::random_id(4)));
     let created_at = existing.as_ref().map(|a| a.created_at).unwrap_or_else(now);
     // New agents start with no tools and no internet; existing ones keep theirs.
     let (tools, network, loop_config) = existing

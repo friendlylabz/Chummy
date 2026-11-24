@@ -69,6 +69,36 @@ impl Jail {
         &self.dir
     }
 
+    /// Opens a file without ever blocking: on Unix with `O_NONBLOCK`, so a
+    /// named pipe (FIFO) planted in the workspace, for example by a tool in
+    /// a container, can't hang Chummy. Then makes sure the opened handle is
+    /// a regular file: checking before opening could be raced.
+    fn open_file(
+        &self,
+        rel: &RelPath,
+        opts: &mut OpenOptions,
+    ) -> Result<cap_std::fs::File, JailError> {
+        #[cfg(unix)]
+        {
+            use cap_std::fs::OpenOptionsExt;
+            opts.custom_flags(libc::O_NONBLOCK);
+        }
+        let file = self
+            .dir
+            .open_with(rel.for_cap(), opts)
+            .map_err(Self::io(rel))?;
+        let meta = file.metadata().map_err(Self::io(rel))?;
+        if !meta.is_file() {
+            let kind = if meta.is_dir() {
+                std::io::ErrorKind::IsADirectory
+            } else {
+                std::io::ErrorKind::InvalidInput
+            };
+            return Err(Self::io(rel)(kind.into()));
+        }
+        Ok(file)
+    }
+
     fn io(path: &RelPath) -> impl FnOnce(std::io::Error) -> JailError + '_ {
         move |source| JailError::Io {
             path: path.to_string(),
@@ -85,17 +115,8 @@ impl Jail {
 
     pub fn read_bytes(&self, path: &str, limit: u64) -> Result<Vec<u8>, JailError> {
         let rel = RelPath::parse(path)?;
-        // Only regular files: opening a named pipe or device would block.
-        let meta = self.dir.metadata(rel.for_cap()).map_err(Self::io(&rel))?;
-        if !meta.is_file() {
-            let kind = if meta.is_dir() {
-                std::io::ErrorKind::IsADirectory
-            } else {
-                std::io::ErrorKind::InvalidInput
-            };
-            return Err(Self::io(&rel)(kind.into()));
-        }
-        let file = self.dir.open(rel.for_cap()).map_err(Self::io(&rel))?;
+        // Only regular files: a named pipe or device would block or never end.
+        let file = self.open_file(&rel, OpenOptions::new().read(true))?;
         let len = file.metadata().map_err(Self::io(&rel))?.len();
         if len > limit {
             return Err(JailError::TooLarge {
@@ -127,12 +148,9 @@ impl Jail {
         {
             self.dir.create_dir_all(parent).map_err(Self::io(&rel))?;
         }
-        let mut opts = OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
-        let mut f = self
-            .dir
-            .open_with(rel.as_path(), &opts)
-            .map_err(Self::io(&rel))?;
+        // Not truncated until it's known to be a regular file.
+        let mut f = self.open_file(&rel, OpenOptions::new().write(true).create(true))?;
+        f.set_len(0).map_err(Self::io(&rel))?;
         f.write_all(contents).map_err(Self::io(&rel))?;
         Ok(())
     }
@@ -227,8 +245,11 @@ mod tests {
         if !ok.is_ok_and(|s| s.success()) {
             return; // no mkfifo here
         }
-        // Without the check this would block forever.
+        // Without the check these would block forever.
         assert!(jail.read_text("pipe", LIMIT).is_err());
+        assert!(jail.write("pipe", b"x").is_err());
+        std::os::unix::fs::symlink("pipe", fifo.with_file_name("to-pipe")).unwrap();
+        assert!(jail.read_text("to-pipe", LIMIT).is_err());
         assert!(jail.read_text(".", LIMIT).is_err());
     }
 

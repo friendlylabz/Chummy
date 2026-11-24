@@ -230,7 +230,14 @@ impl ToolHost {
             let start = instance.get_typed_func::<(), ()>(&mut store, "_start")?;
             start.call_async(&mut store, ()).await
         };
-        let result = run.await;
+        // The epoch deadline only stops Python while it runs; a tool blocked
+        // reading stdin (waiting in the host) needs a wall-clock limit too.
+        let limit = spec.timeout + Duration::from_secs(5);
+        let Ok(result) = tokio::time::timeout(limit, run).await else {
+            drop(store);
+            bridge.abort();
+            return Err(ToolError::Timeout(spec.timeout.as_secs() as u32));
+        };
         // Dropping the store closes stdout, which ends the bridge.
         drop(store);
         let done = bridge.await.ok().flatten();

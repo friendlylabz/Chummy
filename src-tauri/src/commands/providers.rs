@@ -33,9 +33,7 @@ fn slug(name: &str) -> String {
 }
 
 fn short_random() -> String {
-    let mut b = [0u8; 3];
-    let _ = getrandom::fill(&mut b);
-    b.iter().map(|x| format!("{x:02x}")).collect()
+    chummy_store::random_id(3)
 }
 
 /// Checks a provider before saving.
@@ -151,6 +149,19 @@ pub async fn save_provider(
         );
     }
     let existing = state.settings();
+    // Local models are made only by downloading one (commands::local), which
+    // decides their folder; a window can't make one up or point an
+    // existing one elsewhere.
+    if config.kind == ProviderKind::Local
+        && existing
+            .provider(&config.id)
+            .is_none_or(|old| old.kind != ProviderKind::Local)
+    {
+        return Err("Local models are added by downloading them.".into());
+    }
+    if config.kind != ProviderKind::Local {
+        config.local = None;
+    }
     if config.id.is_empty() {
         config.id = format!("{}-{}", slug(&config.name), short_random());
     } else if existing.provider(&config.id).is_none() {

@@ -12,6 +12,30 @@ use crate::sse::SseParser;
 use crate::types::{ChatEvent, ChatRequest, ChatResponse};
 use crate::{anthropic, gemini, openai};
 
+/// The most an answer may be, streamed or not. Real answers are far smaller
+/// (32k tokens is about 130 KB); this only stops a broken or hostile server
+/// from growing Chummy's memory without end.
+pub(crate) const MAX_ANSWER_BYTES: usize = 32 * 1024 * 1024;
+/// The most read of an error message or a model list.
+pub(crate) const MAX_SMALL_BYTES: usize = 4 * 1024 * 1024;
+
+/// Reads a response body, up to `limit` bytes.
+pub(crate) async fn body_text(resp: reqwest::Response, limit: usize) -> Result<String, String> {
+    let mut out = Vec::new();
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| e.to_string())?;
+        out.extend_from_slice(&chunk);
+        if out.len() > limit {
+            return Err(format!(
+                "the server's answer is longer than {} MB",
+                limit / (1024 * 1024)
+            ));
+        }
+    }
+    Ok(String::from_utf8_lossy(&out).into_owned())
+}
+
 /// A ready-to-use connection to one model.
 #[derive(Clone)]
 pub struct Client {
@@ -172,10 +196,9 @@ impl Client {
             .await
             .map_err(|e| LlmError::from_reqwest(&url, e))?;
         let status = resp.status().as_u16();
-        let text = resp
-            .text()
+        let text = body_text(resp, MAX_SMALL_BYTES)
             .await
-            .map_err(|e| LlmError::from_reqwest(&url, e))?;
+            .map_err(LlmError::Protocol)?;
         if !(200..300).contains(&status) {
             return Err(LlmError::from_status(status, &text));
         }
@@ -223,7 +246,7 @@ impl Client {
 
         let status = resp.status().as_u16();
         if !(200..300).contains(&status) {
-            let text = resp.text().await.unwrap_or_default();
+            let text = body_text(resp, MAX_SMALL_BYTES).await.unwrap_or_default();
             return Err(LlmError::from_status(status, &text));
         }
 
@@ -243,10 +266,9 @@ impl Client {
 
         if !is_sse {
             // Some servers ignore `stream: true` and answer in one JSON body.
-            let text = resp
-                .text()
+            let text = body_text(resp, MAX_ANSWER_BYTES)
                 .await
-                .map_err(|e| LlmError::from_reqwest(&url, e))?;
+                .map_err(LlmError::Stream)?;
             let chunk = non_streamed_as_chunk(&text)?;
             let events = decoder.data(&chunk).map_err(LlmError::Protocol)?;
             emit(events, &mut out);
@@ -256,8 +278,16 @@ impl Client {
 
         let mut parser = SseParser::default();
         let mut stream = resp.bytes_stream();
+        let mut received = 0usize;
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| LlmError::Stream(e.to_string()))?;
+            received += chunk.len();
+            if received > MAX_ANSWER_BYTES {
+                return Err(LlmError::Stream(format!(
+                    "the answer is longer than {} MB, so Chummy stopped reading it",
+                    MAX_ANSWER_BYTES / (1024 * 1024)
+                )));
+            }
             for sse in parser.feed(&chunk) {
                 let events = decoder.data(&sse.data).map_err(LlmError::Stream)?;
                 emit(events, &mut out);

@@ -142,18 +142,39 @@ pub fn set_general(app: AppHandle, state: State<'_, AppState>, general: General)
 
 /// Opens a link from a reply in the browser, after showing the full address
 /// and asking. Only web and mail links.
+/// A link that's safe to show and open: http, https or mailto, no control
+/// or invisible formatting characters (which can disguise an address), and
+/// normalized, so a look-alike international domain shows as `xn--…`.
+fn checked_link(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    let invisible = |c: char| {
+        c.is_control()
+            || c.is_whitespace()
+            || matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}' | '\u{00AD}')
+    };
+    if raw.len() > 2000 || raw.chars().any(invisible) {
+        return None;
+    }
+    let u = tauri::Url::parse(raw).ok()?;
+    match u.scheme() {
+        "http" | "https" if u.host_str().is_some() => Some(u.to_string()),
+        "mailto" => Some(u.to_string()),
+        _ => None,
+    }
+}
+
 #[tauri::command]
 pub async fn open_link(app: AppHandle, window: tauri::WebviewWindow, url: String) -> CmdResult<()> {
-    let url = url.trim().to_string();
-    let lower = url.to_ascii_lowercase();
-    let ok_scheme = ["https://", "http://", "mailto:"]
-        .iter()
-        .any(|p| lower.starts_with(p));
-    if !ok_scheme || url.len() > 2000 || url.chars().any(|c| c.is_control() || c.is_whitespace()) {
-        return Err("Only web and email links can be opened.".into());
-    }
+    let url = checked_link(&url).ok_or("Only web and email links can be opened.")?;
+    let site = match tauri::Url::parse(&url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
+    {
+        Some(h) => format!("\n\nSite: {h}"),
+        None => String::new(),
+    };
     let msg = format!(
-        "{url}\n\nThis link came from a model's reply. Check the address before you open it."
+        "{url}{site}\n\nThis link came from a model's reply. Check the address before you open it."
     );
     if crate::dialogs::confirm(
         &app,
@@ -168,4 +189,36 @@ pub async fn open_link(app: AppHandle, window: tauri::WebviewWindow, url: String
         app.opener().open_url(&url, None::<&str>).map_err(err)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::checked_link;
+
+    #[test]
+    fn links_are_normalized_and_disguises_refused() {
+        assert_eq!(
+            checked_link("https://example.com/a").as_deref(),
+            Some("https://example.com/a")
+        );
+        assert_eq!(
+            checked_link(" mailto:me@example.com ").as_deref(),
+            Some("mailto:me@example.com")
+        );
+        // A Cyrillic "а" in the name shows as punycode.
+        assert!(
+            checked_link("https://\u{0430}pple.com/")
+                .unwrap()
+                .starts_with("https://xn--")
+        );
+        for bad in [
+            "javascript:alert(1)",
+            "file:///etc/passwd",
+            "https://example.com/\u{202E}gpj.exe",
+            "https://exa\u{200B}mple.com",
+            "https://a.com/ x",
+        ] {
+            assert!(checked_link(bad).is_none(), "{bad:?}");
+        }
+    }
 }

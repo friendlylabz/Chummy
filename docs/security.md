@@ -311,6 +311,47 @@ New risks to keep in mind:
   agent's). The OpenShell backend has been tested against a stand-in for the
   `openshell` program, not yet a real gateway.
 
+## Bug sweep and audit after v0.1.0
+
+Reviewed: the folder jail and workspace rules, the tools crate (WebAssembly
+host, network policy, package and Python downloads, sandbox backends,
+built-ins), every app command and capability file and the CSP, model clients,
+the local engine and its downloads, the loop engine, scheduler, logs, runner
+and store, and the only place the UI injects HTML (the reply formatter).
+Fixed:
+
+- **Planted pipes can't hang Chummy.** Workspace files are opened without
+  blocking and checked after opening (before: checked, then opened). A tool
+  in a container can `mkfifo` in the workspace; reading or writing it froze
+  Read file blocks, folder-triggered jobs and OpenShell staging.
+- **A tool stuck reading stdin is stopped.** The WebAssembly time limit only
+  interrupts running Python; a wall-clock limit now covers time spent waiting
+  in the host (`run_command "python -c 'input()'"` used to hang the run).
+- **No unpinned connections.** Web requests from tools are always pinned to
+  the addresses that were checked, including hosts a proxy skips (NO_PROXY),
+  closing DNS rebinding there. IPv4 hidden in IPv6 (`::a.b.c.d`, 6to4
+  `2002::/16`) is checked like plain IPv4.
+- **Local model folders can't be made up.** A window can no longer save a
+  "local" model connection with its own folder name; local models come only
+  from downloading.
+- **Look-alike links are visible.** Links are parsed and normalized before the
+  confirmation (international domains show as `xn--…`), the dialog names the
+  site, and links with invisible or direction-changing characters are refused.
+- **Bounded model answers.** Streamed and non-streamed answers stop at 32 MB,
+  error bodies, model lists and context lookups at 4 MB, so a broken or
+  hostile server can't grow Chummy's memory without end.
+- **Bounded loop values.** A block that makes a value over 64 MB stops the run
+  (a Combine fed its own output used to double without end).
+- **Bounded formatting time.** Link and math patterns in the reply formatter
+  have length limits, so a crafted reply (for example echoing a hostile web
+  page) can't freeze the window with slow matching.
+- **Model file names from Hugging Face** may not contain `\`, `:` or `..`
+  (on Windows those could leave the models folder).
+- **Crash fixes:** a tool-setup error starting with a non-ASCII character (or
+  empty) panicked the setup task and left the window waiting; ids no longer
+  silently become all zeros if the system's random source fails, and the
+  workspace token refuses instead.
+
 ## Known risks and what to do next
 
 In rough order of importance:

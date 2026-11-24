@@ -49,10 +49,19 @@ pub fn is_local(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => is_local_v4(v4),
         IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
+            // IPv4 inside IPv6: mapped (::ffff:a.b.c.d), the old
+            // compatible form (::a.b.c.d) and 6to4 (2002:aabb:ccdd::).
+            if let Some(v4) = v6.to_ipv4() {
                 return is_local_v4(v4);
             }
             let s = v6.segments();
+            if s[0] == 0x2002 {
+                let [a, b] = s[1].to_be_bytes();
+                let [c, d] = s[2].to_be_bytes();
+                if is_local_v4(Ipv4Addr::new(a, b, c, d)) {
+                    return true;
+                }
+            }
             v6.is_loopback()
                 || v6.is_unspecified()
                 || v6.is_multicast()
@@ -196,10 +205,11 @@ pub async fn http_request(
     let mut body = Some(body);
     for _ in 0..=MAX_REDIRECTS {
         let addrs = check_url(&url, policy).await?;
-        // Connect only to the addresses that were checked. (Behind a proxy
-        // the proxy connects, so there's nothing to pin.)
+        // Connect only to the addresses that were checked (otherwise a
+        // second lookup could answer differently). Through a proxy this has
+        // no effect, but hosts the proxy skips (NO_PROXY) connect directly.
         let pinned;
-        let client = if !addrs.is_empty() && !proxy_configured() {
+        let client = if !addrs.is_empty() {
             pinned = reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .connect_timeout(Duration::from_secs(15))
@@ -294,10 +304,19 @@ mod tests {
             "fe80::1",
             "fd00::1",
             "::ffff:192.168.1.1",
+            "::127.0.0.1",
+            "2002:7f00:1::1",
+            "2002:c0a8:101::1",
+            "64:ff9b::7f00:1",
         ] {
             assert!(is_local(ip.parse().unwrap()), "{ip}");
         }
-        for ip in ["93.184.216.34", "1.1.1.1", "2606:4700::1111"] {
+        for ip in [
+            "93.184.216.34",
+            "1.1.1.1",
+            "2606:4700::1111",
+            "2002:5db8:d822::1",
+        ] {
             assert!(!is_local(ip.parse().unwrap()), "{ip}");
         }
     }

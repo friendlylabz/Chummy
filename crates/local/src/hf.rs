@@ -322,7 +322,10 @@ pub(crate) fn analyze(f: Facts, hw: &Hardware) -> Inspection {
         .filter(|e| e["type"] == "file")
         .filter_map(|e| {
             let path = e["path"].as_str()?.to_string();
-            if path.contains('/') {
+            // Plain file names only: on Windows `\` and `:` are separators
+            // too, and a git repo made elsewhere can have them in names.
+            if path.contains(['/', '\\', ':', '\0']) || path.contains("..") || path.starts_with('.')
+            {
                 return None;
             }
             let size = e["lfs"]["size"]
@@ -608,6 +611,18 @@ mod tests {
                 .as_deref(),
             Some("deadbeef")
         );
+    }
+
+    #[test]
+    fn file_names_that_could_leave_the_model_folder_are_skipped() {
+        let mut f = qwen_like();
+        f.tree.as_array_mut().unwrap().extend([
+            json!({ "type": "file", "path": "model\\..\\..\\evil.safetensors", "size": 1 }),
+            json!({ "type": "file", "path": "model..x.safetensors", "size": 1 }),
+            json!({ "type": "file", "path": "model:x.safetensors", "size": 1 }),
+        ]);
+        let i = analyze(f, &hw());
+        assert_eq!(i.files.len(), 4, "{:?}", i.files);
     }
 
     #[test]

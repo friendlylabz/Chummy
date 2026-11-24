@@ -52,7 +52,31 @@ pub enum Value {
     Exchange(Exchange),
 }
 
+/// The largest value a block may make. Far beyond any real text, it stops
+/// a loop that keeps doubling a value (Combine fed its own output, say)
+/// before it takes all the computer's memory.
+pub const MAX_VALUE_BYTES: usize = 64 * 1024 * 1024;
+
 impl Value {
+    /// About how many bytes the value holds.
+    pub fn bytes(&self) -> usize {
+        match self {
+            Value::Text(t) => t.len(),
+            Value::List(l) => l.iter().map(|x| x.len() + 1).sum(),
+            Value::Exchange(e) => e
+                .messages
+                .iter()
+                .map(|m| {
+                    m.text.len()
+                        + m.calls
+                            .iter()
+                            .map(|c| c.name.len() + c.arguments.to_string().len())
+                            .sum::<usize>()
+                })
+                .sum(),
+        }
+    }
+
     pub fn as_text(&self) -> String {
         match self {
             Value::Text(t) => t.clone(),
@@ -763,7 +787,17 @@ impl<'a, H: Host> Runner<'a, H> {
                 });
                 let mut step = self.step_log(frame, &id, &path, &label, &args);
                 let clock = std::time::Instant::now();
-                let outputs = match self.execute(frame, &id, args, on_event).await {
+                let result = self.execute(frame, &id, args, on_event).await.and_then(|o| {
+                    match o.iter().find(|(_, v)| v.bytes() > MAX_VALUE_BYTES) {
+                        Some((port, _)) => Err(BlockErr::Stop(Stop::Limit(format!(
+                            "“{label}” made a value over {} MB (on {port}), so the run stopped. \
+                             Does the loop keep adding a value to itself?",
+                            MAX_VALUE_BYTES / (1024 * 1024)
+                        )))),
+                        None => Ok(o),
+                    }
+                });
+                let outputs = match result {
                     Ok(o) => o,
                     Err(BlockErr::Stop(s)) => {
                         step.status = StepStatus::Stopped;
@@ -2249,6 +2283,33 @@ mod tests {
         assert_eq!(host.prompts.lock().unwrap()[0], "Q: hello");
         assert!(ev.iter().any(|e| matches!(e, Event::LlmText { .. })));
         assert_eq!((o.steps, o.llm_calls), (3, 1));
+    }
+
+    #[tokio::test]
+    async fn a_value_that_keeps_doubling_stops_the_run() {
+        // Combine fed its own output: the text doubles every step.
+        let mut l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b(
+                    "c",
+                    "combine",
+                    json!({ "inputs": 1, "format": "_INPUT1__INPUT1_" }),
+                ),
+            ],
+            vec![ln("in", "out", "c", "in1"), ln("c", "out", "c", "in1")],
+        );
+        l.limits.max_steps = 1000;
+        let (o, _) = go(&l, &Fake::default(), "hello").await;
+        match o.status {
+            RunStatus::LimitReached { message } => assert!(message.contains("64 MB"), "{message}"),
+            other => panic!("{other:?}"),
+        }
+        assert!(
+            o.steps < 40,
+            "stopped early, not at the step limit: {}",
+            o.steps
+        );
     }
 
     #[tokio::test]

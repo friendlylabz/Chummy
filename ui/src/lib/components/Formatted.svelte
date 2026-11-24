@@ -29,16 +29,20 @@
     if (a) {
       e.preventDefault();
       const url = a.dataset.href;
-      if (url) commands.openLink(url);
+      // A refused link (Rust checks it again) just doesn't open.
+      if (url) commands.openLink(url).catch(() => {});
       return;
     }
     const copy = t.closest<HTMLButtonElement>("button[data-copy]");
     if (copy) {
       const code = copy.closest(".code-block")?.querySelector("code")?.textContent ?? "";
-      navigator.clipboard?.writeText(code).then(() => {
-        copy.textContent = "Copied";
-        setTimeout(() => (copy.textContent = "Copy"), 1200);
-      });
+      navigator.clipboard
+        ?.writeText(code)
+        .then(() => {
+          copy.textContent = "Copied";
+          setTimeout(() => (copy.textContent = "Copy"), 1200);
+        })
+        .catch(() => {});
     }
   }
 </script>

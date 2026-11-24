@@ -201,7 +201,13 @@ pub async fn setup_tools(
         match result {
             Ok(()) => emit(ToolsProgress::Finished),
             Err(e) => emit(ToolsProgress::Failed {
-                error: e[..1].to_uppercase() + &e[1..],
+                // By character: an error can start with “ or be empty.
+                error: {
+                    let mut c = e.chars();
+                    c.next()
+                        .map(|f| f.to_uppercase().chain(c).collect())
+                        .unwrap_or_else(|| "Setting up tools failed.".to_string())
+                },
             }),
         }
         changed(&app2, &state);

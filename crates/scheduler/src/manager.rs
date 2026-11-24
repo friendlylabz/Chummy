@@ -139,12 +139,7 @@ fn now() -> i64 {
 }
 
 fn new_run_id() -> String {
-    let mut b = [0u8; 8];
-    let _ = getrandom::fill(&mut b);
-    format!(
-        "job-{}",
-        b.iter().map(|x| format!("{x:02x}")).collect::<String>()
-    )
+    format!("job-{}", chummy_store::random_id(8))
 }
 
 /// Joins a watched folder and a file name into a path in the agent's folder.
