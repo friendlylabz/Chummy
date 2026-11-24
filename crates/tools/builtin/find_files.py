@@ -16,7 +16,7 @@ import pathlib
 import chummy
 
 SKIP = {".git", "node_modules", "__pycache__", ".venv", "venv"}
-LIMIT = 200
+LIMIT = 1000
 
 
 @chummy.tool

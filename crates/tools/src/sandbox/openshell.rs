@@ -9,8 +9,10 @@
 //!   all, so nothing in the sandbox can connect anywhere. `chummy.http`
 //!   still works, over the call's stdin/stdout, through Chummy's checks.
 //! - **One sandbox per workspace**, kept between calls (creating one takes
-//!   a while), named from a hash of the workspace's location, so two agents
-//!   never share one. "Remove Chummy's sandboxes" deletes them.
+//!   a while), named from a hash of the workspace's location. Agents that
+//!   share a folder (allowed after a warning) share its sandbox too; each
+//!   call still works in its own folder there. "Remove Chummy's sandboxes"
+//!   deletes them.
 //! - **The workspace is copied in and out** for each call, because
 //!   OpenShell can't mount a folder: see [`super::sync`] for how changes come
 //!   back safely. Each call works in its own `/sandbox/<call id>` folder,

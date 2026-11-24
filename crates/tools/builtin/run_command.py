@@ -37,7 +37,7 @@ import traceback
 
 import chummy
 
-MAX_OUT = 10_000
+MAX_OUT = 30_000
 
 
 class Fail(Exception):

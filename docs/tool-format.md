@@ -33,7 +33,7 @@ import chummy
 
 
 @chummy.tool
-def fetch_page(url: str, max_chars: int = 6000) -> str:
+def fetch_page(url: str, max_chars: int = 20000) -> str:
     """Get the readable text of a web page.
 
     url: the full address, starting with https://
@@ -165,14 +165,14 @@ update, tools are reinstalled). Installs run one at a time.
 
 | Tool | What it does | Internet |
 |------|--------------|----------|
-| `read_file` | Reads a text file, numbered lines, in chunks: `line_number` (where to start, default 1) and `max_lines` (default 200, at most 2000). Long lines are cut at 1,000 characters and a call returns at most 10,000; the result says how to read on. | no |
+| `read_file` | Reads a text file, numbered lines, in chunks: `line_number` (where to start, default 1) and `max_lines` (default 1000, at most 5000). Long lines are cut at 2,000 characters and a call returns at most 40,000; the result says how to read on. | no |
 | `write_file` | Creates or replaces a whole file (or appends with `append`). Says how many lines it wrote and what it replaced. | no |
 | `edit_file` | Changes part of a file: replaces `old_text`, copied exactly from the file, with `new_text`, like Claude Code's Edit tool. `old_text` must match once (or set `replace_all`); otherwise the error lists where it matched or the closest line. Forgives `read_file`'s line-number prefixes and trailing spaces, keeps Windows line endings, and shows the changed lines afterwards. | no |
 | `list_files` | Lists a workspace folder. | no |
-| `search_files` | Searches files' contents, like grep: plain text or a `regex`, `file_glob` (e.g. `*.py`), `ignore_case`, `context_lines`, `max_results`. Answers `file:line: text`. Skips `.git`, `node_modules`, build folders, hidden files and files over 2 MB. | no |
-| `find_files` | Finds files by name with a glob (`*.md`, `src/**/*.ts`), newest first, up to 200. | no |
+| `search_files` | Searches files' contents, like grep: plain text or a `regex`, `file_glob` (e.g. `*.py`), `ignore_case`, `context_lines`, `max_results` (default 200; at most 30,000 characters). Answers `file:line: text`. Skips `.git`, `node_modules`, build folders, hidden files and files over 2 MB. | no |
+| `find_files` | Finds files by name with a glob (`*.md`, `src/**/*.ts`), newest first, up to 1,000. | no |
 | `run_command` | **Potentially unsafe.** Runs a shell-style command line in the workspace (see below). | no |
-| `run_shell` | **Potentially unsafe.** Runs a real `sh -c` command in the workspace, with whatever programs the sandbox has. `needs = ["programs"]`: Container or OpenShell only. Output is cut to 10,000 characters and ends with the exit code; 110-second limit; no host environment. | no |
+| `run_shell` | **Potentially unsafe.** Runs a real `sh -c` command in the workspace, with whatever programs the sandbox has. `needs = ["programs"]`: Container or OpenShell only. Output is cut to 30,000 characters and ends with the exit code; 110-second limit; no host environment. | no |
 | `calculator` | Works out arithmetic exactly (no `eval`). | no |
 | `current_time` | Today's date and the time, in any time zone (uses `tzdata`). | no |
 | `fetch_page` | Gets the readable text of a web page (uses `beautifulsoup4`). | yes |
@@ -196,7 +196,7 @@ workspace, with no network:
   and the list of commands. `pip` can't install anything.
 - **Paths** stay inside the workspace; anything else is refused. `rm -r` on
   the workspace itself is refused.
-- **Result:** the output (stdout and stderr), cut to 10,000 characters
+- **Result:** the output (stdout and stderr), cut to 30,000 characters
   (beginning and end kept), then `[exit code N]`.
 
 It is marked `risky`: inside the workspace, one command can delete or change

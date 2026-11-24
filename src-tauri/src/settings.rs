@@ -30,8 +30,8 @@ pub struct Workspace {
     pub confirmed_at: u64,
 }
 
-/// An agent: a loop, a model, and its own workspace folder. Each workspace
-/// belongs to exactly one agent, and no two agents' workspaces overlap.
+/// An agent: a loop, a model, and a workspace folder. Agents may share a
+/// folder (or have one inside another's) after the user confirmed a warning.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Agent {
     pub id: String,

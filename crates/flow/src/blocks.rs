@@ -63,7 +63,7 @@ fn d_newline() -> String {
     "\n".into()
 }
 fn d_result_chars() -> u32 {
-    12000
+    50000
 }
 fn d_roles() -> Vec<Role> {
     vec![Role::User]
@@ -1058,9 +1058,10 @@ pub fn catalog() -> Vec<BlockInfo> {
                     "Longest result (characters)",
                     K::Integer {
                         min: 100,
-                        max: 100000,
+                        max: 1_000_000,
                     },
-                    "Longer results are cut, to keep the conversation short.",
+                    "Longer results are cut, to keep the conversation short. Results are also kept to \
+                     about half of the model's context.",
                 ),
                 p(
                     "on_error",
@@ -1075,7 +1076,7 @@ pub fn catalog() -> Vec<BlockInfo> {
                     "Each call waits until you allow it in chat. Chummy always asks for tools that use the internet unless you turned that off in Settings → Tools.",
                 ),
             ],
-            json!({ "max_result_chars": 12000, "on_error": "tell_model", "confirm": false }),
+            json!({ "max_result_chars": 50000, "on_error": "tell_model", "confirm": false }),
         ),
         info(
             "ask_user",

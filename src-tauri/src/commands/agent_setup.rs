@@ -18,8 +18,16 @@ use crate::state::AppState;
 /// Largest configuration file imported.
 const MAX_IMPORT_BYTES: u64 = 1024 * 1024;
 
+/// What [`set_agent_access`] saved (less than asked if a warning was declined).
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentAccess {
+    pub tools: Vec<String>,
+    pub network: bool,
+}
+
 /// Sets which tools an agent may use and whether they may go online.
-/// Turning internet access on asks first. Returns the internet setting.
+/// Turning internet access on asks first, and so does giving a potentially
+/// unsafe tool to an agent that shares its folder. Returns what was saved.
 #[tauri::command]
 pub async fn set_agent_access(
     app: AppHandle,
@@ -28,38 +36,75 @@ pub async fn set_agent_access(
     agent_id: String,
     tools: Vec<String>,
     network: bool,
-) -> CmdResult<bool> {
+) -> CmdResult<AgentAccess> {
     let s = state.settings();
     let agent = s.agent(&agent_id).ok_or("That agent no longer exists.")?;
     let installed: BTreeSet<String> = chummy_tools::installed(&state.tool_paths)
         .into_iter()
         .map(|m| m.name)
         .collect();
-    let tools: BTreeSet<String> = tools
+    let mut tools: BTreeSet<String> = tools
         .into_iter()
         .filter(|t| installed.contains(t))
         .collect();
+    // A potentially unsafe tool for an agent that shares its folder: the
+    // other agents' files (and whatever they leave there) reach it too.
+    let others = super::agents::overlapping_agents(&s, &agent.workspace.path, Some(&agent.id));
+    let risky = super::agents::risky_tools(&state);
+    let new_risky: Vec<String> = tools
+        .iter()
+        .filter(|t| risky.contains(*t) && !agent.tools.contains(*t))
+        .cloned()
+        .collect();
+    if !others.is_empty() && !new_risky.is_empty() {
+        let names: Vec<String> = others.iter().map(|a| format!("“{}”", a.name)).collect();
+        let msg = format!(
+            "“{}” shares its folder with {}. A file another agent leaves there (for example from a \
+             web page it read) can carry instructions this agent follows with {}.\n\nThe tool still \
+             runs in the sandbox and can't see outside the folder.",
+            agent.name,
+            names.join(", "),
+            new_risky.join(", ")
+        );
+        let title = format!("Give “{}” {}?", agent.name, new_risky.join(", "));
+        if !dialogs::confirm(&app, window.label(), &title, &msg, "Allow", true).await {
+            tools.retain(|t| !new_risky.contains(t));
+        }
+    }
     let mut network = network;
     if network && !agent.network {
-        let msg = format!(
+        let mut msg = format!(
             "Tools that “{}” uses will be able to reach the internet, if internet access is also on \
              in Security and Privacy, for that tool, and in the loop's block.\n\nA web page can contain \
              instructions meant to trick the model. Tools that go online ask you first unless you \
              turned that off.",
             agent.name
         );
+        if !others.is_empty() {
+            let names: Vec<String> = others.iter().map(|a| format!("“{}”", a.name)).collect();
+            msg.push_str(&format!(
+                "\n\nThis agent shares its folder with {}. Their files will be within reach of \
+                 what this agent sends online, and anything it brings back from the web, the others \
+                 can read and act on.",
+                names.join(", ")
+            ));
+        }
         let title = format!("Let “{}” use the internet?", agent.name);
         if !dialogs::confirm(&app, window.label(), &title, &msg, "Allow", true).await {
             network = false;
         }
     }
+    let saved = AgentAccess {
+        tools: tools.iter().cloned().collect(),
+        network,
+    };
     state.update(&app, |s| {
         if let Some(a) = s.agents.iter_mut().find(|a| a.id == agent_id) {
             a.tools = tools;
             a.network = network;
         }
     })?;
-    Ok(network)
+    Ok(saved)
 }
 
 #[derive(Debug, Clone, Serialize)]

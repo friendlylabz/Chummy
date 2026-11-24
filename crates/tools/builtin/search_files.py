@@ -18,7 +18,7 @@ import chummy
 
 SKIP = {".git", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache", ".pytest_cache", "dist", "build", "target"}
 MAX_FILE = 2_000_000
-MAX_CHARS = 10_000
+MAX_CHARS = 30_000
 
 
 def _files(root, file_glob):
@@ -43,7 +43,7 @@ def search_files(
     file_glob: str = "",
     ignore_case: bool = True,
     context_lines: int = 0,
-    max_results: int = 50,
+    max_results: int = 200,
 ) -> str:
     """Find the lines in the workspace's text files that contain a pattern, with file names and line numbers (like grep).
 

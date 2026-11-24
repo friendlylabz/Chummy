@@ -1,8 +1,8 @@
 <script lang="ts">
   /**
    * An agent's own tool and internet switches. A tool runs only when it is
-   * on app-wide; then the agent's switch decides, unless a loop block turns
-   * the tool on or off for itself.
+   * on app-wide; then the agent's switch decides (a loop block can only turn
+   * tools off for itself).
    */
   import { onMount } from "svelte";
   import { commands, errorText, type Agent } from "$lib/ipc";
@@ -21,20 +21,23 @@
   const perms = $derived(settings.current.permissions);
   const mine = $derived(agent.tools ?? []);
 
-  async function apply(next: string[], network: boolean) {
+  /** Saves the switches; `el` is put back if a warning was declined. */
+  async function apply(next: string[], network: boolean, el: HTMLInputElement, tool?: string) {
     busy = true;
     error = "";
     try {
-      await commands.setAgentAccess(agent.id, next, network);
+      const saved = await commands.setAgentAccess(agent.id, next, network);
+      el.checked = tool ? saved.tools.includes(tool) : saved.network;
     } catch (e) {
       error = errorText(e);
+      el.checked = tool ? mine.includes(tool) : !!agent.network;
     } finally {
       busy = false;
     }
   }
-  function toggle(name: string, on: boolean) {
+  function toggle(name: string, el: HTMLInputElement) {
     const rest = mine.filter((t) => t !== name);
-    apply(on ? [...rest, name] : rest, !!agent.network);
+    apply(el.checked ? [...rest, name] : rest, !!agent.network, el, name);
   }
 </script>
 
@@ -42,8 +45,7 @@
   <div class="section-title"><Icon name="wrench" size={16} /> Tools and internet for {agent.name}</div>
   <p class="explain">
     A tool can run only when it is on <b>app-wide</b> (Settings → Tools and Security and Privacy). Then <b>this agent's</b>
-    switch decides. Loop blocks follow the agent by default; a block can turn a tool on or off just for itself, and
-    the run notes it when a block turns on a tool that is off here. Going online also needs Internet access in
+    switch decides. Loop blocks follow the agent; a block can only turn tools off for itself. Going online also needs Internet access in
     Security and Privacy and the tool's own internet switch, which nothing can override.
   </p>
 
@@ -62,7 +64,7 @@
       {#each tools.installed as t (t.name)}
         {@const on = mine.includes(t.name)}
         <label class="row tool" class:unusable={!!t.unusable} title={t.unusable ?? undefined}>
-          <input type="checkbox" checked={on} disabled={busy} onchange={(e) => toggle(t.name, (e.currentTarget as HTMLInputElement).checked)} />
+          <input type="checkbox" checked={on} disabled={busy} onchange={(e) => toggle(t.name, e.currentTarget as HTMLInputElement)} />
           <span class="t-main">
             <span class="row-title">{t.title}{#if t.risky}<span class="risky" title="One call can change or delete many files in the workspace"> · potentially unsafe</span>{/if}</span>
             <span class="row-sub">{t.description}</span>
@@ -78,12 +80,15 @@
   {/if}
 
   <label class="row net">
-    <input type="checkbox" checked={!!agent.network} disabled={busy} onchange={(e) => apply(mine, (e.currentTarget as HTMLInputElement).checked)} />
+    <input type="checkbox" checked={!!agent.network} disabled={busy} onchange={(e) => {
+        const el = e.currentTarget as HTMLInputElement;
+        apply(mine, el.checked, el);
+      }} />
     <span class="t-main">
       <span class="row-title">Tools may use the internet</span>
       <span class="row-sub">
         {perms.network ? "Internet access is on in Security and Privacy." : "Internet access is off in Security and Privacy, so tools stay offline even if this is on."}
-        Each tool's own internet switch must be on too. Blocks follow this unless they say otherwise.
+        Each tool's own internet switch must be on too. Blocks follow this, or turn it off for themselves.
       </span>
     </span>
   </label>

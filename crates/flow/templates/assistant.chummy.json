@@ -1883,7 +1883,7 @@
             "y": 250
           },
           "params": {
-            "max_result_chars": 12000
+            "max_result_chars": 50000
           },
           "comment": "Errors and calls you don't allow go back to the model as the result."
         },

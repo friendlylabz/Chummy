@@ -1,9 +1,14 @@
-//! Agents (each with its own workspace) and permissions.
+//! Agents (each with a workspace folder) and permissions.
+//!
+//! Agents may share a folder, or have one inside another's, but only after a
+//! native warning: a shared folder lets one agent leave files or
+//! instructions that another, with different tools, later acts on.
 //!
 //! The UI never sends a filesystem path: Rust shows the folder picker,
 //! validates the choice, asks for confirmation, and hands the UI a one-time
 //! token that stands for the folder.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -22,12 +27,94 @@ pub struct PickedWorkspace {
     pub path: String,
 }
 
-/// Name of another agent whose workspace overlaps `path`, if any.
-fn overlapping_agent<'a>(s: &'a Settings, path: &Path, except: Option<&str>) -> Option<&'a Agent> {
+/// Other agents whose workspace is `path`, inside it, or contains it.
+pub(crate) fn overlapping_agents<'a>(
+    s: &'a Settings,
+    path: &Path,
+    except: Option<&str>,
+) -> Vec<&'a Agent> {
     s.agents
         .iter()
         .filter(|a| Some(a.id.as_str()) != except)
-        .find(|a| chummy_sandbox::paths_overlap(&a.workspace.path, path))
+        .filter(|a| chummy_sandbox::paths_overlap(&a.workspace.path, path))
+        .collect()
+}
+
+/// What an agent can do beyond reading and writing its folder, for the
+/// sharing warnings ("can go online, can use Run shell command").
+fn notable_access(s: &Settings, a: &Agent, risky: &BTreeSet<String>) -> Vec<String> {
+    let mut out = Vec::new();
+    if a.network && s.permissions.network {
+        out.push("can go online".to_string());
+    }
+    let unsafe_tools: Vec<&str> = a
+        .tools
+        .iter()
+        .filter(|t| risky.contains(*t))
+        .map(|t| t.as_str())
+        .collect();
+    if !unsafe_tools.is_empty() && s.permissions.tools {
+        out.push(format!("can use {}", unsafe_tools.join(", ")));
+    }
+    out
+}
+
+/// Names of installed tools marked potentially unsafe.
+pub(crate) fn risky_tools(state: &AppState) -> BTreeSet<String> {
+    chummy_tools::installed(&state.tool_paths)
+        .into_iter()
+        .filter(|m| m.risky)
+        .map(|m| m.name)
+        .collect()
+}
+
+/// The paragraph about sharing for the folder confirmation: which agents
+/// share it and how, what they can do, and why that matters.
+pub(crate) fn sharing_warning(
+    s: &Settings,
+    path: &Path,
+    others: &[&Agent],
+    risky: &BTreeSet<String>,
+) -> String {
+    let mut lines = Vec::new();
+    let mut any_access = false;
+    for a in others {
+        let how = if a.workspace.path == path {
+            "uses this same folder"
+        } else if a.workspace.path.starts_with(path) {
+            "has a folder inside it"
+        } else {
+            "has a folder that contains it"
+        };
+        let access = notable_access(s, a, risky);
+        any_access |= !access.is_empty();
+        let access = if access.is_empty() {
+            String::new()
+        } else {
+            format!(" (it {})", access.join(" and "))
+        };
+        lines.push(format!(
+            "• “{}” {how}: {}{access}",
+            a.name,
+            a.workspace.path.display()
+        ));
+    }
+    let mut msg = format!(
+        "Shared with other agents:\n{}\n\nAgents that share files can affect each other. Whatever one \
+         agent reads or writes there, the others can read, change or delete, and a file one agent \
+         leaves (for example from a web page it read) can carry instructions another agent follows \
+         with its own tools. Two agents working at the same time can also overwrite each other's \
+         changes.",
+        lines.join("\n")
+    );
+    if any_access {
+        msg.push_str(
+            "\n\nCareful: an agent here can do more than read and write files. Anything that reaches \
+             this folder can end up in what it sends online or the commands it runs. Share only \
+             between agents you'd trust with each other's tools.",
+        );
+    }
+    msg
 }
 
 /// A one-time token standing for a picked folder: refused if the system
@@ -74,17 +161,8 @@ pub async fn pick_workspace(
         }
     };
 
-    if let Some(other) = overlapping_agent(&state.settings(), &path, agent_id.as_deref()) {
-        let msg = format!(
-            "{}\n\nThis folder overlaps “{}”'s workspace ({}). Each agent needs its own folder, and \
-             one agent's folder can't be inside another's.",
-            path.display(),
-            other.name,
-            other.workspace.path.display()
-        );
-        dialogs::error(&app, &label, "That folder is already in use", &msg).await;
-        return Ok(None);
-    }
+    let settings = state.settings();
+    let others = overlapping_agents(&settings, &path, agent_id.as_deref());
 
     let advice = chummy_sandbox::workspace_advice(&path);
     let mut msg = format!(
@@ -100,7 +178,18 @@ pub async fn pick_workspace(
             advice.join(" ")
         ));
     }
-    let (title, ok) = if advice.is_empty() {
+    if !others.is_empty() {
+        msg.push_str("\n\n");
+        msg.push_str(&sharing_warning(
+            &settings,
+            &path,
+            &others,
+            &risky_tools(&state),
+        ));
+    }
+    let (title, ok) = if !others.is_empty() {
+        ("Share this folder with other agents?", "Share this folder")
+    } else if advice.is_empty() {
         ("Give this agent this folder?", "Use this folder")
     } else {
         ("Give this agent this whole folder?", "Use it anyway")
@@ -165,15 +254,8 @@ pub fn save_agent(
                 .remove(&t)
                 .ok_or("Choose the workspace folder again.")?;
             // Re-check: the folder could have changed since it was picked.
+            // (Sharing with other agents was confirmed when it was picked.)
             let path = chummy_sandbox::validate_workspace(&path, &state.protected).map_err(err)?;
-            if let Some(other) =
-                overlapping_agent(&s, &path, existing.as_ref().map(|a| a.id.as_str()))
-            {
-                return Err(format!(
-                    "That folder overlaps “{}”'s workspace.",
-                    other.name
-                ));
-            }
             Workspace {
                 path,
                 confirmed_at: now(),
@@ -328,4 +410,65 @@ pub async fn set_permission(
         PermissionKind::ConfirmOnlineTools => s.permissions.confirm_online_tools = enabled,
     })?;
     Ok(enabled)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn agent(id: &str, path: &str, network: bool, tools: &[&str]) -> Agent {
+        Agent {
+            id: id.into(),
+            name: id.to_uppercase(),
+            loop_id: "assistant".into(),
+            model: None,
+            workspace: Workspace {
+                path: PathBuf::from(path),
+                confirmed_at: 0,
+            },
+            created_at: 0,
+            tools: tools.iter().map(|t| t.to_string()).collect(),
+            network,
+            loop_config: Default::default(),
+        }
+    }
+
+    #[test]
+    fn sharing_is_found_and_explained() {
+        let mut s = Settings::default();
+        s.permissions.network = true;
+        s.permissions.tools = true;
+        s.agents = vec![
+            agent("a", "/w/shared", false, &[]),
+            agent("b", "/w/shared/sub", true, &["run_shell", "read_file"]),
+            agent("c", "/w/other", true, &[]),
+        ];
+        let risky: BTreeSet<String> = ["run_shell".to_string()].into();
+        let path = Path::new("/w/shared");
+
+        let others = overlapping_agents(&s, path, Some("a"));
+        assert_eq!(
+            others.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+            ["b"]
+        );
+        let msg = sharing_warning(&s, path, &others, &risky);
+        assert!(msg.contains("“B” has a folder inside it"), "{msg}");
+        assert!(msg.contains("can go online and can use run_shell"), "{msg}");
+        assert!(msg.contains("Careful:"), "{msg}");
+
+        // A new agent in the same folder as A, which can do nothing more.
+        let others = overlapping_agents(&s, Path::new("/w/shared/sub/x"), None);
+        let ids: Vec<&str> = others.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(ids, ["a", "b"]);
+        let only_a = overlapping_agents(&s, path, Some("b"));
+        let msg = sharing_warning(&s, path, &only_a, &risky);
+        assert!(msg.contains("“A” uses this same folder"), "{msg}");
+        assert!(!msg.contains("Careful:"), "{msg}");
+
+        // With internet off app-wide, B's online switch doesn't count.
+        s.permissions.network = false;
+        let msg = sharing_warning(&s, path, &overlapping_agents(&s, path, Some("a")), &risky);
+        assert!(!msg.contains("can go online"), "{msg}");
+    }
 }

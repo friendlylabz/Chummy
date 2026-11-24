@@ -69,9 +69,9 @@ class ReadFile(Workspace):
 
     def test_long_output_stops_early_and_says_where(self):
         read = load("read_file")
-        self.put("wide.txt", ("x" * 900 + "\n") * 100)
-        r = read("wide.txt", max_lines=2000)
-        self.assertLessEqual(len(r), 11_000)
+        self.put("wide.txt", ("x" * 1900 + "\n") * 100)
+        r = read("wide.txt", max_lines=5000)
+        self.assertLessEqual(len(r), 41_000)
         self.assertIn("To read on, use line_number=", r)
 
     def test_edge_cases(self):
@@ -237,7 +237,7 @@ class RunShell(Workspace):
             del os.environ["CHUMMY_TEST_SECRET"]
 
     def test_long_output_is_cut_and_empty_commands_refused(self):
-        out = self.run("i=0; while [ $i -lt 3000 ]; do echo line $i; i=$((i+1)); done")
+        out = self.run("i=0; while [ $i -lt 8000 ]; do echo line $i; i=$((i+1)); done")
         self.assertIn("characters cut", out)
         self.assertTrue(out.endswith("[exit code 0]"))
         with self.assertRaises(chummy.ToolError):

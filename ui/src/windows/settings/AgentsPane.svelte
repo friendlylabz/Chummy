@@ -153,7 +153,7 @@
         <Button icon="folder" variant={wsPath ? "secondary" : "primary"} onclick={pick}>{wsPath ? "Change…" : "Choose…"}</Button>
       </div>
       <span class="hint">
-        The only folder this agent can see. Each agent needs its own; one agent's folder can't be inside another's.
+        The only folder this agent can see. Best kept to this agent alone; sharing it with other agents is allowed after a warning.
         Whole drives, your home folder, system and hidden settings folders, and Chummy's own folder are never allowed.
       </span>
     </div>
@@ -183,7 +183,7 @@
   <header class="pane-head">
     <div>
       <h1>Agents</h1>
-      <p class="pane-sub">Each agent has a loop, a model, and its own workspace folder that nothing else shares.</p>
+      <p class="pane-sub">Each agent has a loop, a model, and a workspace folder, the only one it can see.</p>
     </div>
     {#if agents.length}<Button variant="primary" icon="plus" onclick={() => open("new")}>New agent</Button>{/if}
   </header>

@@ -12,9 +12,9 @@
 import chummy
 
 #: The most text one call returns, so a result fits a small model's context.
-MAX_CHARS = 10_000
+MAX_CHARS = 40_000
 #: Longer lines are shortened.
-MAX_LINE = 1_000
+MAX_LINE = 2_000
 
 
 def _n(x):
@@ -22,12 +22,12 @@ def _n(x):
 
 
 @chummy.tool
-def read_file(path: str, line_number: int = 1, max_lines: int = 200) -> str:
+def read_file(path: str, line_number: int = 1, max_lines: int = 1000) -> str:
     """Read a text file in the workspace, with line numbers, a chunk of lines at a time.
 
     path: the file, relative to the workspace, like notes/todo.md
     line_number: the first line to read (1 is the start). To read on, use the number the result gives.
-    max_lines: how many lines to read, 1 to 2000
+    max_lines: how many lines to read, 1 to 5000
     """
     full = chummy.workspace_path(path)
     try:
@@ -49,7 +49,7 @@ def read_file(path: str, line_number: int = 1, max_lines: int = 200) -> str:
     start = max(1, line_number)
     if start > total:
         raise chummy.ToolError(f"{path} has only {_n(total)} lines.")
-    count = min(max(1, max_lines), 2000)
+    count = min(max(1, max_lines), 5000)
     out, size, last = [], 0, start - 1
     for n in range(start, min(total, start + count - 1) + 1):
         text = lines[n - 1]

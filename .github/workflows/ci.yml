@@ -90,3 +90,20 @@ jobs:
           echo "CHUMMY_TEST_DOCKER_IMAGE=python:3.14-slim" >> "$GITHUB_ENV"
       - name: Test
         run: cargo test --workspace --locked
+      # macOS kills apps under the hardened runtime that run JIT code without
+      # these entitlements (v0.1.0 crashed setting up tools). Check both ways:
+      # the app must die without Entitlements.plist and work with it.
+      - name: macOS hardened runtime needs the JIT entitlements
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          cargo build -p chummy --locked
+          bin=target/debug/chummy
+          codesign --force -o runtime -s - "$bin"
+          if "$bin" --self-test; then
+            echo "::warning::the self-test passed WITHOUT the JIT entitlements"
+          else
+            echo "Without the entitlements the self-test failed (exit $?), as expected."
+          fi
+          codesign --force -o runtime --entitlements src-tauri/Entitlements.plist -s - "$bin"
+          "$bin" --self-test

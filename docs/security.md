@@ -376,6 +376,14 @@ Fixed:
   dependencies can't be newer than the pin date (`--exclude-newer`; not
   applied to PyTorch's own index, which publishes no dates).
   `scripts/update-engine-pins.py` moves every pin to the latest version.
+- **Agents may share folders.** Two agents can use the same folder, or one
+  inside the other's, after a native warning that names the agents, says
+  which of them can go online or use potentially unsafe tools, and explains
+  the risk: a file one agent leaves (for example from a web page) can carry
+  instructions another agent follows with its own tools, and an online
+  agent can reach the others' files. Turning on internet, or giving a
+  potentially unsafe tool, to an agent that shares its folder warns again.
+  Under OpenShell, agents in the same folder share its sandbox.
 - **Custom data folders on Windows** get a warning in Security and Privacy:
   Chummy can't lock those down there, so other accounts may be able to read
   or change settings and logs.

@@ -342,6 +342,15 @@ pub trait Host: Send + Sync {
     }
 }
 
+/// The longest tool result a Run tool block passes on: its own limit, but
+/// no more than about half the model's context (at ~4 characters a token),
+/// and never under 12,000 characters, so one result can't fill the context
+/// of a small model.
+pub fn result_cap(max_result_chars: u32, window_tokens: u32) -> usize {
+    let half_context = (window_tokens as usize).saturating_mul(2).max(12_000);
+    (max_result_chars as usize).min(half_context)
+}
+
 /// Context length assumed when nothing says otherwise.
 pub const DEFAULT_CONTEXT_WINDOW: u32 = 8192;
 
@@ -1034,6 +1043,7 @@ impl<'a, H: Host> Runner<'a, H> {
                     ));
                 };
                 let calls = ex.pending_calls();
+                let ctx_window = self.host.context(None).window;
                 if calls.is_empty() {
                     on_event(Event::Notice {
                         block: path.clone(),
@@ -1101,7 +1111,7 @@ impl<'a, H: Host> Runner<'a, H> {
                     if out.is_error && p.on_error == OnToolError::Fail {
                         return Err(BlockErr::Failed(format!("{}: {}", call.name, out.text)));
                     }
-                    let text = truncate(&out.text, p.max_result_chars as usize);
+                    let text = truncate(&out.text, result_cap(p.max_result_chars, ctx_window));
                     self.usage.tokens_added += 4 + crate::text::estimate_tokens(&text);
                     on_event(Event::ToolResult {
                         block: path.clone(),
@@ -2778,6 +2788,14 @@ mod tests {
         let host = Fake::script(vec![calls("echo", json!({ "text": "x" }))]);
         let (o, _) = go(&l, &host, "hello").await;
         assert_eq!(o.replies, vec!["[|Earlier words\n\nhello]"], "{o:?}");
+    }
+
+    #[test]
+    fn tool_results_fit_in_half_the_context() {
+        assert_eq!(result_cap(50_000, 8_192), 16_384);
+        assert_eq!(result_cap(50_000, 128_000), 50_000);
+        assert_eq!(result_cap(50_000, 2_048), 12_000);
+        assert_eq!(result_cap(500, 128_000), 500);
     }
 
     #[tokio::test]

@@ -17,7 +17,7 @@ import chummy
 
 
 @chummy.tool
-def fetch_page(url: str, max_chars: int = 6000) -> str:
+def fetch_page(url: str, max_chars: int = 20000) -> str:
     """Get the readable text of a web page.
 
     url: the full address, starting with https://

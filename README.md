@@ -160,7 +160,7 @@ until you say so.
 - **Tray mode.** Chummy's icon stays in the tray while it runs. Closing the
   window asks whether to quit (stopping everything) or keep running in the
   tray so jobs carry on; you can make either the default.
-- **Agents.** An agent is a loop, a model, and **its own workspace folder**.
+- **Agents.** An agent is a loop, a model, and **a workspace folder**, the only one it can see. Agents can share a folder (or have one inside another's) after a warning that they can then affect each other.
   Each folder belongs to exactly one agent, and no agent's folder can be inside
   another's. Chat with an agent from the main window; its loop runs inside its
   folder, and progress shows live. Each agent has its own **tool and internet

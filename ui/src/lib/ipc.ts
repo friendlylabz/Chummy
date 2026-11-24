@@ -895,7 +895,10 @@ export const commands = {
   deleteAgent: (id: string) => call<boolean>("delete_agent", { id }),
   setActiveAgent: (id: string) => call<void>("set_active_agent", { id }),
   setAgentAccess: (agentId: string, tools: string[], network: boolean) =>
-    call<boolean>("set_agent_access", { agentId, tools, network }, () => network),
+    call<{ tools: string[]; network: boolean }>("set_agent_access", { agentId, tools, network }, () => ({
+      tools,
+      network,
+    })),
   agentLoopConfig: (agentId: string) => call<AgentLoopConfig>("agent_loop_config", { agentId }),
   setAgentBlockConfig: (agentId: string, block: string, params: Record<string, unknown> | null) =>
     call<void>("set_agent_block_config", { agentId, block, params }),
