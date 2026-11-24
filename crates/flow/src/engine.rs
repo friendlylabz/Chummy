@@ -31,7 +31,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
 use crate::blocks::{
-    BadCall, BlockKind, FAILED, LlmParams, OnLimit, OnToolError, ToolChoice, ToolMode,
+    BadCall, BlockKind, FAILED, FAILED_EXCHANGE, LlmParams, OnLimit, OnToolError, ToolChoice,
+    ToolMode, failure_message,
 };
 use crate::blocks::{Switch, ToolSwitches};
 use crate::exchange::{ExMessage, Exchange, Role, ToolCall, ToolInfo, check_arguments};
@@ -727,7 +728,7 @@ pub async fn run<H: Host>(
     };
     let mut frame = Frame::new(&l.blocks, &l.links, String::new(), &r.analysis);
     let status = match r.drive(&mut frame, &mut on_event).await {
-        Ok(()) => RunStatus::Completed,
+        Ok(()) | Err(Stop::Finished) => RunStatus::Completed,
         Err(Stop::Cancelled) => RunStatus::Stopped,
         Err(Stop::Limit(message)) => RunStatus::LimitReached { message },
         Err(Stop::Failed { block, error }) => RunStatus::Failed {
@@ -754,6 +755,8 @@ async fn cancelled(flag: &AtomicBool) {
 
 enum Stop {
     Cancelled,
+    /// A Final chat output ended the run: it completed.
+    Finished,
     Limit(String),
     /// `block` is the path of the block that failed.
     Failed {
@@ -814,6 +817,14 @@ impl<'a, H: Host> Runner<'a, H> {
                     state: BlockState::Running,
                 });
                 let mut step = self.step_log(frame, &id, &path, &label, &args);
+                // Kept for a Failed (exchange) output, if one is linked.
+                let fx_key = (id.clone(), FAILED_EXCHANGE.to_string());
+                let fx_wired =
+                    frame.routes.contains_key(&fx_key) || frame.exposed.contains_key(&fx_key);
+                let held = match args.first() {
+                    Some(Value::Exchange(ex)) if fx_wired => Some(ex.clone()),
+                    _ => None,
+                };
                 let clock = std::time::Instant::now();
                 let result = self.execute(frame, &id, args, on_event).await.and_then(|o| {
                     match o.iter().find(|(_, v)| v.bytes() > MAX_VALUE_BYTES) {
@@ -827,9 +838,21 @@ impl<'a, H: Host> Runner<'a, H> {
                 });
                 let outputs = match result {
                     Ok(o) => o,
+                    Err(BlockErr::Stop(Stop::Finished)) => {
+                        // The final answer is out: done, and so is the run.
+                        step.ms = clock.elapsed().as_millis() as u64;
+                        on_event(Event::Step(Box::new(step)));
+                        on_event(Event::BlockState {
+                            block: path.clone(),
+                            label: label.clone(),
+                            state: BlockState::Done,
+                        });
+                        return Err(Stop::Finished);
+                    }
                     Err(BlockErr::Stop(s)) => {
                         step.status = StepStatus::Stopped;
                         step.error = Some(match &s {
+                            Stop::Finished => String::new(),
                             Stop::Cancelled => "The run was stopped.".into(),
                             Stop::Limit(m) => m.clone(),
                             Stop::Failed { error, .. } => error.clone(),
@@ -848,7 +871,8 @@ impl<'a, H: Host> Runner<'a, H> {
                         let key = (id.clone(), FAILED.to_string());
                         let caught = frame.kinds[&id].can_fail_softly()
                             && (frame.routes.contains_key(&key)
-                                || frame.exposed.contains_key(&key));
+                                || frame.exposed.contains_key(&key)
+                                || fx_wired);
                         step.ms = clock.elapsed().as_millis() as u64;
                         step.error = Some(e.clone());
                         if caught {
@@ -881,6 +905,30 @@ impl<'a, H: Host> Runner<'a, H> {
                             for (to, idx) in frame.routes.get(&key).cloned().unwrap_or_default() {
                                 frame.queues.get_mut(&to).unwrap()[idx].push_back(value.clone());
                                 frame.schedule(&to);
+                            }
+                            // The exchange it was given, with the failure as
+                            // its last message (only when it was given one).
+                            if let (Some(mut ex), Value::Text(e)) = (held, &value) {
+                                ex.messages
+                                    .push(ExMessage::new(Role::User, failure_message(e)));
+                                let value = Value::Exchange(ex);
+                                on_event(Event::BlockOutput {
+                                    block: path.clone(),
+                                    port: FAILED_EXCHANGE.into(),
+                                    preview: value.preview(),
+                                });
+                                if let Some(names) = frame.exposed.get(&fx_key) {
+                                    for n in names.clone() {
+                                        frame.collected.push((n, value.clone()));
+                                    }
+                                }
+                                for (to, idx) in
+                                    frame.routes.get(&fx_key).cloned().unwrap_or_default()
+                                {
+                                    frame.queues.get_mut(&to).unwrap()[idx]
+                                        .push_back(value.clone());
+                                    frame.schedule(&to);
+                                }
                             }
                             continue;
                         }
@@ -1036,6 +1084,12 @@ impl<'a, H: Host> Runner<'a, H> {
                 on_event(Event::Reply { block: path, text });
                 Ok(vec![])
             }
+            BlockKind::Final(_) => {
+                let text = arg(0).as_text();
+                self.replies.push(text.clone());
+                on_event(Event::Reply { block: path, text });
+                Err(BlockErr::Stop(Stop::Finished))
+            }
             BlockKind::Pane(_) => {
                 let text = pane_line(&arg(0).as_text());
                 if !text.is_empty() {
@@ -1190,6 +1244,17 @@ impl<'a, H: Host> Runner<'a, H> {
                     ))),
                     Err(e) => Err(e),
                 }
+            }
+            BlockKind::DropLast(p) => {
+                let Value::Exchange(mut ex) = arg(0) else {
+                    return Err(BlockErr::Failed("it needs an exchange".into()));
+                };
+                // Never the system message at the start.
+                let keep_from =
+                    usize::from(ex.messages.first().is_some_and(|m| m.role == Role::System));
+                let n = (p.count as usize).min(ex.messages.len() - keep_from);
+                ex.messages.truncate(ex.messages.len() - n);
+                Ok(vec![("out".into(), Value::Exchange(ex))])
             }
             BlockKind::DeclineCalls(_) => {
                 let Value::Exchange(mut ex) = arg(0) else {
@@ -2132,6 +2197,8 @@ mod tests {
         /// The model's daily tokens are used up until granted more.
         exhausted: Mutex<bool>,
         granted: Mutex<Vec<u64>>,
+        /// The next this-many model calls fail, like a server that's down.
+        fail_next: Mutex<u32>,
         online_runs: Mutex<Vec<Switch>>,
     }
 
@@ -2178,6 +2245,13 @@ mod tests {
                 .unwrap_or_default();
             self.prompts.lock().unwrap().push(prompt.clone());
             self.calls.lock().unwrap().push(call);
+            {
+                let mut f = self.fail_next.lock().unwrap();
+                if *f > 0 {
+                    *f -= 1;
+                    return Err("the model server is down".into());
+                }
+            }
             let a = self
                 .answers
                 .lock()
@@ -2321,6 +2395,109 @@ mod tests {
         assert_eq!(host.prompts.lock().unwrap()[0], "Q: hello");
         assert!(ev.iter().any(|e| matches!(e, Event::LlmText { .. })));
         assert_eq!((o.steps, o.llm_calls), (3, 1));
+    }
+
+    #[tokio::test]
+    async fn failed_exchange_carries_the_failure_and_drop_last_takes_it_back_out() {
+        let l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b("start", "exchange", json!({ "system": "S" })),
+                b("ask", "llm", json!({})),
+                b("ok", "output", json!({})),
+                b("said", "read_exchange", json!({ "role": "user" })),
+                b("show_fail", "output", json!({})),
+                b("drop", "drop_last", json!({})),
+                b("again", "read_exchange", json!({ "role": "any" })),
+                b("show_back", "output", json!({})),
+            ],
+            vec![
+                ln("in", "out", "start", "in"),
+                ln("start", "out", "ask", "in"),
+                ln("ask", "out", "ok", "in"),
+                ln("ask", "failed_exchange", "said", "in"),
+                ln("said", "last", "show_fail", "in"),
+                ln("ask", "failed_exchange", "drop", "in"),
+                ln("drop", "out", "again", "in"),
+                ln("again", "all", "show_back", "in"),
+            ],
+        );
+        let host = Fake::default();
+        *host.fail_next.lock().unwrap() = 1;
+        let (o, _) = go(&l, &host, "hello").await;
+        // Caught (only Failed (exchange) is linked), not a failed run.
+        assert_eq!(o.status, RunStatus::Completed, "{o:?}");
+        assert_eq!(
+            o.replies[0],
+            "(The last step failed: the model server is down)"
+        );
+        // Dropped again: back to what the model was given.
+        assert!(o.replies[1].contains("hello"), "{:?}", o.replies);
+        assert!(!o.replies[1].contains("failed"), "{:?}", o.replies);
+        // A text input has no exchange to carry: nothing goes out there.
+        let l2 = lp(
+            vec![
+                b("in", "input", json!({})),
+                b("ask", "llm", json!({})),
+                b("o", "output", json!({})),
+                b("drop", "drop_last", json!({})),
+                b("read", "read_exchange", json!({ "role": "any" })),
+                b("o2", "output", json!({})),
+            ],
+            vec![
+                ln("in", "out", "ask", "in"),
+                ln("ask", "out", "o", "in"),
+                ln("ask", "failed_exchange", "drop", "in"),
+                ln("drop", "out", "read", "in"),
+                ln("read", "all", "o2", "in"),
+            ],
+        );
+        *host.fail_next.lock().unwrap() = 1;
+        let (o, _) = go(&l2, &host, "hi").await;
+        assert_eq!(o.status, RunStatus::Completed, "{o:?}");
+        assert!(o.replies.is_empty());
+    }
+
+    #[tokio::test]
+    async fn final_chat_output_ends_the_run_as_completed() {
+        // "Along the way" goes out first; the final answer ends the run, so
+        // the later model call never happens.
+        let l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b(
+                    "say",
+                    "combine",
+                    json!({ "inputs": 1, "format": "Along the way" }),
+                ),
+                b("add", "output", json!({})),
+                b(
+                    "done",
+                    "combine",
+                    json!({ "inputs": 1, "format": "The answer" }),
+                ),
+                b("final", "final", json!({})),
+                b("later", "llm", json!({})),
+                b("o", "output", json!({})),
+            ],
+            vec![
+                ln("in", "out", "say", "in1"),
+                ln("say", "out", "add", "in"),
+                ln("say", "out", "done", "in1"),
+                ln("done", "out", "final", "in"),
+                ln("done", "out", "later", "in"),
+                ln("later", "out", "o", "in"),
+            ],
+        );
+        let host = Fake::with(&["never"]);
+        let (o, ev) = go(&l, &host, "x").await;
+        assert_eq!(o.status, RunStatus::Completed, "{o:?}");
+        assert_eq!(o.replies, ["Along the way", "The answer"]);
+        assert_eq!(o.llm_calls, 0);
+        assert!(host.calls.lock().unwrap().is_empty());
+        // Its step is logged as done, not stopped.
+        assert!(ev.iter().any(|e| matches!(e, Event::Step(s)
+            if s.block == "final" && s.status == crate::log::StepStatus::Done)));
     }
 
     #[tokio::test]

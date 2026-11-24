@@ -34,9 +34,21 @@ pub struct PortSpec {
 
 /// The name of the output that carries a block's error.
 pub const FAILED: &str = "error";
+/// The Failed (exchange) output of blocks that take an exchange: the input
+/// exchange with the failure added as its last message.
+pub const FAILED_EXCHANGE: &str = "failed_exchange";
 
 fn failed() -> PortSpec {
     port(FAILED, "Failed", ValueKind::Text)
+}
+
+fn failed_exchange() -> PortSpec {
+    port(FAILED_EXCHANGE, "Failed (exchange)", ValueKind::Exchange)
+}
+
+/// How a failure reads as the last message of a Failed (exchange).
+pub fn failure_message(error: &str) -> String {
+    format!("(The last step failed: {error})")
 }
 
 fn port(name: impl Into<String>, label: impl Into<String>, kind: ValueKind) -> PortSpec {
@@ -168,6 +180,18 @@ impl RoleFilter {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Empty {}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DropLastParams {
+    /// How many messages to take off the end (the system message stays).
+    #[serde(default = "d_one")]
+    pub count: u32,
+}
+
+fn d_one() -> u32 {
+    1
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -598,6 +622,8 @@ pub enum BlockKind {
     History(HistoryParams),
     Fixed(FixedParams),
     Output(Empty),
+    /// Adds its input to the reply, then ends the run (completed).
+    Final(Empty),
     /// Shows its input in the run's pane (Sessions → the run's text
     /// button): a running log, one line per input, newest first.
     Pane(Empty),
@@ -627,6 +653,8 @@ pub enum BlockKind {
     Exchange(StartExchangeParams),
     Augment(AugmentParams),
     ReadExchange(ReadExchangeParams),
+    /// Takes the last messages off an exchange.
+    DropLast(DropLastParams),
     ContextCheck(ContextCheckParams),
     /// A block made of other blocks. Its ports come from the function, so
     /// [`BlockKind::inputs`] and [`BlockKind::outputs`] are empty here; see
@@ -654,7 +682,9 @@ impl BlockKind {
         use ValueKind::*;
         match self {
             Input(_) | History(_) | Fixed(_) | Function(_) => vec![],
-            Output(_) | Pane(_) | Split(_) | Regex(_) | Capture(_) => vec![port("in", "In", Text)],
+            Output(_) | Final(_) | Pane(_) | Split(_) | Regex(_) | Capture(_) => {
+                vec![port("in", "In", Text)]
+            }
             Stop(_) => vec![port("in", "Reason", Text)],
             Llm(_) | AskUser(_) => vec![port("in", "In", Any)],
             DeclineCalls(_) => vec![
@@ -680,7 +710,9 @@ impl BlockKind {
                 port("exchange", "Exchange", ValueKind::Exchange),
                 port("in", "Add", Any),
             ],
-            ReadExchange(_) | ContextCheck(_) => vec![port("in", "Exchange", ValueKind::Exchange)],
+            ReadExchange(_) | ContextCheck(_) | DropLast(_) => {
+                vec![port("in", "Exchange", ValueKind::Exchange)]
+            }
             Forward(_) | Remember(_) => vec![port("in", "In", Any)],
             ForEach(_) | Separate(_) | Join(_) => vec![port("in", "List", List)],
             Combine(p) => (1..=p.inputs.clamp(1, 10))
@@ -696,7 +728,7 @@ impl BlockKind {
         use BlockKind::*;
         use ValueKind::*;
         match self {
-            Output(_) | Pane(_) | Stop(_) | Function(_) => vec![],
+            Output(_) | Final(_) | Pane(_) | Stop(_) | Function(_) => vec![],
             Llm(p) => {
                 let mut v = vec![port("out", "Answer", Text)];
                 if p.tools.any() && p.tool_mode != ToolMode::Off {
@@ -704,9 +736,14 @@ impl BlockKind {
                 }
                 v.push(port("reasoning", "Reasoning", Text));
                 v.push(failed());
+                v.push(failed_exchange());
                 v
             }
-            RunTool(_) => vec![port("out", "Results", ValueKind::Exchange), failed()],
+            RunTool(_) => vec![
+                port("out", "Results", ValueKind::Exchange),
+                failed(),
+                failed_exchange(),
+            ],
             AskUser(_) => vec![port("out", "Answer", Text), failed()],
             DeclineCalls(_) => vec![port("out", "Exchange", ValueKind::Exchange)],
             FindCall(_) => vec![
@@ -715,7 +752,7 @@ impl BlockKind {
             ],
             Store(_) | Recall(_) => vec![port("out", "Out", Text)],
             Outline(_) => vec![port("out", "Outline", Text)],
-            BlockKind::Exchange(_) | Augment(_) => {
+            BlockKind::Exchange(_) | Augment(_) | DropLast(_) => {
                 vec![port("out", "Exchange", ValueKind::Exchange)]
             }
             ReadExchange(_) => vec![
@@ -764,6 +801,7 @@ impl BlockKind {
             History(_) => "history",
             Fixed(_) => "fixed",
             Output(_) => "output",
+            Final(_) => "final",
             Pane(_) => "pane",
             Stop(_) => "stop",
             Llm(_) => "llm",
@@ -790,6 +828,7 @@ impl BlockKind {
             Exchange(_) => "exchange",
             Augment(_) => "augment",
             ReadExchange(_) => "read_exchange",
+            DropLast(_) => "drop_last",
             ContextCheck(_) => "context_check",
             Function(_) => "function",
         }
@@ -1264,6 +1303,19 @@ pub fn catalog() -> Vec<BlockInfo> {
             json!({ "role": "user", "format": "_INPUT_" }),
         ),
         info(
+            "drop_last",
+            "Drop last messages",
+            Exchange,
+            "Takes the last messages off an exchange (never its system message). With a Failed (exchange) output, drop 1 to take the failure back out before trying again.",
+            vec![p(
+                "count",
+                "Messages to drop",
+                K::Integer { min: 1, max: 50 },
+                "From the end.",
+            )],
+            json!({ "count": 1 }),
+        ),
+        info(
             "read_exchange",
             "Read exchange",
             Exchange,
@@ -1493,9 +1545,17 @@ pub fn catalog() -> Vec<BlockInfo> {
         ),
         info(
             "output",
-            "Reply",
+            "Add to chat output",
             Finish,
-            "Sends its input to the chat as the agent's reply. If it runs more than once, each part is added to the reply.",
+            "Adds its input to the agent's response in the chat; the run carries on. Each run is one response in the chat, built from everything added to it (with one set of figures and one delete).",
+            vec![],
+            json!({}),
+        ),
+        info(
+            "final",
+            "Final chat output",
+            Finish,
+            "Adds its input to the agent's response in the chat and ends the run, as completed: blocks still waiting to run don't. Use it for the final answer; use Add to chat output for anything said along the way.",
             vec![],
             json!({}),
         ),

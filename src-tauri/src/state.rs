@@ -54,6 +54,35 @@ pub struct RunInfo {
     /// [`PANE_LINES`]); read with `run_pane`.
     #[serde(skip)]
     pub pane: Arc<Mutex<std::collections::VecDeque<String>>>,
+    /// What a chat run has said and been told, in order: its replies (one
+    /// part per stretch of replies), and questions with their answers.
+    /// Saved to the chat as one response when the run ends.
+    #[serde(skip)]
+    pub said: Arc<Mutex<Vec<Said>>>,
+}
+
+/// One part of a chat run's response.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Said {
+    /// "assistant", "question" or "answer" (as chat message roles).
+    pub role: String,
+    pub text: String,
+}
+
+impl Said {
+    /// Adds a part, joining it to the last one when both are replies.
+    pub fn push(parts: &mut Vec<Said>, role: &str, text: &str) {
+        match parts.last_mut() {
+            Some(last) if role == "assistant" && last.role == "assistant" => {
+                last.text.push_str("\n\n");
+                last.text.push_str(text);
+            }
+            _ => parts.push(Said {
+                role: role.into(),
+                text: text.into(),
+            }),
+        }
+    }
 }
 
 /// Lines a run's pane keeps; older ones are dropped.

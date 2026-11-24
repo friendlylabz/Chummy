@@ -29,6 +29,21 @@ export interface RunView {
   startedMs: number;
   /** What its Pane output blocks have shown, newest first (at most PANE_LINES). */
   pane: string[];
+  /** Its response so far, in order: replies, and questions with your answers. */
+  parts: Part[];
+}
+
+/** One part of a run's response (as chat message roles). */
+export interface Part {
+  role: "assistant" | "question" | "answer" | "notice";
+  text: string;
+}
+
+/** Adds a part, joining it to the last one when both are replies (as Rust does). */
+export function addPart(parts: Part[], role: Part["role"], text: string) {
+  const last = parts.at(-1);
+  if (role === "assistant" && last?.role === "assistant") last.text += `\n\n${text}`;
+  else parts.push({ role, text });
 }
 
 /** Lines a run's pane keeps (as in Rust). */
@@ -84,6 +99,7 @@ class RunsStore {
           break;
         case "reply":
           r.replies.push(event.text);
+          addPart(r.parts, "assistant", event.text);
           break;
         case "pane":
           r.pane.unshift(event.text);
@@ -106,6 +122,10 @@ class RunsStore {
           r.waitingForYou = false;
           break;
       }
+    });
+    await events.onRunSaid(({ run_id, role, text }) => {
+      const r = this.runs[run_id];
+      if (r) addPart(r.parts, role, text);
     });
     await events.onRunFinished(({ run_id, outcome }) => {
       const r = this.runs[run_id];
@@ -132,6 +152,7 @@ class RunsStore {
       entries: [],
       startedMs,
       pane: [],
+      parts: [],
     };
   }
 

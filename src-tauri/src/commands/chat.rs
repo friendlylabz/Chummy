@@ -22,7 +22,7 @@ use crate::chats;
 use crate::events;
 use crate::host::{AppHost, agent_host};
 use crate::settings::{Agent, Settings};
-use crate::state::{AppState, PANE_LINES, RunInfo, lock};
+use crate::state::{AppState, PANE_LINES, RunInfo, Said, lock};
 
 pub use crate::chats::{ChatIndex, ChatMessage, ChatMeta, RunSummary};
 
@@ -616,9 +616,10 @@ pub fn emitter(app: &AppHandle, guard: &RunGuard) -> impl FnMut(Event) + Send + 
     let app = app.clone();
     let run_id = guard.run_id.clone();
     let log = guard.log.clone();
-    let pane = lock(&app.state::<AppState>().runs)
-        .get(&run_id)
-        .map(|r| r.pane.clone());
+    let (pane, said) = match lock(&app.state::<AppState>().runs).get(&run_id) {
+        Some(r) => (Some(r.pane.clone()), Some(r.said.clone())),
+        None => (None, None),
+    };
     move |event| {
         if let Some(l) = &log {
             l.event(&event);
@@ -629,6 +630,9 @@ pub fn emitter(app: &AppHandle, guard: &RunGuard) -> impl FnMut(Event) + Send + 
                 lines.pop_front();
             }
             lines.push_back(text.clone());
+        }
+        if let (Event::Reply { text, .. }, Some(said)) = (&event, &said) {
+            Said::push(&mut lock(said), "assistant", text);
         }
         let _ = app.emit(
             events::RUN_EVENT,
@@ -669,6 +673,7 @@ fn start(
         started_at: now(),
         cancel: cancel.clone(),
         pane: Default::default(),
+        said: Default::default(),
     };
     // However the run ends (even by a panic), it leaves the run list, so
     // the agent never stays "still working".
@@ -690,10 +695,13 @@ fn start(
         let end = guard.finish(&outcome);
 
         let state = app.state::<AppState>();
-        lock(&state.runs).remove(&id);
+        let said = lock(&state.runs)
+            .remove(&id)
+            .map(|r| lock(&r.said).clone())
+            .unwrap_or_default();
         if let (Some(agent), Some(chat)) = (&agent, &chat_id) {
             let ms = end.ended_at.saturating_sub(guard.started_at);
-            for m in messages_for(&outcome, &id, &end, ms) {
+            for m in messages_for(&outcome, &id, &end, ms, said) {
                 let _ = append(&app, &state, &agent.id, chat, m);
             }
             if first && !outcome.replies.is_empty() {
@@ -805,7 +813,16 @@ impl Drop for RunGuard {
 }
 
 /// Chat messages that report a finished run.
-fn messages_for(o: &RunOutcome, run_id: &str, end: &RunEnd, ms: u64) -> Vec<ChatMessage> {
+/// The chat messages a run leaves: its response in order (replies,
+/// questions, your answers) and any notice, all carrying the run's figures
+/// so the chat shows them as one response with one set of figures.
+fn messages_for(
+    o: &RunOutcome,
+    run_id: &str,
+    end: &RunEnd,
+    ms: u64,
+    said: Vec<Said>,
+) -> Vec<ChatMessage> {
     let (status, notice) = match &o.status {
         RunStatus::Completed if o.replies.is_empty() => (
             "completed",
@@ -817,6 +834,15 @@ fn messages_for(o: &RunOutcome, run_id: &str, end: &RunEnd, ms: u64) -> Vec<Chat
         RunStatus::Completed => ("completed", None),
         RunStatus::Stopped => ("stopped", Some("Stopped.".to_string())),
         RunStatus::LimitReached { message } => ("limit", Some(message.clone())),
+        // A loop that shows its own reason (like the Chummy assistant's
+        // "I couldn't finish") doesn't need it said twice.
+        RunStatus::Failed { error, .. }
+            if o.replies
+                .last()
+                .is_some_and(|r| !r.trim().is_empty() && error.contains(r.trim())) =>
+        {
+            ("failed", Some("The run ended with this error.".to_string()))
+        }
         RunStatus::Failed { error, .. } => ("failed", Some(error.clone())),
     };
     let summary = RunSummary {
@@ -832,17 +858,21 @@ fn messages_for(o: &RunOutcome, run_id: &str, end: &RunEnd, ms: u64) -> Vec<Chat
         daily_used: end.daily_used,
         daily_allowed: end.daily_allowed,
     };
-    let mut out = Vec::new();
-    if !o.replies.is_empty() {
-        out.push(ChatMessage {
+    let mut parts = said;
+    if !parts.iter().any(|p| p.role == "assistant") && !o.replies.is_empty() {
+        Said::push(&mut parts, "assistant", &o.replies.join("\n\n"));
+    }
+    let mut out: Vec<ChatMessage> = parts
+        .into_iter()
+        .map(|p| ChatMessage {
             id: msg_id(),
-            role: "assistant".into(),
-            text: o.replies.join("\n\n"),
+            role: p.role,
+            text: p.text,
             at: now(),
             from: None,
             run: Some(summary.clone()),
-        });
-    }
+        })
+        .collect();
     if let Some(text) = notice {
         out.push(ChatMessage {
             id: msg_id(),
@@ -854,4 +884,82 @@ fn messages_for(o: &RunOutcome, run_id: &str, end: &RunEnd, ms: u64) -> Vec<Chat
         });
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chummy_flow::RunStatus;
+
+    fn outcome(status: RunStatus, replies: &[&str]) -> RunOutcome {
+        RunOutcome {
+            status,
+            replies: replies.iter().map(|s| s.to_string()).collect(),
+            steps: 3,
+            llm_calls: 1,
+            tool_calls: 0,
+            waiting: vec![],
+            usage: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_run_is_one_response_in_order() {
+        let mut said = Vec::new();
+        Said::push(&mut said, "assistant", "Looking.");
+        Said::push(&mut said, "assistant", "Found it.");
+        Said::push(&mut said, "question", "Which one?");
+        Said::push(&mut said, "answer", "The first");
+        Said::push(&mut said, "assistant", "Done.");
+        let o = outcome(
+            RunStatus::Failed {
+                error: "the model server failed".into(),
+                block: None,
+            },
+            &["Looking.", "Found it.", "Done."],
+        );
+        let m = messages_for(&o, "run1", &RunEnd::default(), 1500, said);
+        let roles: Vec<&str> = m.iter().map(|m| m.role.as_str()).collect();
+        assert_eq!(
+            roles,
+            ["assistant", "question", "answer", "assistant", "notice"]
+        );
+        assert_eq!(m[0].text, "Looking.\n\nFound it.");
+        // Every part carries the run, so the chat shows one response with
+        // one set of figures and one delete.
+        assert!(m.iter().all(|m| m.run.as_ref().unwrap().run_id == "run1"));
+        assert_eq!(m[4].run.as_ref().unwrap().ms, 1500);
+    }
+
+    #[test]
+    fn a_reason_already_shown_isnt_repeated() {
+        let why = "**I couldn't finish:** it failed 3 times";
+        let o = outcome(
+            RunStatus::Failed {
+                error: format!("Stop with error: {why}"),
+                block: None,
+            },
+            &[why],
+        );
+        let m = messages_for(&o, "r", &RunEnd::default(), 0, vec![]);
+        assert_eq!(m[1].text, "The run ended with this error.");
+        // Otherwise the error is the notice.
+        let o = outcome(
+            RunStatus::Failed {
+                error: "Work: the server is down".into(),
+                block: None,
+            },
+            &["Looking."],
+        );
+        let m = messages_for(&o, "r", &RunEnd::default(), 0, vec![]);
+        assert_eq!(m[1].text, "Work: the server is down");
+    }
+
+    #[test]
+    fn replies_are_kept_without_a_record() {
+        let o = outcome(RunStatus::Completed, &["a", "b"]);
+        let m = messages_for(&o, "r", &RunEnd::default(), 0, vec![]);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].text, "a\n\nb");
+    }
 }

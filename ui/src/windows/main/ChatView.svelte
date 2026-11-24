@@ -4,7 +4,7 @@
   import { stopwatch } from "$lib/format";
   import { commands, type Agent } from "$lib/ipc";
   import { chat } from "$lib/stores/chat.svelte";
-  import { runs } from "$lib/stores/runs.svelte";
+  import { runs, type Part } from "$lib/stores/runs.svelte";
   import { asks } from "$lib/stores/asks.svelte";
   import Icon from "$lib/components/Icon.svelte";
   import Button from "$lib/components/Button.svelte";
@@ -15,13 +15,35 @@
 
   let { agent, footer }: { agent: Agent; footer?: Snippet } = $props();
 
-  /** The message whose trash can was clicked: it asks "Delete?" first. */
+  /** The message (or response) whose trash can was clicked: it asks "Delete?" first. */
   let confirming = $state<string | null>(null);
 
-  function confirmDelete(id: string) {
+  function confirmDelete(ids: string[]) {
     confirming = null;
-    chat.deleteMessage(id);
+    chat.deleteMessages(ids);
   }
+
+  /**
+   * What the chat shows: your messages one by one, and each run as ONE
+   * response (its replies, questions, your answers and any notice), with
+   * one set of figures and one delete. Older messages with no run stand alone.
+   */
+  type Item =
+    | { kind: "single"; key: string; m: ChatMessage }
+    | { kind: "run"; key: string; runId: string; messages: ChatMessage[] };
+  const items = $derived.by(() => {
+    const out: Item[] = [];
+    for (const m of chat.messages) {
+      const runId = m.role !== "user" ? m.run?.run_id : undefined;
+      const last = out.at(-1);
+      if (runId && last?.kind === "run" && last.runId === runId) last.messages.push(m);
+      else if (runId) out.push({ kind: "run", key: m.id, runId, messages: [m] });
+      else out.push({ kind: "single", key: m.id, m });
+    }
+    return out;
+  });
+  const partsOf = (ms: ChatMessage[]): Part[] =>
+    ms.map((m) => ({ role: m.role === "user" ? "answer" : m.role, text: m.text }));
 
   let scroller: HTMLDivElement;
   const run = $derived(runs.forChat(chat.chatId));
@@ -32,12 +54,6 @@
     run ? waiting.find((p) => p.origin.run_id === run.info.run_id && p.ask.kind === "question") : undefined,
   );
 
-  /** Each run's step view goes under its last message. */
-  const lastOfRun = $derived.by(() => {
-    const last = new Map<string, string>();
-    for (const m of chat.messages) if (m.run?.run_id) last.set(m.run.run_id, m.id);
-    return new Set(last.values());
-  });
   function counts(r: NonNullable<ChatMessage["run"]>): string {
     const n = (x: number, one: string) => `${x.toLocaleString("en-US")} ${one}${x === 1 ? "" : "s"}`;
     const pct = (a: number, b: number) => {
@@ -101,20 +117,20 @@
       </div>
     {/if}
 
-    {#snippet del(m: ChatMessage)}
-      {#if confirming === m.id && !run}
+    {#snippet del(key: string, ids: string[], what: string)}
+      {#if confirming === key && !run}
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions (Escape cancels) -->
         <span
           class="confirm"
           role="group"
-          aria-label="Delete this message?"
+          aria-label={`Delete this ${what}?`}
           onkeydown={(e) => {
             if (e.key === "Escape") confirming = null;
           }}
         >
-          Delete this message?
+          Delete this {what}?
           <!-- svelte-ignore a11y_autofocus -->
-          <button type="button" class="danger" autofocus onclick={() => confirmDelete(m.id)}>Delete</button>
+          <button type="button" class="danger" autofocus onclick={() => confirmDelete(ids)}>Delete</button>
           <button type="button" onclick={() => (confirming = null)}>Cancel</button>
         </span>
       {:else}
@@ -122,67 +138,75 @@
           type="button"
           class="trash"
           disabled={!!run}
-          title={run ? "Wait until this chat is done to delete messages" : "Delete this message (the agent won't see it either)"}
-          aria-label="Delete message"
-          onclick={() => (confirming = m.id)}
+          title={run ? "Wait until this chat is done to delete messages" : `Delete this ${what} (the agent won't see it either)`}
+          aria-label={`Delete ${what}`}
+          onclick={() => (confirming = key)}
         >
           <Icon name="trash" size={13} />
         </button>
       {/if}
     {/snippet}
 
-    {#each chat.messages as m (m.id)}
+    <!-- One run's response, as it builds and once saved: replies, questions
+         asked along the way with your answers, and how it ended. -->
+    {#snippet response(parts: Part[], status?: string)}
+      {#each parts as p, i (i)}
+        {#if p.role === "assistant"}
+          <Formatted text={p.text} />
+        {:else if p.role === "question"}
+          <div class="part asked-part"><Icon name="ask" size={14} /><div><Formatted text={p.text} /></div></div>
+        {:else if p.role === "answer"}
+          <div class="part answer-part"><span class="who">You</span><span data-selectable>{p.text}</span></div>
+        {:else}
+          <div class="msg notice in-response">
+            <Icon name={status === "stopped" ? "stop" : "alert"} size={14} />
+            <span data-selectable>{p.text}</span>
+          </div>
+        {/if}
+      {/each}
+    {/snippet}
+
+    {#each items as item (item.key)}
       <!-- svelte-ignore a11y_no_static_element_interactions (leaving cancels "Delete?") -->
       <div
         class="item"
         onmouseleave={() => {
-          if (confirming === m.id) confirming = null;
+          if (confirming === item.key) confirming = null;
         }}
       >
-        {#if m.role === "user" || m.role === "answer"}
-          <div class="msg user">
-            <div class="bubble" class:answer={m.role === "answer"} data-selectable>{m.text}</div>
-          </div>
-          <div class="meta-row mine">{@render del(m)}</div>
-        {:else if m.role === "assistant"}
+        {#if item.kind === "run"}
+          {@const summary = item.messages.at(-1)!.run!}
+          {@const ids = item.messages.map((m) => m.id)}
           <div class="msg assistant">
             <div class="avatar"><Icon name="bot" size={15} /></div>
             <div class="body">
-              <Formatted text={m.text} />
-              {#if m.run?.run_id && lastOfRun.has(m.id)}
-                <MessageSteps runId={m.run.run_id} summary={counts(m.run)}>
-                  {#snippet end()}{@render del(m)}{/snippet}
-                </MessageSteps>
-              {:else}
-                <div class="meta-row">
-                  {#if m.run}<span class="meta">{counts(m.run)}</span>{/if}
-                  {@render del(m)}
-                </div>
-              {/if}
+              {@render response(partsOf(item.messages), summary.status)}
+              <MessageSteps runId={item.runId} summary={counts(summary)}>
+                {#snippet end()}{@render del(item.key, ids, "response")}{/snippet}
+              </MessageSteps>
             </div>
           </div>
-        {:else if m.role === "question"}
-          <div class="msg assistant asked">
-            <div class="avatar"><Icon name="ask" size={15} /></div>
+        {:else if item.m.role === "user" || item.m.role === "answer"}
+          <div class="msg user">
+            <div class="bubble" class:answer={item.m.role === "answer"} data-selectable>{item.m.text}</div>
+          </div>
+          <div class="meta-row mine">{@render del(item.key, [item.m.id], "message")}</div>
+        {:else if item.m.role === "assistant" || item.m.role === "question"}
+          <div class="msg assistant" class:asked={item.m.role === "question"}>
+            <div class="avatar"><Icon name={item.m.role === "question" ? "ask" : "bot"} size={15} /></div>
             <div class="body">
-              {#if m.from}<div class="from">{m.from} asked</div>{/if}
-              <Formatted text={m.text} />
-              <div class="meta-row">{@render del(m)}</div>
+              {#if item.m.from}<div class="from">{item.m.from} asked</div>{/if}
+              <Formatted text={item.m.text} />
+              <div class="meta-row">{@render del(item.key, [item.m.id], "message")}</div>
             </div>
           </div>
         {:else}
           <div class="notice-wrap">
             <div class="msg notice">
-              <Icon name={m.run?.status === "stopped" ? "stop" : "alert"} size={14} />
-              <span data-selectable>{m.text}</span>
+              <Icon name="alert" size={14} />
+              <span data-selectable>{item.m.text}</span>
             </div>
-            {#if m.run?.run_id && lastOfRun.has(m.id)}
-              <MessageSteps runId={m.run.run_id} summary={counts(m.run)}>
-                {#snippet end()}{@render del(m)}{/snippet}
-              </MessageSteps>
-            {:else}
-              <div class="meta-row">{@render del(m)}</div>
-            {/if}
+            <div class="meta-row">{@render del(item.key, [item.m.id], "message")}</div>
           </div>
         {/if}
       </div>
@@ -192,7 +216,7 @@
       <div class="msg assistant live">
         <div class="avatar"><Icon name="bot" size={15} /></div>
         <div class="body">
-          {#if run.replies.length}<Formatted text={run.replies.join("\n\n")} />{/if}
+          {@render response(run.parts)}
           <div class="activity">
             <span class="pulse"></span>
             <span class="step">{run.currentLabel ? `${run.currentLabel}…` : "Working…"}</span>
@@ -222,7 +246,11 @@
       {#if chat.undoable.length}
         <div class="undo" role="status">
           <span>
-            {chat.undoable.length === 1 ? "Message deleted." : `${chat.undoable.length} messages deleted.`}
+            {chat.undoable.length > 1
+              ? `${chat.undoable.length} deleted.`
+              : chat.undoable[0].length > 1
+                ? "Response deleted."
+                : "Message deleted."}
           </span>
           <button type="button" class="link" onclick={() => chat.undoDelete()}>
             {chat.undoable.length === 1 ? "Undo" : "Undo last"}
@@ -263,9 +291,6 @@
   .meta-row.mine {
     justify-content: flex-end;
     margin-top: 2px;
-  }
-  .meta-row .meta {
-    margin-top: 0;
   }
   .meta-row > :global(:last-child) {
     margin-left: auto;
@@ -398,11 +423,6 @@
     min-width: 0;
     padding-top: 3px;
   }
-  .meta {
-    margin-top: var(--space-1);
-    color: var(--text-faint);
-    font-size: var(--text-xs);
-  }
   .notice {
     align-items: center;
     gap: var(--space-2);
@@ -429,6 +449,34 @@
     color: var(--text-faint);
     font-size: var(--text-xs);
     margin-bottom: 2px;
+  }
+  .part {
+    display: flex;
+    gap: var(--space-2);
+    margin: var(--space-2) 0;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    font-size: var(--text-sm);
+  }
+  .asked-part {
+    background: var(--surface-2);
+  }
+  .asked-part :global(svg) {
+    flex: none;
+    margin-top: 3px;
+    color: var(--accent);
+  }
+  .answer-part {
+    border: 1px dashed color-mix(in srgb, var(--accent) 50%, transparent);
+  }
+  .answer-part .who {
+    flex: none;
+    color: var(--text-faint);
+    font-weight: 600;
+  }
+  .notice.in-response {
+    display: flex;
+    margin: var(--space-2) 0;
   }
   .bubble.answer {
     border: 1px dashed color-mix(in srgb, var(--accent) 50%, transparent);

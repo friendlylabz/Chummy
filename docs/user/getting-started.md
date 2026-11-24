@@ -52,9 +52,11 @@ unsafe* ask before each use unless you change that.
 - Type in the message box and press Enter. The agent's loop runs inside
   its folder; while it works you see the current step and a **timer**
   (minutes, seconds and tenths), and you can **Stop** it.
-- Under each reply: how long the run took, then model calls, tool calls,
-  steps, tokens used, how full the context is, and today's use of the
-  model's daily limit.
+- Each message you send gets **one response**, built as the run goes: what
+  the agent says along the way, any question it asked with your answer,
+  and how it ended. Under it: how long the run took, then model calls, tool
+  calls, steps, tokens used, how full the context is, and today's use of
+  the model's daily limit.
 - **What happened** opens the run's log right there: model answers and
   reasoning, tool calls and results, questions and notices, **newest at
   the top** (switch to *In order* to read it from the start). Block steps
@@ -68,8 +70,10 @@ unsafe* ask before each use unless you change that.
   newest at the top. The × closes it.
 - The chat picker (next to the agent picker) starts a **New chat** or opens
   an earlier one. An agent's chats can run side by side.
-- The trash can under a message deletes it (the agent won't see it either);
-  **Undo** brings it back.
+- The trash can under a message, or under a whole response, deletes it
+  (the agent won't see it either); **Undo** brings it back.
+- In the message box, **Ctrl+Z** (Cmd+Z on a Mac) undoes typing a word at a
+  time, and **Ctrl+Shift+Z** or **Ctrl+Y** redoes.
 
 ## Your instructions for a folder
 

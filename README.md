@@ -151,9 +151,11 @@ listed in [docs/README.md](docs/README.md).
   step a small call decides the next one (shown in the run's pane), and the
   model is told to do just that step, as the last thing it reads, so small
   models stay on task. If it stops with steps unchecked or with
-  an empty answer, it's sent back to finish (twice at most). Onboarding
+  an empty answer, it's sent back to finish (twice at most). If a model call
+  or tool run fails, the model says what went wrong (in the chat) and it
+  tries again from the start of the step, 3 times at most. Onboarding
   offers it with one click, and a first agent gets it automatically.
-- **Templates.** Chummy assistant, Blank (a Message and a Reply block) and
+- **Templates.** Chummy assistant, Blank (a Message and an Add to chat output block) and
   Simple chat (one model call with the conversation as context).
 - **Scheduled jobs.** A job runs one of your agents with a message: at set
   times, every so often, once, or when files land in a folder of the
@@ -184,8 +186,11 @@ listed in [docs/README.md](docs/README.md).
   Sessions panel shows which chat each run belongs to, and clicking it opens
   that chat. Each run there also has a text button that swaps the panel for
   the run's **pane**: a live log of what its *Pane output* blocks report,
-  newest first (× closes it). A new agent starts with an empty chat. Click the trash can
-  under a message, then **Delete**, to delete it: it's gone from the
+  newest first (× closes it). Each run is **one response** in the chat
+  (everything it said along the way, questions and your answers, and how it
+  ended), with one set of figures and one delete; Ctrl+Z / Cmd+Z undoes typing
+  in the message box. A new agent starts with an empty chat. Click the trash can
+  under a message or response, then **Delete**, to delete it: it's gone from the
   chat and from what the agent sees next time (not while that chat is
   working). **Undo** brings it back where it was, for 20 seconds or until you
   send another message.

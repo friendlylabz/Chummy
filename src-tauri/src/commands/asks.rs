@@ -12,7 +12,16 @@ use super::chat::{ChatMessage, append, msg_id};
 use super::{CmdResult, err, now};
 use crate::events;
 use crate::notify;
-use crate::state::AppState;
+use crate::state::{AppState, Said, lock};
+
+/// A part added to a running chat run's response (a question and your
+/// answer), for windows to show as it builds.
+#[derive(Clone, serde::Serialize)]
+struct RunSaid {
+    run_id: String,
+    role: String,
+    text: String,
+}
 
 #[tauri::command]
 pub fn list_asks(state: State<'_, AppState>) -> Vec<Pending> {
@@ -49,8 +58,31 @@ pub fn answer_ask(
             .map(|f| f.to_uppercase().chain(c).collect())
             .unwrap_or(e)
     })?;
-    // Keep a record in the run's chat (a job's questions go to the agent's
-    // open chat). Test runs aren't part of a chat.
+    let question = pending.ask.text.clone();
+    let answer_said = answer_text(&answer);
+    // A chat run keeps them in its response, in order, saved when it ends.
+    if pending.origin.kind == RunKind::Chat {
+        let said = lock(&state.runs)
+            .get(&pending.origin.run_id)
+            .map(|r| r.said.clone());
+        if let Some(said) = said {
+            let mut parts = lock(&said);
+            for (role, text) in [("question", &question), ("answer", &answer_said)] {
+                Said::push(&mut parts, role, text);
+                let _ = app.emit(
+                    events::RUN_SAID,
+                    RunSaid {
+                        run_id: pending.origin.run_id.clone(),
+                        role: role.into(),
+                        text: text.clone(),
+                    },
+                );
+            }
+            return Ok(());
+        }
+    }
+    // Otherwise keep a record in the chat (a job's questions go to the
+    // agent's open chat). Test runs aren't part of a chat.
     if pending.origin.kind != RunKind::Test
         && let Some(agent) = &pending.origin.agent_id
         && let Some(chat) = pending
@@ -60,8 +92,7 @@ pub fn answer_ask(
             .or_else(|| super::chat::active_chat(&state, agent).ok())
     {
         let from = (pending.origin.kind == RunKind::Job).then(|| pending.origin.title.clone());
-        let question = pending.ask.text.clone();
-        for (role, text) in [("question", question), ("answer", answer_text(&answer))] {
+        for (role, text) in [("question", question), ("answer", answer_said)] {
             let _ = append(
                 &app,
                 &state,

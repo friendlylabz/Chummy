@@ -498,12 +498,14 @@ fn graph(
     }
     if func.is_none()
         && !blocks.is_empty()
-        && !kinds.values().any(|k| matches!(k, BlockKind::Output(_)))
+        && !kinds
+            .values()
+            .any(|k| matches!(k, BlockKind::Output(_) | BlockKind::Final(_)))
         && !blocks.iter().any(|b| b.kind == "function")
     {
         sink.warn(
             None,
-            "There's no Reply block, so the agent won't answer in chat.".into(),
+            "There's no chat output block (Add to chat output or Final chat output), so the agent won't answer in chat.".into(),
         );
     }
     for b in blocks {
@@ -576,6 +578,9 @@ fn param_problems(k: &BlockKind) -> Vec<String> {
             v.push("number of outputs must be 1–10".into())
         }
         BlockKind::Split(p) if p.chunk_size == 0 => v.push("chunk size must be more than 0".into()),
+        BlockKind::DropLast(p) if !(1..=50).contains(&p.count) => {
+            v.push("messages to drop must be 1–50".into())
+        }
         BlockKind::Llm(p) => {
             if p.temperature.is_some_and(|t| !(0.0..=2.0).contains(&t)) {
                 v.push("temperature must be between 0 and 2".into());
@@ -712,7 +717,11 @@ mod tests {
         l.links = vec![link("in", "out", "c", "in1")];
         let a = analyze(&l);
         assert!(a.ok);
-        assert!(a.issues.iter().any(|i| i.message.contains("no Reply")));
+        assert!(
+            a.issues
+                .iter()
+                .any(|i| i.message.contains("no chat output block"))
+        );
         assert!(
             a.issues
                 .iter()

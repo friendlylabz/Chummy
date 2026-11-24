@@ -129,6 +129,14 @@ WORK_REMINDER = (
     "(A note from your own planning, not from the user.) Your step now: {{next}}\n"
     "Do just this step: call a tool if it needs one. If the whole request is done, give the final answer."
 )
+REPORT_SYSTEM = (
+    "You are Chummy, working on the user's request:\n{{request}}\n\n"
+    "A step of the work just failed: the failure is the last message of the conversation."
+)
+REPORT_ASK = (
+    "In one or two short sentences: what went wrong, and what will you do differently on the next try? "
+    "Don't call tools, and don't apologise."
+)
 COMPACTED = "_(The work so far got long, so I summarised it to make room.)_"
 
 # A to-do line: "- [ ] step" or "- [x] step" (also * or +, any indent).
@@ -141,6 +149,8 @@ ANY = r"(?s)."
 QUESTION = r"\?[\s*_)\"'”»]*$"
 # Two nudges given already.
 SPENT = r"x{2}"
+# Failures so far, one x each: give up at this many.
+ERRORS_SPENT = r"^x{%d}" % 3
 # The first line of a text, at most 200 characters (one match only).
 FIRST_LINE = r"\A\s*[^\n]{0,200}"
 # The first 60 lines (the folder listing shown to the model).
@@ -304,6 +314,67 @@ def decide_next_fn():
     )
 
 
+def report_error_fn():
+    return fn(
+        "report_error", "Report what went wrong",
+        "When Work or Run tool fails, this gets the exchange with the failure as its last message. The model "
+        "says in a sentence or two what went wrong and what it will do differently; that goes to the chat and "
+        "the run's pane, and becomes {{next}} so the next step takes it into account. Then the failure is "
+        "taken back out of the exchange (and any tool calls left waiting are answered as not run), and the "
+        "exchange goes back to the start of the Agent loop to try again. After 3 failures in one run it gives "
+        "up, and the run stops with the last error.",
+        [("exchange", "Failed exchange", "ex", "in")],
+        [("exchange", "Try again", "decline", "out"), ("gave_up", "Gave up", "why", "out")],
+        [
+            b("ex", "forward", "Failed exchange", 0, 0),
+            b("err", "read_exchange", "The failure", 260, -250, {"role": "user"},
+              "The last user message: the failure."),
+            b("keep_err", "store", "Remember it", 520, -250, {"key": "last_error", "max_chars": 600}),
+            b("count", "combine", "Count it", 780, -250, {"inputs": 1, "format": "{{errors}}x"}),
+            b("save_count", "store", "Failures so far", 1040, -250, {"key": "errors", "max_chars": 100}),
+            b("spent", "branch", "Failed 3 times?", 1300, 0, {"pattern": ERRORS_SPENT}),
+            b("gave_up", "read_exchange", "Giving up", 1560, 300, {"role": "user"}),
+            b("why", "combine", "Give up", 1820, 300, {
+                "inputs": 1, "format": "It failed 3 times. The last time: {{last_error}}"}),
+            b("report", "llm", "Say what went wrong", 1560, -250,
+              {"system": REPORT_SYSTEM, "reminder": REPORT_ASK, "temperature": 0.2},
+              "Sees the conversation with the failure at its end."),
+            b("fallback", "combine", "If that fails too", 1820, -100, {"inputs": 1, "format": "{{last_error}}"}),
+            b("show_msg", "combine", "For the chat", 2080, -400, {
+                "inputs": 1, "format": "_Something went wrong: _INPUT1_ Trying again._"}),
+            b("show", "output", "Show it", 2340, -400, {}, "Added to the response; the run carries on."),
+            b("pane", "pane", "Show in the pane", 2340, -250),
+            b("note", "combine", "For the next step", 2080, -100, {
+                "inputs": 1, "format": "The last try failed: _INPUT1_ Take another way."}),
+            b("keep_note", "store", "The step now", 2340, -100, {"key": "next", "max_chars": 300},
+              "{{next}}: Decide what's next sees it."),
+            b("drop", "drop_last", "Take the failure out", 1560, 100, {"count": 1}),
+            b("not_run", "combine", "Why calls weren't run", 1820, 200, {
+                "inputs": 1, "format": "Not run: the step failed."}),
+            b("decline", "decline_calls", "Answer waiting calls", 2080, 100, {},
+              "Tool calls left waiting are answered as not run, so the exchange is valid again."),
+        ],
+        [
+            l("ex", "out", "err", "in"), l("err", "last", "keep_err", "in"),
+            l("keep_err", "out", "count", "in1"), l("count", "out", "save_count", "in"),
+            l("ex", "out", "spent", "value"), l("save_count", "out", "spent", "test"),
+            l("spent", "yes", "gave_up", "in", "3 failures"), l("gave_up", "last", "why", "in1"),
+            l("spent", "no", "report", "in", "try again"),
+            l("report", "out", "show_msg", "in1"), l("report", "out", "pane", "in"),
+            l("report", "out", "note", "in1"),
+            l("report", "error", "fallback", "in1", "the report failed too"),
+            l("fallback", "out", "show_msg", "in1"), l("fallback", "out", "pane", "in"),
+            l("fallback", "out", "note", "in1"),
+            l("show_msg", "out", "show", "in"), l("note", "out", "keep_note", "in"),
+            l("spent", "no", "drop", "in"), l("drop", "out", "decline", "in"),
+            l("keep_err", "out", "not_run", "in1"), l("not_run", "out", "decline", "reason"),
+        ],
+        [note("n1", 0, 250, "Failures are reported, not hidden: you see a line in the chat and the pane, the "
+                            "model's next step knows what went wrong, and the exchange goes back without the "
+                            "failure in it. Three failures in one run and it stops for real.", 420, 110)],
+    )
+
+
 def make_room_fn():
     return fn(
         "make_room", "Make room",
@@ -408,7 +479,8 @@ def agent_fn():
         "The core loop: before each call, Decide what's next picks the one next step (shown in the run's pane "
         "and sent to Work as its last message); then Work is called with the conversation so far; if it calls tools, what it said is shown, the "
         "calls run (your approvals apply) and the results go back to it; when it answers without tool calls, "
-        "Done? decides whether that's the final answer.",
+        "Done? decides whether that's the final answer. If Work or Run tool fails, Report what went wrong says "
+        "why and the loop tries again from the start (3 times at most).",
         [("request", "Request", "req", "in")],
         [("answer", "Final answer", "answer", "out"), ("failed", "Failed", "failed", "out")],
         [
@@ -428,7 +500,9 @@ def agent_fn():
             b("check", "function", "Done?", 1160, -200, {"function": "done_check"}),
             b("restart", "exchange", "Carry on", 1460, -350, {"system": SYSTEM, "roles": ["user"]}),
             b("answer", "forward", "Final answer", 1460, -150),
-            b("failed", "forward", "Failed", 1160, 500),
+            b("oops", "function", "Report what went wrong", 1160, 500, {"function": "report_error"},
+              "Work or Run tool failed: say why, take it back out, try again (3 times at most)."),
+            b("failed", "forward", "Failed", 1460, 650),
         ],
         [
             l("req", "out", "start", "in"), l("start", "out", "next", "exchange"),
@@ -438,7 +512,10 @@ def agent_fn():
             l("work", "out", "check", "answer", "no tool calls"),
             l("check", "done", "answer", "in"),
             l("check", "again", "restart", "in", "not done yet"), l("restart", "out", "next", "exchange"),
-            l("work", "error", "failed", "in", "the model call failed"),
+            l("work", "failed_exchange", "oops", "exchange", "the model call failed"),
+            l("run", "failed_exchange", "oops", "exchange", "running tools failed"),
+            l("oops", "exchange", "next", "exchange", "try again"),
+            l("oops", "gave_up", "failed", "in", "gave up"),
         ],
         [note("n1", 0, -500, "The core cycle: Decide what's next ⇄ Work ⇄ Show what it says ⇄ Run tool ⇄ Make "
                              "room, until the model answers without tool calls. The loop's limits (model calls, tool calls) stop a "
@@ -454,7 +531,7 @@ def assistant():
           "Reads CHUMMY.md and the folder, starts the to-do list."),
         b("agent", "function", "Agent loop", 600, 100, {"function": "agent"},
           "The model works with tools until it's done."),
-        b("reply", "output", "Reply", 900, 0),
+        b("reply", "final", "Final answer", 900, 0, {}, "Adds the final answer to the response and ends the run."),
         b("why", "combine", "What went wrong", 900, 250, {
             "inputs": 1, "format": "**I couldn't finish:** _INPUT1_"}),
         b("show_why", "output", "Show it", 1200, 200),
@@ -481,7 +558,7 @@ def assistant():
         # Every Work call has a small Decide what's next call before it, so twice the model calls.
         "limits": {"max_steps": 10000, "max_llm_calls": 400, "max_tool_calls": 150},
         "blocks": blocks, "links": links,
-        "functions": [keep_todos_fn(), get_ready_fn(), show_fn(), decide_next_fn(), make_room_fn(), done_fn(),
+        "functions": [keep_todos_fn(), get_ready_fn(), show_fn(), decide_next_fn(), report_error_fn(), make_room_fn(), done_fn(),
                       agent_fn()],
         "notes": [
             note("n1", 0, 450,
@@ -493,7 +570,9 @@ def assistant():
                  "says is shown, the tools run, the results go back. Long conversations are summarised.\n"
                  "3. Planning: the model keeps its own checklist (- [ ] / - [x]) as {{todos}}.\n"
                  "4. Done? An answer without tool calls is the final answer, unless it's empty or steps are "
-                 "unchecked (then it's sent back, twice at most). A question for you ends the turn.\n\n"
+                 "unchecked (then it's sent back, twice at most). A question for you ends the turn.\n"
+                 "5. If Work or Run tool fails, the model says what went wrong (in the chat) and the loop "
+                 "tries again from the start, 3 times at most.\n\n"
                  "Double-click a function block to see inside.", 460, 300),
         ],
     }

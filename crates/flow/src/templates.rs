@@ -193,6 +193,10 @@ mod tests {
         nexts: Mutex<u32>,
         /// What Pane output blocks showed, in order.
         pane: Mutex<Vec<String>>,
+        /// The next this-many Work calls fail.
+        fail_work: Mutex<u32>,
+        /// "Report what went wrong" calls, with what they were sent.
+        reports: Mutex<Vec<LlmCall>>,
     }
 
     fn says(t: &str) -> LlmAnswer {
@@ -269,6 +273,11 @@ mod tests {
                     "\n  Next move {n}.\nAnd some rambling after it."
                 )));
             }
+            if last.contains("what went wrong") {
+                assert!(call.tools.is_empty(), "reporting gets no tools");
+                self.reports.lock().unwrap().push(call);
+                return Ok(says("The server was busy; I'll try the step again."));
+            }
             assert!(
                 call.messages[0].role == Role::System
                     && call.messages[0].text.starts_with("You are Chummy"),
@@ -276,6 +285,13 @@ mod tests {
             );
             assert!(!call.tools.is_empty(), "the work block gets the tools");
             self.work.lock().unwrap().push(call);
+            {
+                let mut f = self.fail_work.lock().unwrap();
+                if *f > 0 {
+                    *f -= 1;
+                    return Err("the model server is busy".into());
+                }
+            }
             Ok(self
                 .script
                 .lock()
@@ -633,9 +649,69 @@ mod tests {
             matches!(&out.status, RunStatus::Failed { error, .. } if error.contains("model server failed")),
             "{out:?}"
         );
+        // Two reports (the report fails too here, so the error itself is
+        // shown), then it gives up on the third failure.
+        let tries: Vec<&String> = out
+            .replies
+            .iter()
+            .filter(|r| r.starts_with("_Something went wrong:"))
+            .collect();
+        assert_eq!(tries.len(), 2, "{out:?}");
+        assert!(tries[0].contains("model server failed"));
+        let last = out.replies.last().unwrap();
         assert!(
-            out.replies[0].starts_with("**I couldn't finish:**"),
-            "{out:?}"
+            last.starts_with("**I couldn't finish:** It failed 3 times"),
+            "{last}"
         );
+    }
+
+    #[tokio::test]
+    async fn assistant_reports_a_failure_and_tries_again() {
+        let host = Agentic::with(vec![says("All done.")]);
+        *host.fail_work.lock().unwrap() = 1;
+        let out = assist(&host, "Do it").await;
+        assert_eq!(out.status, RunStatus::Completed, "{out:?}");
+        // The report is shown, then the final answer.
+        assert_eq!(
+            out.replies,
+            [
+                "_Something went wrong: The server was busy; I'll try the step again. Trying again._",
+                "All done."
+            ]
+        );
+        assert_eq!(*host.pane.lock().unwrap().last().unwrap(), "Next move 2.");
+        assert!(
+            host.pane
+                .lock()
+                .unwrap()
+                .contains(&"The server was busy; I'll try the step again.".to_string())
+        );
+        // The reporter saw the failure as the last message…
+        let reports = host.reports.lock().unwrap();
+        assert_eq!(reports.len(), 1);
+        let sent: Vec<&str> = reports[0]
+            .messages
+            .iter()
+            .map(|m| m.text.as_str())
+            .collect();
+        assert_eq!(
+            sent[sent.len() - 2],
+            "(The last step failed: the model server is busy)"
+        );
+        // …but the retry doesn't: same messages as the first try, and the
+        // next step knows what happened.
+        let work = host.work.lock().unwrap();
+        assert_eq!(work.len(), 2);
+        let texts = |i: usize| -> Vec<String> {
+            work[i]
+                .messages
+                .iter()
+                .skip(1)
+                .map(|m| m.text.clone())
+                .collect()
+        };
+        assert_eq!(texts(0).len(), texts(1).len(), "{:#?}", texts(1));
+        assert!(texts(1).iter().all(|t| !t.contains("last step failed")));
+        assert_eq!(*host.nexts.lock().unwrap(), 2);
     }
 }

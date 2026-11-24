@@ -47,6 +47,8 @@ const RETIRED: &[&str] = &[
     "5a3062baee43b61d9de9b533087ae49300f6d3797b898d86fa4b1d74c3b6d2be",
     // With "Say what's next" (3cb255e), before it became "Decide what's next".
     "a03f89b17ffaf0f46dca168801246b3eeb7c83a36c567f50d3b9f94b4ef0211c",
+    // With "Decide what's next" (53729e7), before error reports and Final answer.
+    "c30129b768a18af72fbdf1a8aa8f0cb126c6443774d564ad9876003d1a6d5e9a",
 ];
 
 /// A loop's content as a SHA-256 hex string.

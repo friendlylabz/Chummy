@@ -105,7 +105,7 @@ class ChatStore {
   /** Messages deleted from the open chat that Undo can bring back, newest
    *  last. Cleared when another chat opens, a message is sent, or after a
    *  while (`UNDO_MS` after the last delete). */
-  undoable = $state<string[]>([]);
+  undoable = $state<string[][]>([]);
   private undoTimer: ReturnType<typeof setTimeout> | undefined;
 
   private forgetUndo() {
@@ -113,27 +113,38 @@ class ChatStore {
     this.undoable = [];
   }
 
-  /** Deletes a message from the open chat (and from what the agent sees). */
-  async deleteMessage(id: string) {
-    if (!this.agentId || !this.chatId) return;
+  /**
+   * Deletes messages from the open chat (and from what the agent sees): one
+   * message, or every part of one run's response. Undo brings them all back.
+   */
+  async deleteMessages(ids: string[]) {
+    if (!this.agentId || !this.chatId || !ids.length) return;
     this.error = "";
+    const done: string[] = [];
     try {
-      await commands.deleteChatMessage(this.agentId, this.chatId, id);
-      this.undoable = [...this.undoable, id];
-      clearTimeout(this.undoTimer);
-      this.undoTimer = setTimeout(() => this.forgetUndo(), UNDO_MS);
+      // Last first, so each one's place is still right when they come back
+      // first first.
+      for (const id of [...ids].reverse()) {
+        await commands.deleteChatMessage(this.agentId, this.chatId, id);
+        done.unshift(id);
+      }
     } catch (e) {
       this.error = errorText(e);
     }
+    if (done.length) {
+      this.undoable = [...this.undoable, done];
+      clearTimeout(this.undoTimer);
+      this.undoTimer = setTimeout(() => this.forgetUndo(), UNDO_MS);
+    }
   }
 
-  /** Puts the most recently deleted message back where it was. */
+  /** Puts the most recently deleted message (or response) back where it was. */
   async undoDelete() {
-    const id = this.undoable.at(-1);
-    if (!id || !this.agentId || !this.chatId) return;
+    const ids = this.undoable.at(-1);
+    if (!ids || !this.agentId || !this.chatId) return;
     this.error = "";
     try {
-      await commands.restoreChatMessage(this.agentId, this.chatId, id);
+      for (const id of ids) await commands.restoreChatMessage(this.agentId, this.chatId, id);
       this.undoable = this.undoable.slice(0, -1);
       if (!this.undoable.length) this.forgetUndo();
     } catch (e) {

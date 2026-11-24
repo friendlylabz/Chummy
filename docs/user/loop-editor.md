@@ -29,7 +29,8 @@ The blocks you'll use most:
 | **Save to / Read memory** | Keep text under a name for the rest of the run; any prompt can include it as `{{name}}`. |
 | **Ask me** | Asks you a question and waits for your answer. |
 | **Read / Write / List files** | Work with files in the agent's folder. |
-| **Reply** | Adds its input to the agent's answer. |
+| **Add to chat output** | Adds its input to the run's response in the chat; the run carries on. |
+| **Final chat output** | Adds its input to the response and ends the run. Use it for the final answer. |
 | **Pane output** | Adds its input as a line in the run's pane (Sessions → the run's text button), newest first. Good for "what am I doing now" notes that shouldn't go in the reply. |
 
 Every block and parameter is listed in [../loop-format.md](../loop-format.md).
@@ -68,7 +69,8 @@ summarises the conversation when the context gets full, and is sent back
 time**: before each step, *Decide what's next* picks the next step (the
 first unchecked to-do), you see it in the run's pane, and the model doing
 the work is told to do just that step, as the last thing it reads. This
-keeps small models from wandering off. (That's one small extra model call
+keeps small models from wandering off. If a step fails, it says what went
+wrong and tries again (3 times at most). (That's one small extra model call
 per step; delete the *Decide what's next* block in the Agent loop, and
 clear Work's Reminder, if you'd rather not.) Open it in the editor to
 see how it's built; every part has comments.
@@ -89,7 +91,11 @@ Small models get confused easily. What helps:
   to-do list) instead of repeating it through many links.
 - **Route failures.** Link *Failed* outputs somewhere useful (tell the
   model what went wrong, or reply with an explanation) instead of letting
-  the run die.
+  the run die. A model block's or Run tool's *Failed (exchange)* gives the
+  conversation with the failure at its end: let the model explain it, take
+  it back out with **Drop last messages**, and loop back to try again, with
+  a limit (the Chummy assistant's *Report what went wrong* does this, 3
+  times at most).
 - **Lean beats heavy.** More scaffolding isn't always better: a simple
   agent loop often does better than elaborate planning with a mid-size
   model. Try the simple version first and add checks where it fails.

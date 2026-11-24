@@ -59,13 +59,14 @@
     },
     {
       "id": "reply",
-      "type": "output",
-      "label": "Reply",
+      "type": "final",
+      "label": "Final answer",
       "position": {
         "x": 900,
         "y": 0
       },
-      "params": {}
+      "params": {},
+      "comment": "Adds the final answer to the response and ends the run."
     },
     {
       "id": "why",
@@ -1348,6 +1349,503 @@
       ]
     },
     {
+      "id": "report_error",
+      "name": "Report what went wrong",
+      "description": "When Work or Run tool fails, this gets the exchange with the failure as its last message. The model says in a sentence or two what went wrong and what it will do differently; that goes to the chat and the run's pane, and becomes {{next}} so the next step takes it into account. Then the failure is taken back out of the exchange (and any tool calls left waiting are answered as not run), and the exchange goes back to the start of the Agent loop to try again. After 3 failures in one run it gives up, and the run stops with the last error.",
+      "inputs": [
+        {
+          "name": "exchange",
+          "label": "Failed exchange",
+          "to": {
+            "block": "ex",
+            "port": "in"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "exchange",
+          "label": "Try again",
+          "from": {
+            "block": "decline",
+            "port": "out"
+          }
+        },
+        {
+          "name": "gave_up",
+          "label": "Gave up",
+          "from": {
+            "block": "why",
+            "port": "out"
+          }
+        }
+      ],
+      "blocks": [
+        {
+          "id": "ex",
+          "type": "forward",
+          "label": "Failed exchange",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "params": {}
+        },
+        {
+          "id": "err",
+          "type": "read_exchange",
+          "label": "The failure",
+          "position": {
+            "x": 260,
+            "y": -250
+          },
+          "params": {
+            "role": "user"
+          },
+          "comment": "The last user message: the failure."
+        },
+        {
+          "id": "keep_err",
+          "type": "store",
+          "label": "Remember it",
+          "position": {
+            "x": 520,
+            "y": -250
+          },
+          "params": {
+            "key": "last_error",
+            "max_chars": 600
+          }
+        },
+        {
+          "id": "count",
+          "type": "combine",
+          "label": "Count it",
+          "position": {
+            "x": 780,
+            "y": -250
+          },
+          "params": {
+            "inputs": 1,
+            "format": "{{errors}}x"
+          }
+        },
+        {
+          "id": "save_count",
+          "type": "store",
+          "label": "Failures so far",
+          "position": {
+            "x": 1040,
+            "y": -250
+          },
+          "params": {
+            "key": "errors",
+            "max_chars": 100
+          }
+        },
+        {
+          "id": "spent",
+          "type": "branch",
+          "label": "Failed 3 times?",
+          "position": {
+            "x": 1300,
+            "y": 0
+          },
+          "params": {
+            "pattern": "^x{3}"
+          }
+        },
+        {
+          "id": "gave_up",
+          "type": "read_exchange",
+          "label": "Giving up",
+          "position": {
+            "x": 1560,
+            "y": 300
+          },
+          "params": {
+            "role": "user"
+          }
+        },
+        {
+          "id": "why",
+          "type": "combine",
+          "label": "Give up",
+          "position": {
+            "x": 1820,
+            "y": 300
+          },
+          "params": {
+            "inputs": 1,
+            "format": "It failed 3 times. The last time: {{last_error}}"
+          }
+        },
+        {
+          "id": "report",
+          "type": "llm",
+          "label": "Say what went wrong",
+          "position": {
+            "x": 1560,
+            "y": -250
+          },
+          "params": {
+            "system": "You are Chummy, working on the user's request:\n{{request}}\n\nA step of the work just failed: the failure is the last message of the conversation.",
+            "reminder": "In one or two short sentences: what went wrong, and what will you do differently on the next try? Don't call tools, and don't apologise.",
+            "temperature": 0.2,
+            "tools": "off"
+          },
+          "comment": "Sees the conversation with the failure at its end."
+        },
+        {
+          "id": "fallback",
+          "type": "combine",
+          "label": "If that fails too",
+          "position": {
+            "x": 1820,
+            "y": -100
+          },
+          "params": {
+            "inputs": 1,
+            "format": "{{last_error}}"
+          }
+        },
+        {
+          "id": "show_msg",
+          "type": "combine",
+          "label": "For the chat",
+          "position": {
+            "x": 2080,
+            "y": -400
+          },
+          "params": {
+            "inputs": 1,
+            "format": "_Something went wrong: _INPUT1_ Trying again._"
+          }
+        },
+        {
+          "id": "show",
+          "type": "output",
+          "label": "Show it",
+          "position": {
+            "x": 2340,
+            "y": -400
+          },
+          "params": {},
+          "comment": "Added to the response; the run carries on."
+        },
+        {
+          "id": "pane",
+          "type": "pane",
+          "label": "Show in the pane",
+          "position": {
+            "x": 2340,
+            "y": -250
+          },
+          "params": {}
+        },
+        {
+          "id": "note",
+          "type": "combine",
+          "label": "For the next step",
+          "position": {
+            "x": 2080,
+            "y": -100
+          },
+          "params": {
+            "inputs": 1,
+            "format": "The last try failed: _INPUT1_ Take another way."
+          }
+        },
+        {
+          "id": "keep_note",
+          "type": "store",
+          "label": "The step now",
+          "position": {
+            "x": 2340,
+            "y": -100
+          },
+          "params": {
+            "key": "next",
+            "max_chars": 300
+          },
+          "comment": "{{next}}: Decide what's next sees it."
+        },
+        {
+          "id": "drop",
+          "type": "drop_last",
+          "label": "Take the failure out",
+          "position": {
+            "x": 1560,
+            "y": 100
+          },
+          "params": {
+            "count": 1
+          }
+        },
+        {
+          "id": "not_run",
+          "type": "combine",
+          "label": "Why calls weren't run",
+          "position": {
+            "x": 1820,
+            "y": 200
+          },
+          "params": {
+            "inputs": 1,
+            "format": "Not run: the step failed."
+          }
+        },
+        {
+          "id": "decline",
+          "type": "decline_calls",
+          "label": "Answer waiting calls",
+          "position": {
+            "x": 2080,
+            "y": 100
+          },
+          "params": {},
+          "comment": "Tool calls left waiting are answered as not run, so the exchange is valid again."
+        }
+      ],
+      "links": [
+        {
+          "from": {
+            "block": "ex",
+            "port": "out"
+          },
+          "to": {
+            "block": "err",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "err",
+            "port": "last"
+          },
+          "to": {
+            "block": "keep_err",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "keep_err",
+            "port": "out"
+          },
+          "to": {
+            "block": "count",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "count",
+            "port": "out"
+          },
+          "to": {
+            "block": "save_count",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "ex",
+            "port": "out"
+          },
+          "to": {
+            "block": "spent",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "save_count",
+            "port": "out"
+          },
+          "to": {
+            "block": "spent",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "spent",
+            "port": "yes"
+          },
+          "to": {
+            "block": "gave_up",
+            "port": "in"
+          },
+          "label": "3 failures"
+        },
+        {
+          "from": {
+            "block": "gave_up",
+            "port": "last"
+          },
+          "to": {
+            "block": "why",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "spent",
+            "port": "no"
+          },
+          "to": {
+            "block": "report",
+            "port": "in"
+          },
+          "label": "try again"
+        },
+        {
+          "from": {
+            "block": "report",
+            "port": "out"
+          },
+          "to": {
+            "block": "show_msg",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "report",
+            "port": "out"
+          },
+          "to": {
+            "block": "pane",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "report",
+            "port": "out"
+          },
+          "to": {
+            "block": "note",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "report",
+            "port": "error"
+          },
+          "to": {
+            "block": "fallback",
+            "port": "in1"
+          },
+          "label": "the report failed too"
+        },
+        {
+          "from": {
+            "block": "fallback",
+            "port": "out"
+          },
+          "to": {
+            "block": "show_msg",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "fallback",
+            "port": "out"
+          },
+          "to": {
+            "block": "pane",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "fallback",
+            "port": "out"
+          },
+          "to": {
+            "block": "note",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "show_msg",
+            "port": "out"
+          },
+          "to": {
+            "block": "show",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "note",
+            "port": "out"
+          },
+          "to": {
+            "block": "keep_note",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "spent",
+            "port": "no"
+          },
+          "to": {
+            "block": "drop",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "drop",
+            "port": "out"
+          },
+          "to": {
+            "block": "decline",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "keep_err",
+            "port": "out"
+          },
+          "to": {
+            "block": "not_run",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "not_run",
+            "port": "out"
+          },
+          "to": {
+            "block": "decline",
+            "port": "reason"
+          }
+        }
+      ],
+      "notes": [
+        {
+          "id": "n1",
+          "text": "Failures are reported, not hidden: you see a line in the chat and the pane, the model's next step knows what went wrong, and the exchange goes back without the failure in it. Three failures in one run and it stops for real.",
+          "position": {
+            "x": 0,
+            "y": 250
+          },
+          "width": 420,
+          "height": 110
+        }
+      ]
+    },
+    {
       "id": "make_room",
       "name": "Make room",
       "description": "After each round of tool results: saves the latest work as {{progress}}, and if the conversation has reached the model's compaction point (Settings → Models: 80% of its context unless you change it), the model summarises it and the work carries on from the summary in a fresh exchange. If summarising fails, the conversation goes on as it was.",
@@ -2150,7 +2648,7 @@
     {
       "id": "agent",
       "name": "Agent loop",
-      "description": "The core loop: before each call, Decide what's next picks the one next step (shown in the run's pane and sent to Work as its last message); then Work is called with the conversation so far; if it calls tools, what it said is shown, the calls run (your approvals apply) and the results go back to it; when it answers without tool calls, Done? decides whether that's the final answer.",
+      "description": "The core loop: before each call, Decide what's next picks the one next step (shown in the run's pane and sent to Work as its last message); then Work is called with the conversation so far; if it calls tools, what it said is shown, the calls run (your approvals apply) and the results go back to it; when it answers without tool calls, Done? decides whether that's the final answer. If Work or Run tool fails, Report what went wrong says why and the loop tries again from the start (3 times at most).",
       "inputs": [
         {
           "name": "request",
@@ -2310,12 +2808,25 @@
           "params": {}
         },
         {
+          "id": "oops",
+          "type": "function",
+          "label": "Report what went wrong",
+          "position": {
+            "x": 1160,
+            "y": 500
+          },
+          "params": {
+            "function": "report_error"
+          },
+          "comment": "Work or Run tool failed: say why, take it back out, try again (3 times at most)."
+        },
+        {
           "id": "failed",
           "type": "forward",
           "label": "Failed",
           "position": {
-            "x": 1160,
-            "y": 500
+            "x": 1460,
+            "y": 650
           },
           "params": {}
         }
@@ -2439,13 +2950,46 @@
         {
           "from": {
             "block": "work",
-            "port": "error"
+            "port": "failed_exchange"
+          },
+          "to": {
+            "block": "oops",
+            "port": "exchange"
+          },
+          "label": "the model call failed"
+        },
+        {
+          "from": {
+            "block": "run",
+            "port": "failed_exchange"
+          },
+          "to": {
+            "block": "oops",
+            "port": "exchange"
+          },
+          "label": "running tools failed"
+        },
+        {
+          "from": {
+            "block": "oops",
+            "port": "exchange"
+          },
+          "to": {
+            "block": "next",
+            "port": "exchange"
+          },
+          "label": "try again"
+        },
+        {
+          "from": {
+            "block": "oops",
+            "port": "gave_up"
           },
           "to": {
             "block": "failed",
             "port": "in"
           },
-          "label": "the model call failed"
+          "label": "gave up"
         }
       ],
       "notes": [
@@ -2465,7 +3009,7 @@
   "notes": [
     {
       "id": "n1",
-      "text": "Chummy assistant\n\n1. Get ready: your request, the conversation, CHUMMY.md (your instructions for this folder) and the folder's top level.\n2. Agent loop: one model does the work, one step at a time: before each call, Decide what's next picks the next step (shown in the run's pane) and Work is told to do just that. Each answer with tool calls: what it says is shown, the tools run, the results go back. Long conversations are summarised.\n3. Planning: the model keeps its own checklist (- [ ] / - [x]) as {{todos}}.\n4. Done? An answer without tool calls is the final answer, unless it's empty or steps are unchecked (then it's sent back, twice at most). A question for you ends the turn.\n\nDouble-click a function block to see inside.",
+      "text": "Chummy assistant\n\n1. Get ready: your request, the conversation, CHUMMY.md (your instructions for this folder) and the folder's top level.\n2. Agent loop: one model does the work, one step at a time: before each call, Decide what's next picks the next step (shown in the run's pane) and Work is told to do just that. Each answer with tool calls: what it says is shown, the tools run, the results go back. Long conversations are summarised.\n3. Planning: the model keeps its own checklist (- [ ] / - [x]) as {{todos}}.\n4. Done? An answer without tool calls is the final answer, unless it's empty or steps are unchecked (then it's sent back, twice at most). A question for you ends the turn.\n5. If Work or Run tool fails, the model says what went wrong (in the chat) and the loop tries again from the start, 3 times at most.\n\nDouble-click a function block to see inside.",
       "position": {
         "x": 0,
         "y": 450

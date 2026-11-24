@@ -201,6 +201,24 @@ carries on. When it isn't linked, the failure stops the run, as always. Run
 limits (steps, model calls, tool calls) and the user stopping a run always
 stop it.
 
+`llm` and `run_tool` also have **Failed (exchange)** (`failed_exchange`):
+when the block was given an exchange, the failure goes out of it as that
+exchange with the failure added as its last message, a user message reading
+"(The last step failed: …)". Linking either failure output catches the
+failure. Give it to a model to explain what went wrong, and use **Drop last
+messages** (`drop_last`) to take the failure back out before trying again
+(the Chummy assistant's *Report what went wrong* does both).
+
+## Chat output
+
+Each run is **one response** in the chat: everything **Add to chat output**
+blocks (`output`) send, in order, with any question the run asked and your
+answer, and a notice if it stopped or failed. It has one set of figures
+(time, calls, steps, tokens), one *What happened* and one delete. **Final
+chat output** (`final`) adds its input and ends the run as completed: blocks
+still waiting don't run. Use it for the final answer and *Add to chat
+output* for anything said along the way.
+
 ## Memory
 
 A **Save to memory** block (`store`) keeps its input under a name for the
@@ -284,11 +302,12 @@ Ports are written `name: kind`.
 | `input` | Message | none | `out: text` | none. Sends the chat message. |
 | `history` | Conversation | none | `out: text` | `max_messages` (10): recent messages, formatted `User: …` / `Assistant: …`. |
 | `fixed` | Fixed text | none | `out: text` | `text` (""). |
-| `llm` | Ask the model | `in: any` | `out: text` (Answer), `tool: exchange` (Tool call, only with tools and `tool_mode` not `off`), `reasoning: text`, `error: text` | `prompt` ("_INPUT_"), `system` (""), `model` (unset = the agent's model; otherwise a model connection id), `temperature` (unset = the model connection's setting; 0–2), `max_tokens` (unset = the model connection's longest answer, 1,024 unless changed in Settings → Models; 1–32,768), `tools` ("inherit"; see Tool switches), `tool_mode` ("native", "prompted" or "off"), `network` ("inherit"), `on_limit` ("ask", "wait" or "stop"), `tool_choice` ("auto" or "required"), `on_bad_call` ("retry", "fail" or "answer"), `retries` (2; 0–5), `reminder` (""; exchange input only: a note sent last, as a user message, for this call only and never kept in the exchange; `{{name}}` reads memory; empty after filling sends nothing). `_TOOLS_` in the prompt or system message lists the block's tools; `{{name}}` includes memory. Text input: `_INPUT_` in the prompt is replaced by it (or it's added after the prompt). Exchange input: the exchange is continued; a non-empty `system` replaces its system message for this call. `<think>…</think>` sections are moved from the answer to Reasoning. |
-| `run_tool` | Run tool | `in: exchange` | `out: exchange`, `error: text` | `max_result_chars` (50000), `on_error` ("tell_model" or "fail"), `confirm` (false). Runs the pending tool calls at the end of the exchange and adds their results. Longer results are cut, and so are results over about half the model's context (at least 12,000 characters). With `confirm`, each call waits for the user to allow it (see *Asking the user*). |
+| `llm` | Ask the model | `in: any` | `out: text` (Answer), `tool: exchange` (Tool call, only with tools and `tool_mode` not `off`), `reasoning: text`, `error: text`, `failed_exchange: exchange` | `prompt` ("_INPUT_"), `system` (""), `model` (unset = the agent's model; otherwise a model connection id), `temperature` (unset = the model connection's setting; 0–2), `max_tokens` (unset = the model connection's longest answer, 1,024 unless changed in Settings → Models; 1–32,768), `tools` ("inherit"; see Tool switches), `tool_mode` ("native", "prompted" or "off"), `network` ("inherit"), `on_limit` ("ask", "wait" or "stop"), `tool_choice` ("auto" or "required"), `on_bad_call` ("retry", "fail" or "answer"), `retries` (2; 0–5), `reminder` (""; exchange input only: a note sent last, as a user message, for this call only and never kept in the exchange; `{{name}}` reads memory; empty after filling sends nothing). `_TOOLS_` in the prompt or system message lists the block's tools; `{{name}}` includes memory. Text input: `_INPUT_` in the prompt is replaced by it (or it's added after the prompt). Exchange input: the exchange is continued; a non-empty `system` replaces its system message for this call. `<think>…</think>` sections are moved from the answer to Reasoning. |
+| `run_tool` | Run tool | `in: exchange` | `out: exchange`, `error: text`, `failed_exchange: exchange` | `max_result_chars` (50000), `on_error` ("tell_model" or "fail"), `confirm` (false). Runs the pending tool calls at the end of the exchange and adds their results. Longer results are cut, and so are results over about half the model's context (at least 12,000 characters). With `confirm`, each call waits for the user to allow it (see *Asking the user*). |
 | `ask_user` | Ask me | `in: any` | `out: text`, `error: text` | `prompt` ("_INPUT_"; `_INPUT_` is replaced by the input, or the input is added after it), `timeout_minutes` (0 = wait as long as it takes; at most 10080), `default_answer` (""). Asks the user and sends the answer on. If the wait times out, `default_answer` is used, or the run stops if it's empty. |
 | `exchange` | Start exchange | `in: any` | `out: exchange` | `system` (""), `roles` (["user"]). Text becomes one message with the first role; a list becomes one message per item, with the roles in turn. |
 | `augment` | Add to exchange | `exchange: exchange`, `in: any` | `out: exchange` | `role` ("user"), `format` ("_INPUT_"). Adds the text as a message (`_INPUT_` replaced by it); a list adds one message per item. |
+| `drop_last` | Drop last messages | `in: exchange` | `out: exchange` | `count` (1; 1–50). Takes that many messages off the end, never the system message at the start. |
 | `read_exchange` | Read exchange | `in: exchange` | `last: text`, `all: text`, `calls: text`, `newest: text` | `role` ("assistant"; or "user", "tool", "system", "any"). `last` is the last message from that role with any text (messages that only call tools are skipped), `newest` the newest message from that role even if it only calls tools (then it's empty), `all` the transcript (without the system message when `system_in_transcript` is false; default true), `calls` the pending tool calls described for people (empty if none). |
 | `context_check` | Context full? | `in: exchange` | `room: exchange`, `full: exchange` | `model` (optional; the agent's by default), `percent` (optional, 1–100). Estimates the exchange's tokens (about four characters a token; system messages counted as they'd be sent, memory filled in) and sends it out of `full` when that reaches the model's compaction point (Settings → Models → *Make room at*, 80% of the context by default) or `percent` of its context, otherwise out of `room`. Going full adds a notice to the run. |
 | `decline_calls` | Decline tool calls | `in: exchange`, `reason: text` | `out: exchange` | none. Answers each pending tool call with "Not run" and the reason, without running it. |
@@ -309,7 +328,8 @@ Ports are written `name: kind`.
 | `read_file` | Read file | `path: text` | `out: text`, `error: text` | none. Reads a file in the agent's workspace (up to 1 MB). |
 | `write_file` | Write file | `path: text`, `content: text` | `out: text` (the path), `error: text` | `append` (false). Creates folders as needed. |
 | `list_files` | List files | `path: text` | `out: list`, `error: text` | none. Folder names end with `/`. Use `.` for the workspace itself. |
-| `output` | Reply | `in: text` | none | none. Adds its input to the agent's reply. |
+| `output` | Add to chat output | `in: text` | none | none. Adds its input to the run's response in the chat; the run carries on. |
+| `final` | Final chat output | `in: text` | none | none. Adds its input to the response and ends the run as completed (anything still waiting is dropped). |
 | `pane` | Pane output | `in: text` | none | none. Adds its input as one line (whitespace folded, at most 1,000 characters; blank input shows nothing) to the run's **pane**, a live log in the Sessions panel (the run's text button), newest first. Never part of the reply or the conversation. A run's pane keeps its newest 500 lines. |
 | `stop` | Stop with error | `in: text` (the reason) | none | none. Ends the whole run as failed, with its input as the reason; anything still waiting is dropped. It has no *Failed* output, so it can't be caught. |
 | `function` | Function | the function's inputs | the function's outputs | `function`: the id of a function in this loop. See below. |
@@ -505,7 +525,19 @@ a function with comments, labels and notes, so it reads well in the editor.
    per message; otherwise it's the final answer. Delete *Done?* to get the
    plain "stop when the model stops" behaviour.
 
-A model call that fails (after the engine's bad-call retries) is shown as
-"I couldn't finish: …" and *Stop with error* ends the run as failed. Limits
-are 10,000 steps, 400 model calls (half of them the short *Say what's
-next* calls) and 150 tool calls per run.
+7. **Report what went wrong.** When *Work* fails (a server error, or tool
+   calls still malformed after the bad-call retries) or *Run tool* fails,
+   their *Failed (exchange)* goes here: the model (no tools) is given the
+   exchange with the failure at its end and says in a sentence or two what
+   went wrong and what it will do differently. That's added to the chat
+   ("Something went wrong: … Trying again.") and the pane, and becomes
+   `{{next}}` ("The last try failed: …"). Then *Drop last messages* takes
+   the failure out, any tool calls left waiting are answered as not run,
+   and the exchange goes back to *Decide what's next* to try again. After
+   3 failures in one run it gives up: "I couldn't finish: …" and *Stop with
+   error* end the run as failed. If the report itself fails, the error is
+   shown instead.
+
+The final answer goes to *Final chat output*, which ends the run. Limits
+are 10,000 steps, 400 model calls (most turns make a short *Decide what's
+next* call before *Work*) and 150 tool calls per run.

@@ -1071,6 +1071,8 @@ export const events = {
   onRunEvent: (cb: (e: { run_id: string; event: FlowEvent }) => void) => on("run:event", cb),
   onRunFinished: (cb: (e: { run_id: string; agent_id: string | null; outcome: RunOutcome }) => void) =>
     on("run:finished", cb),
+  /** A question and your answer, added to a running chat run's response. */
+  onRunSaid: (cb: (e: { run_id: string; role: "question" | "answer"; text: string }) => void) => on("run:said", cb),
   onChatMessage: (cb: (e: { agent_id: string; chat_id: string; message: ChatMessage }) => void) =>
     on("chat:message", cb),
   onChatMessageDeleted: (cb: (e: { agent_id: string; chat_id: string; message_id: string }) => void) =>

@@ -379,6 +379,8 @@ export function summary(b: Block): string {
     }
     case "decline_calls":
       return "Answers each call: not run";
+    case "final":
+      return "Adds to the response, then ends the run";
     case "stop":
       return "Ends the run as failed";
     case "pane":

@@ -6,8 +6,12 @@
   import { runs } from "$lib/stores/runs.svelte";
   import { asks } from "$lib/stores/asks.svelte";
   import Icon from "$lib/components/Icon.svelte";
+  import { tick } from "svelte";
+  import { TextUndo, undoKey } from "$lib/undo";
 
   let text = $state("");
+  /** Ctrl+Z / Cmd+Z and redo, kept by the app (see $lib/undo). */
+  const history = new TextUndo();
   let input: HTMLTextAreaElement;
 
   const agent = $derived(settings.current.agents.find((a) => a.id === settings.current.active_agent) ?? null);
@@ -37,14 +41,48 @@
   async function send() {
     const msg = text.trim();
     if (question && msg) {
-      if (await asks.answer(question.id, { kind: "text", text: msg })) text = "";
+      if (await asks.answer(question.id, { kind: "text", text: msg })) sent();
       return;
     }
     if (disabled || !msg || run) return;
-    if (await chat.send(msg)) text = "";
+    if (await chat.send(msg)) sent();
+  }
+
+  function sent() {
+    text = "";
+    history.clear();
+  }
+
+  function current() {
+    return { value: input.value, start: input.selectionStart ?? 0, end: input.selectionEnd ?? 0 };
+  }
+
+  async function step(which: "undo" | "redo") {
+    const s = which === "undo" ? history.undo(current()) : history.redo(current());
+    if (!s) return;
+    text = s.value;
+    await tick();
+    input.setSelectionRange(s.start, s.end);
+    resize();
+  }
+
+  function onBeforeInput(e: InputEvent) {
+    // The webview's own Undo (e.g. from a menu) goes through ours instead.
+    if (e.inputType === "historyUndo" || e.inputType === "historyRedo") {
+      e.preventDefault();
+      step(e.inputType === "historyUndo" ? "undo" : "redo");
+      return;
+    }
+    history.before(current(), e.inputType, e.data);
   }
 
   function onKeydown(e: KeyboardEvent) {
+    const k = undoKey(e);
+    if (k) {
+      e.preventDefault();
+      step(k);
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       send();
@@ -79,6 +117,7 @@
     bind:this={input}
     bind:value={text}
     oninput={resize}
+    onbeforeinput={onBeforeInput}
     onkeydown={onKeydown}
     {placeholder}
     {disabled}

@@ -19,6 +19,8 @@ pub const RUN_STARTED: &str = "run:started";
 pub const RUN_EVENT: &str = "run:event";
 /// Payload: `RunFinished`.
 pub const RUN_FINISHED: &str = "run:finished";
+/// A question and answer added to a running chat run's response. Payload: `RunSaid`.
+pub const RUN_SAID: &str = "run:said";
 /// Payload: `ChatMessageEvent`.
 pub const CHAT_MESSAGE: &str = "chat:message";
 /// Payload: `ChatMessageDeleted`.
