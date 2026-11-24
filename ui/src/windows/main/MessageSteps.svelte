@@ -48,7 +48,7 @@
   <div class="head">
     <button type="button" class="toggle" aria-expanded={open} onclick={toggle}>
       <Icon name={open ? "chevron-down" : "flow"} size={13} />
-      {open ? "Hide what happened" : "What happened"}
+      {open ? "Hide agent logs" : "Agent logs"}
     </button>
     {#if summary}<span class="sum">{summary}</span>{/if}
     {#if open || end}

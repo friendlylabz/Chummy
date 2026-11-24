@@ -57,7 +57,7 @@ unsafe* ask before each use unless you change that.
   and how it ended. Under it: how long the run took, then model calls, tool
   calls, steps, tokens used, how full the context is, and today's use of
   the model's daily limit.
-- **What happened** opens the run's log right there: model answers and
+- **Agent logs** opens the run's log right there: model answers and
   reasoning, tool calls and results, questions and notices, **newest at
   the top** (switch to *In order* to read it from the start). Block steps
   are hidden at first; click the **Block steps** chip to see every block

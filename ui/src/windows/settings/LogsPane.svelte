@@ -24,7 +24,7 @@
     { value: "verbose", label: "Everything", hint: "Every block's inputs and outputs, and every model call, in full." },
     { value: "standard", label: "Shortened", hint: `The same, with each value cut to 500 characters.` },
     { value: "summary", label: "Steps only", hint: "Which blocks ran, model and tool calls, questions and replies, without the text in between." },
-    { value: "off", label: "Off", hint: "No run logs. Chat's “What happened” and the Logs window have nothing to show." },
+    { value: "off", label: "Off", hint: "No run logs. Chat's “Agent logs” and the Logs window have nothing to show." },
   ];
   const systemLevels: { value: SystemLogLevel; label: string }[] = [
     { value: "debug", label: "Everything, with each model call" },

@@ -114,7 +114,7 @@ Small models get confused easily. What helps:
 - **Lean beats heavy.** More scaffolding isn't always better: a simple
   agent loop often does better than elaborate planning with a mid-size
   model. Try the simple version first and add checks where it fails.
-- **Read What happened.** When a loop misbehaves, open the run under the
+- **Read the agent logs.** When a loop misbehaves, open the run under the
   reply (or in the Logs window), show Block steps, and look at what each
   block actually received and sent.
 

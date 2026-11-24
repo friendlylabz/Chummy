@@ -46,7 +46,7 @@ ui/          Svelte 5 frontend, one Vite page per window
 - `src/lib/stores/`: shared state (settings, live runs, chat, questions,
   jobs, loops, tools).
 - `src/lib/components/`: shared pieces, e.g. `RunTimeline` (a run's log,
-  used by the Logs window and **What happened** in chat), `ParamFields`
+  used by the Logs window and **Agent logs** in chat), `ParamFields`
   (block settings), `AskCard` (questions and approvals).
 - `src/theme/`: themes are sets of CSS variables; components use only
   those variables.

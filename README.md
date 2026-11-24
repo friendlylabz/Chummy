@@ -65,7 +65,7 @@ until you say so.
 - **Per-agent tuning without forking the loop.** Agent Loop Configuration
   changes any block's settings for one agent; model settings (temperature,
   reasoning effort, sampling) can be overridden per agent.
-- **See everything that happened.** Under each reply, *What happened* shows
+- **See everything that happened.** Under each reply, *Agent logs* shows
   the model's reasoning, tool calls and every block's inputs and outputs,
   live while it runs. A run's pane shows what the loop reports as it goes,
   and the Logs window searches every run.

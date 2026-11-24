@@ -81,7 +81,7 @@
   const elapsed = $derived(run ? stopwatch(nowMs - run.startedMs) : "");
 
   // Keep the newest message in view, but only while you're at the bottom:
-  // scrolled up (say, reading What happened), the chat stays put.
+  // scrolled up (say, reading Agent logs), the chat stays put.
   // Only scrolling up leaves the bottom, so a smooth scroll on its way
   // down (or text arriving mid-way) doesn't count as you scrolling away.
   let atBottom = true;
@@ -97,7 +97,7 @@
     void chat.chatId;
     atBottom = true;
   });
-  // While a What happened is open, new events don't move the chat (its
+  // While Agent logs is open, new events don't move the chat (its
   // log is newest first, at the top); only a message you send does.
   let seen = 0;
   $effect(() => {

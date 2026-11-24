@@ -214,7 +214,7 @@ messages** (`drop_last`) to take the failure back out before trying again
 Each run is **one response** in the chat: everything **Add to chat output**
 blocks (`output`) send, in order, with any question the run asked and your
 answer, and a notice if it stopped or failed. It has one set of figures
-(time, calls, steps, tokens), one *What happened* and one delete. **Final
+(time, calls, steps, tokens), one *Agent logs* and one delete. **Final
 chat output** (`final`) adds its input and ends the run as completed: blocks
 still waiting don't run. Use it for the final answer and *Add to chat
 output* for anything said along the way.
