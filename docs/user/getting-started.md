@@ -83,9 +83,32 @@ Chummy assistant reads it at the start of every message.
 
 ## Where Chummy keeps things
 
-Settings, loops, chats, jobs and logs are in the Chummy folder (Linux:
-`~/.local/share/com.friendlylabz.chummy`, macOS:
-`~/Library/Application Support/com.friendlylabz.chummy`, Windows:
-`%LOCALAPPDATA%\com.friendlylabz.chummy`). API keys are never stored there;
-they go to your system keychain. Settings → Security and Privacy shows the
-folder in use.
+| System  | Chummy folder                                           |
+|---------|---------------------------------------------------------|
+| Linux   | `~/.local/share/com.friendlylabz.chummy`                |
+| macOS   | `~/Library/Application Support/com.friendlylabz.chummy` |
+| Windows | `%LOCALAPPDATA%\com.friendlylabz.chummy`                |
+
+It holds `settings.json` (versioned, written atomically, with a `.bak`
+backup), `loops/` (your loops, one JSON file each), `chats/` (a folder per
+agent with an index and one file per chat), `jobs/` (scheduled jobs, their
+state and run history), `usage.json` (tokens used per model per day, kept
+31 days), `logs/system/` (the system log, one file a day), `logs/runs/` (one
+log per run, by day), `models/` and `runtime/` (the built-in engine) and
+`tools/` (the WebAssembly Python and installed tools).
+
+Chummy keeps the folder private to your user account: on macOS and Linux it
+makes the folder 700 and everything in it 600 (keeping the owner's execute
+bit for programs), and checks again every time it starts. On Windows the
+default folder is inside your user profile, which is already private to you.
+
+To use another folder, start Chummy with `--data-dir <folder>` (or
+`--data-dir=<folder>`); a relative path is taken from the current folder. It
+must be empty, new, or an existing Chummy folder, so Chummy never takes over
+a folder with other things in it. Settings → Security and Privacy shows which
+folder is in use.
+
+API keys and other secrets are never stored here: they go to your system
+keychain (Keychain on macOS, Credential Manager on Windows, Secret Service on
+Linux). Set `HF_ENDPOINT` to use a Hugging Face mirror for the built-in
+engine's downloads.
