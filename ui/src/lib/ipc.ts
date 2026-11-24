@@ -661,7 +661,7 @@ export interface ToolView {
 export interface ToolsStatus {
   runtime: { version: string; sha256: string } | null;
   python_version: string;
-  download_bytes: number;
+  python_bundled: boolean;
   installing: boolean;
   tools: ToolView[];
   builtin_count: number;
@@ -705,7 +705,6 @@ export interface SandboxStatus {
 }
 export type ProgramFor = "container" | "openshell";
 export type ToolsProgress =
-  | { type: "download"; done: number; total: number }
   | { type: "step"; message: string }
   | { type: "finished" }
   | { type: "failed"; error: string };
@@ -980,8 +979,8 @@ export const commands = {
   toolsStatus: () =>
     call<ToolsStatus>("tools_status", undefined, () => ({
       runtime: null,
-      python_version: "3.14",
-      download_bytes: 14_000_000,
+      python_version: "3.14.10",
+      python_bundled: true,
       installing: false,
       tools: [],
       builtin_count: 11,

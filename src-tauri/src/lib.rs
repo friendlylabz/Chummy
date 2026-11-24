@@ -4,6 +4,7 @@
 //! windows. All real logic lives in the `chummy-*` crates, which have no Tauri
 //! dependency and are tested on their own.
 
+mod bundled_python;
 mod chats;
 mod cli;
 mod commands;

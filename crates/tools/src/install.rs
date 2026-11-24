@@ -27,7 +27,7 @@ use crate::host::{CallSpec, Mode, ToolHost};
 use crate::lock::{Package, PyLock, UvSetup, hex, install_lock, resolve};
 use crate::meta::{ToolMeta, parse_meta, python_satisfies};
 use crate::net::NetPolicy;
-use crate::python::{PYTHON_VERSION, ToolPaths};
+use crate::python::{PYTHON_VERSION, ToolPaths, minor_version};
 
 /// What Chummy knows about an installed tool.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -150,7 +150,9 @@ pub fn installed(paths: &ToolPaths) -> Vec<ToolManifest> {
 
 /// Checks that an installed tool's file is the one that was installed.
 pub fn verify(paths: &ToolPaths, m: &ToolManifest) -> Result<(), ToolError> {
-    if m.python != PYTHON_VERSION {
+    // Packages built for 3.14.x work on any 3.14 (only the minor version
+    // matters to them).
+    if minor_version(&m.python) != minor_version(PYTHON_VERSION) {
         return Err(ToolError::Runtime(format!(
             "{} was installed for Python {}, and tools now run on Python {PYTHON_VERSION}; reinstall it",
             m.name, m.python

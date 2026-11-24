@@ -1,0 +1,61 @@
+name: WASI Python
+
+# Builds the Python that tools run on (scripts/build-wasi-python.sh) and
+# uploads it as the "wasi-python" artifact. CI reuses a cached build while
+# the script is unchanged; releases always build fresh.
+
+on:
+  workflow_call:
+    inputs:
+      fresh:
+        description: "Build even if a cached build exists"
+        type: boolean
+        default: false
+      attest:
+        description: "Sign a build provenance attestation for the zip (needs id-token and attestations write)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Python for WASI
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Cached build
+        id: cache
+        if: ${{ !inputs.fresh }}
+        uses: actions/cache@v4
+        with:
+          path: wasi-python
+          key: wasi-python-${{ hashFiles('scripts/build-wasi-python.sh') }}
+
+      - name: Build dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libffi-dev zip unzip xz-utils python3-venv
+
+      - name: Build
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: scripts/build-wasi-python.sh
+
+      - run: cat wasi-python/build-info.txt
+
+      # Lets anyone check the zip came from this workflow:
+      #   gh attestation verify python-wasi.zip --repo friendlylabz/Chummy
+      - name: Attest build provenance
+        if: ${{ inputs.attest }}
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: wasi-python/python-wasi.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasi-python
+          path: wasi-python/
+          if-no-files-found: error

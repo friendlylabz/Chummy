@@ -2,6 +2,9 @@
 /target/
 src-tauri/gen/
 
+# The tools' Python, built by scripts/build-wasi-python.sh
+/wasi-python/
+
 # Node
 node_modules/
 ui/dist/

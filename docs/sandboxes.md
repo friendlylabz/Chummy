@@ -8,7 +8,7 @@ app, chosen in **Settings → Security and Privacy → Sandbox**. The default is
 
 | Sandbox | What runs a tool call | Real programs | Needs |
 |---|---|---|---|
-| **Native** (default) | CPython 3.14 for WebAssembly under Wasmtime, built into Chummy | no | nothing (Chummy downloads the WebAssembly Python once when you set up tools) |
+| **Native** (default) | CPython 3.14 for WebAssembly under Wasmtime, built into Chummy | no | nothing (the WebAssembly Python comes with Chummy) |
 | **Container** | a fresh Docker or Podman container per call | yes, whatever the image has | Docker or Podman already installed and running |
 | **OpenShell** | an NVIDIA OpenShell sandbox, kept per workspace | yes, whatever its image has | the `openshell` program and a working OpenShell gateway |
 

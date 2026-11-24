@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { commands, errorText, type ToolView } from "$lib/ipc";
-  import { bytes } from "$lib/format";
   import { settings } from "$lib/stores/settings.svelte";
   import { tools } from "$lib/stores/tools.svelte";
   import Button from "$lib/components/Button.svelte";
@@ -91,15 +90,19 @@
       <div style="margin-top: var(--space-3)">
         <ProgressBar value={progress && progress.total ? progress.done / progress.total : null} label="Setting up tools" />
       </div>
-      {#if progress?.total}<p class="faint xs" style="margin-top: var(--space-2)">{bytes(progress.done)} of {bytes(progress.total)}</p>{/if}
     {:else}
       <div class="row-title">Not set up yet</div>
       <p class="muted small" style="margin: 4px 0 var(--space-3)">
-        Tools need Python {s.python_version} built for WebAssembly (about {bytes(s.download_bytes)}). Chummy downloads it
-        once into its own folder, checks it, and installs its {s.builtin_count} built-in tools. Nothing is installed on
-        your system.
+        Tools run on Python {s.python_version} built for WebAssembly, which comes with Chummy (built from python.org's
+        signed source). Setting up unpacks it into Chummy's own folder and installs the {s.builtin_count} built-in tools;
+        two of them download a small package from PyPI. Nothing is installed on your system.
       </p>
-      <div class="actions"><Button variant="primary" icon="download" onclick={setup}>Set up tools</Button></div>
+      {#if !s.python_bundled}
+        <div class="notice warn" style="margin-bottom: var(--space-3)">
+          <span>This copy of Chummy was built without the tools' Python. Run scripts/build-wasi-python.sh, then build Chummy again.</span>
+        </div>
+      {/if}
+      <div class="actions"><Button variant="primary" icon="download" onclick={setup} disabled={!s.python_bundled}>Set up tools</Button></div>
     {/if}
   </div>
 {:else}

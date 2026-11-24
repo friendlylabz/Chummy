@@ -39,9 +39,7 @@ pub use install::{
 pub use lock::{Package, PyLock, UvSetup};
 pub use meta::{ToolMeta, parse_meta};
 pub use net::NetPolicy;
-pub use python::{
-    PYTHON_DOWNLOAD_BYTES, PYTHON_VERSION, PythonInfo, ToolPaths, install_python, python_status,
-};
+pub use python::{PYTHON_VERSION, PythonInfo, ToolPaths, install_python_from, python_status};
 pub use sandbox::{
     Health, SandboxBackend, SandboxCall, SandboxKind, SandboxSettings, run_tool, unusable,
 };

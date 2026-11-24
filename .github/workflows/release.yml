@@ -15,14 +15,29 @@ on:
       tag:
         description: "Version to release (becomes the tag), like v0.1.0"
         required: true
-        default: "v0.1.1"
+        default: "v0.1.2"
 
 permissions:
   contents: write
 
 jobs:
+  # The Python that tools run on, built fresh for every release from
+  # python.org's signed source (scripts/build-wasi-python.sh), with a
+  # provenance attestation. Every platform's app embeds this one build.
+  wasi-python:
+    name: Python for WASI
+    uses: ./.github/workflows/wasi-python.yml
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    with:
+      fresh: true
+      attest: true
+
   build:
     name: Build (${{ matrix.name }})
+    needs: wasi-python
     strategy:
       fail-fast: false
       matrix:
@@ -50,6 +65,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: The tools' Python (embedded in the app)
+        uses: actions/download-artifact@v4
+        with:
+          name: wasi-python
+          path: wasi-python
+
       - name: Linux system libraries
         if: runner.os == 'Linux'
         run: |
@@ -72,6 +93,8 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Fail the build rather than ship an app without the tools' Python.
+          CHUMMY_REQUIRE_BUNDLED_PYTHON: "1"
         with:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Chummy ${{ inputs.tag || github.ref_name }}
@@ -85,16 +108,13 @@ jobs:
             - **Mac with Apple Silicon (M1 and newer):** `Chummy_…_aarch64.dmg`. **Intel Mac:** `Chummy_…_x64.dmg`. Drag Chummy to Applications. The first time, macOS refuses to open it (not notarized yet): go to **System Settings → Privacy & Security** and click **Open Anyway**.
             - **Linux:** `Chummy_…_amd64.AppImage`. Make it executable (`chmod +x`) and run it. `.deb` and `.rpm` packages are here too.
 
+            The Python that tools run on is built from python.org's signed source for this release and included in the app; its build details are in `python-wasi-build-info.txt`.
+
             Getting started and everything else: see the [README](https://github.com/friendlylabz/Chummy#readme).
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
 
-      # The signed Mac app must be allowed to compile WebAssembly (tools),
-      # which the hardened runtime only permits with our entitlements. Run
-      # the real bundle's self-test on the Intel build (the Apple Silicon one
-      # can't run on this runner); a failure stops the release from being
-      # published.
       # Apple Silicon kills apps that run JIT code under the hardened runtime
       # without these entitlements ("Code Signature Invalid"; v0.1.0 crashed
       # setting up tools). Both builds must carry them. Only the Intel build
@@ -116,6 +136,19 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - name: The tools' Python
+        uses: actions/download-artifact@v4
+        with:
+          name: wasi-python
+          path: wasi-python
+      - name: Attach the tools' Python and how it was built
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          cp wasi-python/build-info.txt python-wasi-build-info.txt
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            wasi-python/python-wasi.zip wasi-python/python-wasi.zip.sha256 python-wasi-build-info.txt
       - name: Publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

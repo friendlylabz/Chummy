@@ -13,6 +13,12 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The tools' Python (scripts/build-wasi-python.sh), cached while the
+  # script is unchanged. The Rust jobs embed it and test tools on it.
+  wasi-python:
+    name: Python for WASI
+    uses: ./.github/workflows/wasi-python.yml
+
   frontend:
     name: Frontend (typecheck + build)
     runs-on: ubuntu-latest
@@ -41,6 +47,7 @@ jobs:
 
   rust:
     name: Rust (${{ matrix.os }})
+    needs: wasi-python
     strategy:
       fail-fast: false
       matrix:
@@ -49,6 +56,17 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+      - name: The tools' Python (embedded in the app; the sandbox tests run real tools on it)
+        uses: actions/download-artifact@v4
+        with:
+          name: wasi-python
+          path: wasi-python
+      - name: Point the tests at it
+        shell: bash
+        run: |
+          echo "CHUMMY_TEST_PYTHON_ZIP=$GITHUB_WORKSPACE/wasi-python/python-wasi.zip" >> "$GITHUB_ENV"
+          echo "CHUMMY_TEST_PYPI=1" >> "$GITHUB_ENV"
+          echo "CHUMMY_REQUIRE_BUNDLED_PYTHON=1" >> "$GITHUB_ENV"
 
       - name: Linux system libraries
         if: runner.os == 'Linux'
@@ -74,14 +92,6 @@ jobs:
         run: cargo fmt --all --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      # The sandbox tests run real tools on the real WebAssembly Python.
-      - name: WebAssembly Python for the tool sandbox tests
-        shell: bash
-        run: |
-          curl -sSfL -o "$RUNNER_TEMP/python-wasi.zip" \
-            https://github.com/brettcannon/cpython-wasi-build/releases/download/v3.14.7/python-3.14.7-wasi_sdk-24.zip
-          echo "CHUMMY_TEST_PYTHON_ZIP=$RUNNER_TEMP/python-wasi.zip" >> "$GITHUB_ENV"
-          echo "CHUMMY_TEST_PYPI=1" >> "$GITHUB_ENV"
       # The Container sandbox test runs real tools in real Docker containers.
       - name: Docker image for the container sandbox test
         if: runner.os == 'Linux'

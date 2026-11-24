@@ -392,6 +392,16 @@ Fixed:
   Windows only fetches when first needed; tool setup then couldn't reach
   github.com. Connection errors now say why (certificate, proxy, time-out,
   no connection).
+- **The tools' Python is built, not downloaded.** Each release builds
+  CPython for WebAssembly from python.org's source tarball, checked against
+  its pinned SHA-256 and its Sigstore signature by the release manager, with
+  pinned build tools (wasi-sdk, wasmtime; SHA-256), using CPython's own WASI
+  build (`scripts/build-wasi-python.sh`). The result is embedded in the app
+  (setting up tools downloads no Python), attached to the release with its
+  build details, and covered by a GitHub build provenance attestation
+  (`gh attestation verify python-wasi.zip --repo friendlylabz/Chummy`).
+  Before, Chummy downloaded a CPython core developer's unofficial WASI build
+  from GitHub, pinned by SHA-256.
 - **Custom data folders on Windows** get a warning in Security and Privacy:
   Chummy can't lock those down there, so other accounts may be able to read
   or change settings and logs.

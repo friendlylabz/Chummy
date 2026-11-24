@@ -11,7 +11,7 @@ use tauri::{AppHandle, Emitter, State, WebviewWindow};
 use super::{CmdResult, err};
 use crate::dialogs;
 use crate::events;
-use crate::state::{AppState, lock, tools_http};
+use crate::state::{AppState, lock};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolView {
@@ -31,7 +31,8 @@ pub struct ToolsStatus {
     /// The WebAssembly Python, once installed.
     pub runtime: Option<chummy_tools::PythonInfo>,
     pub python_version: &'static str,
-    pub download_bytes: u64,
+    /// This copy of Chummy includes the tools' Python (development builds may not).
+    pub python_bundled: bool,
     pub installing: bool,
     pub tools: Vec<ToolView>,
     /// How many tools ship with Chummy.
@@ -46,7 +47,7 @@ pub fn status(state: &AppState) -> ToolsStatus {
     ToolsStatus {
         runtime: chummy_tools::python_status(&state.tool_paths),
         python_version: chummy_tools::PYTHON_VERSION,
-        download_bytes: chummy_tools::PYTHON_DOWNLOAD_BYTES,
+        python_bundled: crate::bundled_python::zip().is_ok(),
         installing: *lock(&state.tools_installing),
         tools: chummy_tools::installed(&state.tool_paths)
             .into_iter()
@@ -69,7 +70,6 @@ pub fn status(state: &AppState) -> ToolsStatus {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolsProgress {
-    Download { done: u64, total: u64 },
     Step { message: String },
     Finished,
     Failed { error: String },
@@ -96,7 +96,9 @@ pub fn refresh_builtins(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let state = app.state::<AppState>();
-        if chummy_tools::python_status(&state.tool_paths).is_none() {
+        if chummy_tools::python_status(&state.tool_paths).is_none()
+            && !crate::bundled_python::tools_were_set_up(&state.tool_paths)
+        {
             return;
         }
         {
@@ -132,8 +134,8 @@ pub fn refresh_builtins(app: &AppHandle) {
     });
 }
 
-/// Downloads the WebAssembly Python and installs the built-in tools. Asks
-/// first. Returns false if the user said no.
+/// Unpacks the bundled WebAssembly Python and installs the built-in tools.
+/// Asks first. Returns false if the user said no.
 #[tauri::command]
 pub async fn setup_tools(
     app: AppHandle,
@@ -143,11 +145,12 @@ pub async fn setup_tools(
     if *lock(&state.tools_installing) {
         return Err("Tools are already being set up.".into());
     }
-    let mb = chummy_tools::PYTHON_DOWNLOAD_BYTES as f64 / 1_000_000.0;
+    crate::bundled_python::zip()?;
     let msg = format!(
-        "Chummy will download Python {} for WebAssembly (about {mb:.0} MB, from GitHub) and the few packages its \
-         built-in tools need (from PyPI). Everything goes in the Chummy folder.\n\nTools run in a sandbox that \
-         can only see the agent's workspace folder. Each tool stays off until you switch it on.",
+        "Chummy will set up the Python {} for WebAssembly that comes with it, and download the few packages \
+         its built-in tools need from PyPI (pinned, and checked against their hashes). Everything goes in the \
+         Chummy folder.\n\nTools run in a sandbox that can only see the agent's workspace folder. Each tool \
+         stays off until you switch it on.",
         chummy_tools::PYTHON_VERSION
     );
     if !dialogs::confirm(
@@ -155,7 +158,7 @@ pub async fn setup_tools(
         window.label(),
         "Set up tools?",
         &msg,
-        "Download and set up",
+        "Set up tools",
         false,
     )
     .await
@@ -174,17 +177,12 @@ pub async fn setup_tools(
         };
         let result: Result<(), String> = async {
             emit(ToolsProgress::Step {
-                message: "Downloading Python".into(),
+                message: "Unpacking Python".into(),
             });
-            let mut last = 0u64;
-            chummy_tools::install_python(&state.tool_paths, &tools_http(), |done, total| {
-                if done - last > 256 * 1024 || done == total {
-                    last = done;
-                    emit(ToolsProgress::Download { done, total });
-                }
-            })
-            .await
-            .map_err(err)?;
+            let paths = state.tool_paths.clone();
+            tokio::task::spawn_blocking(move || crate::bundled_python::install(&paths))
+                .await
+                .map_err(|e| e.to_string())??;
             emit(ToolsProgress::Step {
                 message: "Preparing the sandbox (only slow the first time)".into(),
             });

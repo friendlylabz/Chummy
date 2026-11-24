@@ -246,14 +246,20 @@ impl AppState {
         if let Some(h) = guard.as_ref() {
             return Ok(h.clone());
         }
-        if chummy_tools::python_status(&self.tool_paths).is_none() {
+        if !crate::bundled_python::tools_were_set_up(&self.tool_paths)
+            && chummy_tools::python_status(&self.tool_paths).is_none()
+        {
             return Err("Tools aren't set up yet. Set them up in Settings → Tools.".into());
         }
         let paths = self.tool_paths.clone();
-        let host = tokio::task::spawn_blocking(move || ToolHost::new(&paths, tools_http()))
-            .await
-            .map_err(|e| e.to_string())?
-            .map_err(|e| format!("The tool sandbox couldn't start: {e}"))?;
+        let host = tokio::task::spawn_blocking(move || {
+            // After an update, the app's own (newer) Python replaces the old one.
+            crate::bundled_python::install(&paths)?;
+            ToolHost::new(&paths, tools_http())
+                .map_err(|e| format!("The tool sandbox couldn't start: {e}"))
+        })
+        .await
+        .map_err(|e| e.to_string())??;
         let host = Arc::new(host);
         *guard = Some(host.clone());
         Ok(host)

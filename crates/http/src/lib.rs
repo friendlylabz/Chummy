@@ -131,7 +131,7 @@ mod online {
         let c = builder().user_agent("chummy-test").build().unwrap();
         for url in [
             "https://github.com/",
-            "https://github.com/brettcannon/cpython-wasi-build/releases/download/v3.14.7/python-3.14.7-wasi_sdk-24.zip",
+            "https://files.pythonhosted.org/",
             "https://pypi.org/simple/",
         ] {
             let r = c.head(url).send().await;

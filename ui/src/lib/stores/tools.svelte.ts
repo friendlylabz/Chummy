@@ -14,11 +14,7 @@ class ToolsStore {
     this.status = await commands.toolsStatus();
     await events.onToolsChanged((s) => (this.status = s));
     await events.onToolsProgress((p: ToolsProgress) => {
-      const cur = this.progress ?? { message: "", done: 0, total: 0 };
       switch (p.type) {
-        case "download":
-          this.progress = { ...cur, done: p.done, total: p.total };
-          break;
         case "step":
           this.progress = { message: p.message, done: 0, total: 0 };
           this.error = "";

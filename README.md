@@ -303,13 +303,16 @@ cargo test --workspace                                 # includes an end-to-end 
 python3 -m unittest discover -s crates/local/engine    # engine parsers and server
 ```
 
-The sandbox tests run real tools on the real WebAssembly Python. Point them at
-the archive (CI downloads it), and allow PyPI downloads for the tools with
-dependencies:
+Tools run on CPython built for WebAssembly, which ships inside the app.
+`scripts/build-wasi-python.sh` builds it from python.org's source release
+(checked against its pinned SHA-256 and its Sigstore signature) with pinned
+build tools, into `wasi-python/python-wasi.zip`, where the app build picks
+it up. It needs Linux x86_64; CI and every release run it. Without it the app
+still builds, but can't set up tools. The sandbox tests run real tools on it:
 
 ```sh
-curl -LO https://github.com/brettcannon/cpython-wasi-build/releases/download/v3.14.7/python-3.14.7-wasi_sdk-24.zip
-CHUMMY_TEST_PYTHON_ZIP=$PWD/python-3.14.7-wasi_sdk-24.zip CHUMMY_TEST_PYPI=1 cargo test -p chummy-tools
+scripts/build-wasi-python.sh            # about 5 minutes
+CHUMMY_TEST_PYTHON_ZIP=$PWD/wasi-python/python-wasi.zip CHUMMY_TEST_PYPI=1 cargo test -p chummy-tools
 ```
 
 Pushing a tag like `v0.1.0` runs `.github/workflows/release.yml`, which builds
@@ -419,8 +422,8 @@ OpenAI-compatible endpoint (127.0.0.1, random bearer token, offline).
 
 ## License
 
-[MIT](LICENSE) © 2026 friendlylabz. The built-in engine downloads third-party
-open-source software at runtime (uv, CPython, PyTorch, transformers and their
-dependencies) under their own licenses; none of it is bundled with Chummy.
-Tools likewise download the CPython WASI build (PSF license) and their
-packages from PyPI at setup.
+[MIT](LICENSE) © 2026 friendlylabz. Chummy includes CPython built for
+WebAssembly (PSF License; its LICENSE file is unpacked with it). The built-in
+engine downloads third-party open-source software at runtime (uv, CPython,
+PyTorch, transformers and their dependencies) under their own licenses, and
+two built-in tools download a package each from PyPI at setup.

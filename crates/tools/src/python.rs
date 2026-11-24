@@ -1,26 +1,30 @@
 //! The Python that tools run on: CPython compiled to WebAssembly (WASI).
 //!
-//! It's the official CPython WASI build (WASI is a tier 2 platform for
-//! CPython), packaged by a CPython core developer. Chummy downloads it once,
-//! checks its SHA-256 against the value pinned here, and keeps it under the
-//! Chummy folder's `tools/`. It is never bundled with Chummy and never
-//! installed system-wide.
+//! Chummy's release workflow builds it from python.org's signed source with
+//! CPython's own WASI build (`scripts/build-wasi-python.sh`; WASI is a tier
+//! 2 platform for CPython) and bundles the result in the app. Setting up
+//! tools unpacks it under the Chummy folder's `tools/`: nothing is
+//! downloaded, and nothing is installed system-wide.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::ToolError;
 use crate::lock::hex;
 
-pub const PYTHON_VERSION: &str = "3.14.7";
-const PYTHON_URL: &str = "https://github.com/brettcannon/cpython-wasi-build/releases/download/v3.14.7/python-3.14.7-wasi_sdk-24.zip";
-const PYTHON_SHA256: &str = "2e064d3fb8172471d39d741348efa722349c40b96301f69968dff714999c584b";
-/// Download size, for the confirmation dialog.
-pub const PYTHON_DOWNLOAD_BYTES: u64 = 14_291_017;
+/// The version `scripts/build-wasi-python.sh` builds (a test checks they match).
+pub const PYTHON_VERSION: &str = "3.14.10";
+
+/// "3.14" of "3.14.10".
+pub fn minor_version(v: &str) -> &str {
+    match v.match_indices('.').nth(1) {
+        Some((i, _)) => &v[..i],
+        None => v,
+    }
+}
 
 /// Where tool files live, under the Chummy folder's `tools/`.
 #[derive(Debug, Clone)]
@@ -70,65 +74,26 @@ pub struct PythonInfo {
 /// The installed WebAssembly Python, if it's there and complete.
 pub fn python_status(paths: &ToolPaths) -> Option<PythonInfo> {
     let info: PythonInfo = serde_json::from_slice(&std::fs::read(paths.ready()).ok()?).ok()?;
-    (info.sha256 == PYTHON_SHA256 && paths.wasm().exists() && paths.lib().is_dir()).then_some(info)
+    (info.version == PYTHON_VERSION && paths.wasm().exists() && paths.lib().is_dir())
+        .then_some(info)
 }
 
-/// Downloads, checks and unpacks the WebAssembly Python. `on` gets
-/// (bytes so far, total).
-pub async fn install_python(
-    paths: &ToolPaths,
-    http: &reqwest::Client,
-    mut on: impl FnMut(u64, u64) + Send,
-) -> Result<PythonInfo, ToolError> {
-    if let Some(info) = python_status(paths) {
-        return Ok(info);
-    }
-    std::fs::create_dir_all(&paths.root).map_err(ToolError::io("creating the tools folder"))?;
-    let resp = http
-        .get(PYTHON_URL)
-        .send()
-        .await
-        .map_err(|e| ToolError::Network(chummy_http::reached("github.com".into(), &e)))?;
-    if !resp.status().is_success() {
-        return Err(ToolError::Runtime(format!(
-            "github.com answered {} when downloading Python",
-            resp.status().as_u16()
-        )));
-    }
-    let total = resp.content_length().unwrap_or(PYTHON_DOWNLOAD_BYTES);
-    let mut bytes = Vec::with_capacity(total as usize);
-    let mut s = resp.bytes_stream();
-    while let Some(chunk) = s.next().await {
-        bytes.extend_from_slice(
-            &chunk
-                .map_err(|e| ToolError::Network(chummy_http::reached("github.com".into(), &e)))?,
-        );
-        on(bytes.len() as u64, total);
-        if bytes.len() as u64 > 4 * PYTHON_DOWNLOAD_BYTES {
-            return Err(ToolError::Runtime(
-                "the Python download is far too large".into(),
-            ));
-        }
-    }
-    install_python_from(paths, &bytes)
-}
-
-/// Unpacks an already-downloaded archive (also used by tests).
+/// Unpacks the WebAssembly Python from its zip (bundled in the app; tests
+/// pass a built one), replacing any installed copy. Blocking.
 pub fn install_python_from(paths: &ToolPaths, bytes: &[u8]) -> Result<PythonInfo, ToolError> {
+    std::fs::create_dir_all(&paths.root).map_err(ToolError::io("creating the tools folder"))?;
     let sha = hex(&Sha256::digest(bytes));
-    if sha != PYTHON_SHA256 {
-        return Err(ToolError::Runtime(
-            "the Python download didn't match its checksum, so it wasn't installed".into(),
-        ));
-    }
-    let tmp = paths.root.join(".python-download");
+    let tmp = paths.root.join(".python-unpack");
     let _ = std::fs::remove_dir_all(&tmp);
     unpack(bytes, &tmp).map_err(|e| ToolError::Runtime(format!("couldn't unpack Python: {e}")))?;
-    if !tmp.join("python.wasm").exists() || !tmp.join("lib").is_dir() {
+    let stdlib = tmp
+        .join("lib")
+        .join(format!("python{}", minor_version(PYTHON_VERSION)));
+    if !tmp.join("python.wasm").exists() || !stdlib.is_dir() {
         let _ = std::fs::remove_dir_all(&tmp);
-        return Err(ToolError::Runtime(
-            "the Python download is missing python.wasm".into(),
-        ));
+        return Err(ToolError::Runtime(format!(
+            "the bundled Python isn't Python {PYTHON_VERSION} for WebAssembly"
+        )));
     }
     let _ = std::fs::remove_dir_all(&paths.python);
     std::fs::rename(&tmp, &paths.python).map_err(ToolError::io("installing Python"))?;
@@ -194,4 +159,40 @@ pub fn write_support(paths: &ToolPaths) -> Result<(), ToolError> {
             .map_err(ToolError::io("writing the tool runner"))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_version_is_the_one_the_build_script_builds() {
+        let script = include_str!("../../../scripts/build-wasi-python.sh");
+        assert!(
+            script.contains(&format!("PY_VERSION=\"{PYTHON_VERSION}\"")),
+            "scripts/build-wasi-python.sh builds a different Python than PYTHON_VERSION"
+        );
+    }
+
+    #[test]
+    fn minor_versions() {
+        assert_eq!(minor_version("3.14.10"), "3.14");
+        assert_eq!(minor_version("3.14"), "3.14");
+    }
+
+    #[test]
+    fn a_zip_without_python_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = ToolPaths::new(tmp.path());
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut z = zip::ZipWriter::new(&mut buf);
+            z.start_file("python.wasm", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            z.finish().unwrap();
+        }
+        let e = install_python_from(&paths, buf.get_ref()).unwrap_err();
+        assert!(e.to_string().contains("isn't Python"), "{e}");
+        assert!(python_status(&paths).is_none());
+    }
 }
