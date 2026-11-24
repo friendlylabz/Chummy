@@ -97,12 +97,19 @@
     void chat.chatId;
     atBottom = true;
   });
+  // While a What happened is open, new events don't move the chat (its
+  // log is newest first, at the top); only a message you send does.
+  let seen = 0;
   $effect(() => {
-    void chat.messages.length;
+    const n = chat.messages.length;
     void run?.streaming;
     void run?.replies.length;
     void waiting.length;
+    const sent = n > seen && chat.messages[n - 1]?.role === "user";
+    seen = n;
+    if (sent) atBottom = true;
     if (!atBottom) return;
+    if (!sent && scroller?.querySelector('.steps .toggle[aria-expanded="true"]')) return;
     tick().then(() => scroller?.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" }));
   });
 </script>
