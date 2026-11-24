@@ -95,13 +95,20 @@ jobs:
       # the real bundle's self-test on the Intel build (the Apple Silicon one
       # can't run on this runner); a failure stops the release from being
       # published.
-      - name: macOS self-test of the signed app
-        if: matrix.args == '--target x86_64-apple-darwin'
+      # Apple Silicon kills apps that run JIT code under the hardened runtime
+      # without these entitlements ("Code Signature Invalid"; v0.1.0 crashed
+      # setting up tools). Both builds must carry them. Only the Intel build
+      # can run here (the runner is Intel), so only it runs the self-test.
+      - name: macOS JIT entitlements and self-test
+        if: runner.os == 'macOS'
         run: |
-          app=$(find target/x86_64-apple-darwin/release/bundle/macos -maxdepth 1 -name '*.app' | head -1)
+          triple="${{ matrix.args }}"; triple="${triple#--target }"
+          app=$(find "target/$triple/release/bundle/macos" -maxdepth 1 -name '*.app' | head -1)
           echo "Checking $app"
-          codesign -d --entitlements - --xml "$app" | grep -q allow-unsigned-executable-memory
-          "$app/Contents/MacOS/chummy" --self-test
+          ents=$(codesign -d --entitlements - --xml "$app")
+          echo "$ents" | grep -q allow-jit
+          echo "$ents" | grep -q allow-unsigned-executable-memory
+          if [ "$triple" = x86_64-apple-darwin ]; then "$app/Contents/MacOS/chummy" --self-test; fi
 
   # Publish only once every platform has built and uploaded.
   publish:
