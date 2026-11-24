@@ -29,6 +29,11 @@ loops are built from small, editable blocks in a visual editor; every agent is
 locked to one folder you choose; and nothing reaches the network or runs a tool
 until you say so.
 
+**Documentation:** [using Chummy](docs/user/README.md) (getting started,
+the loop editor, settings) and [developing it](docs/dev/README.md)
+(modules, building, security features). File formats and design notes are
+listed in [docs/README.md](docs/README.md).
+
 ![Chatting with an agent](docs/screenshot-main.png)
 
 > **Status:** passes 1–14 of the roadmap are done: the app shell, the folder
@@ -129,7 +134,8 @@ until you say so.
 - **What happened, under each reply.** Every reply in chat has a collapsed
   **What happened** view of that run: the model's reasoning and answers,
   tool calls and questions, and (one click) every block step, with the same
-  search and filters. It follows a run live while it works.
+  search and filters, newest first. It follows a run live while it works,
+  with a timer (to a tenth of a second) next to the step it's on.
 - **Exchanges.** A conversation with the model that flows between blocks:
   *Start exchange*, *Add to exchange* and *Read exchange* build and read it,
   and model blocks continue it.
@@ -141,7 +147,9 @@ until you say so.
   without one. It says what it's doing as it goes, keeps its own to-do list
   (a checklist it rewrites as it works) for bigger jobs, reads `CHUMMY.md`
   from the agent's folder for your instructions, and summarises the
-  conversation when it gets long. If it stops with steps unchecked or with
+  conversation when it gets long. Before each step it writes one short line
+  on what it'll do next: shown in the run's pane, and kept in its own
+  instructions so it stays on track. If it stops with steps unchecked or with
   an empty answer, it's sent back to finish (twice at most). Onboarding
   offers it with one click, and a first agent gets it automatically.
 - **Templates.** Chummy assistant, Blank (a Message and a Reply block) and
@@ -173,7 +181,9 @@ until you say so.
   chats run side by side, one message at a time each; a scheduled job or a
   test run of the same agent waits for them, and they wait for it. The
   Sessions panel shows which chat each run belongs to, and clicking it opens
-  that chat. A new agent starts with an empty chat. Click the trash can
+  that chat. Each run there also has a text button that swaps the panel for
+  the run's **pane**: a live log of what its *Pane output* blocks report,
+  newest first (× closes it). A new agent starts with an empty chat. Click the trash can
   under a message, then **Delete**, to delete it: it's gone from the
   chat and from what the agent sees next time (not while that chat is
   working). **Undo** brings it back where it was, for 20 seconds or until you
@@ -205,9 +215,10 @@ until you say so.
   Chummy calls a model outside your loops: with it on, Chummy also uses that
   model for small jobs of its own, like naming chats from their first reply;
   with it off, chats are named from your first message.
-- **Turn figures.** Under each reply: model calls, tool calls and steps, then
-  the tokens the turn added to context, how full the context is, and how
-  much of the model's daily token limit is used (all estimates).
+- **Turn figures.** Under each reply: how long the run took, model calls,
+  tool calls and steps, then the tokens the turn added to context, how full
+  the context is, and how much of the model's daily token limit is used
+  (the token figures are estimates).
 - **Built-in engine (basic).** Paste a Hugging Face repo and Chummy checks it
   before downloading: it must be a text model, run without custom code, ship
   safetensors weights, and have a chat template with tools in a format Chummy

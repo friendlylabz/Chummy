@@ -50,7 +50,14 @@ pub struct RunInfo {
     pub started_at: u64,
     #[serde(skip)]
     pub cancel: Arc<AtomicBool>,
+    /// What the run's Pane output blocks have shown, oldest first (at most
+    /// [`PANE_LINES`]); read with `run_pane`.
+    #[serde(skip)]
+    pub pane: Arc<Mutex<std::collections::VecDeque<String>>>,
 }
+
+/// Lines a run's pane keeps; older ones are dropped.
+pub const PANE_LINES: usize = 500;
 
 pub struct AppState {
     pub dirs: ChummyDirs,

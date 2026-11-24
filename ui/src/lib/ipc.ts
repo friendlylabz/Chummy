@@ -467,6 +467,7 @@ export type FlowEvent =
   | { type: "tool_result"; block: string; tool: string; preview: string; is_error: boolean }
   | { type: "notice"; block: string; text: string }
   | { type: "reply"; block: string; text: string }
+  | { type: "pane"; block: string; text: string }
   | { type: "asked"; block: string; text: string }
   | { type: "answered"; block: string }
   | ({ type: "step" } & StepLog)
@@ -570,6 +571,8 @@ export interface RunSummary {
   steps: number;
   llm_calls: number;
   tool_calls?: number;
+  /** How long the run took, in ms (missing on older replies). */
+  ms?: number;
   /** Estimated tokens this turn added to context. */
   tokens?: number;
   /** Estimated tokens in the context at the end, and the model's context length. */
@@ -950,6 +953,8 @@ export const commands = {
   /** Opens a link from a reply, after Rust asks. */
   openLink: (url: string) => call<void>("open_link", { url }),
   listRuns: () => call<RunInfo[]>("list_runs", undefined, () => []),
+  /** What a running run's Pane output blocks have shown, newest first. */
+  runPane: (runId: string) => call<string[]>("run_pane", { runId }, () => []),
   setPermission: (kind: "network" | "tools" | "confirm_online_tools", enabled: boolean) =>
     call<boolean>("set_permission", { kind, enabled }, () => false),
 

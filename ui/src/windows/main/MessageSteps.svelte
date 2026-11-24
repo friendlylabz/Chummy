@@ -1,8 +1,9 @@
 <script lang="ts">
   /**
    * What the agent did for one message: its model calls (with reasoning),
-   * tool calls, questions and, on request, every block step. Collapsed until
-   * opened; the log is read when first opened.
+   * tool calls, questions and, on request, every block step, newest first
+   * (so a run in progress shows what it's doing now at the top). Collapsed
+   * until opened; the log is read when first opened.
    */
   import { commands, errorText, type LogEntry } from "$lib/ipc";
   import type { Group } from "$lib/logs";
@@ -68,7 +69,7 @@
       {:else if !live && !loaded}
         <p class="wait">Reading the log…</p>
       {:else}
-        <RunTimeline {entries} compact {groups} />
+        <RunTimeline {entries} compact {groups} sort="newest" />
       {/if}
     </div>
   {/if}

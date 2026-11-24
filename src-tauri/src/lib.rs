@@ -142,6 +142,7 @@ pub fn run() {
             chat::test_run,
             chat::stop_run,
             chat::list_runs,
+            chat::run_pane,
             providers::list_presets,
             providers::save_provider,
             providers::delete_provider,

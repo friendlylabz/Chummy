@@ -1,6 +1,7 @@
 <script lang="ts">
   import Formatted from "$lib/components/Formatted.svelte";
   import { tick } from "svelte";
+  import { stopwatch } from "$lib/format";
   import { commands, type Agent } from "$lib/ipc";
   import { chat } from "$lib/stores/chat.svelte";
   import { runs } from "$lib/stores/runs.svelte";
@@ -43,7 +44,8 @@
       const v = (a / b) * 100;
       return `${v > 0 && v < 1 ? "<1" : Math.round(v)}%`;
     };
-    const parts = [n(r.llm_calls, "model call"), r.tool_calls ? n(r.tool_calls, "tool call") : "", n(r.steps, "step")];
+    // How long it took comes first (replies saved before it was recorded have none).
+    const parts = [r.ms ? stopwatch(r.ms) : "", n(r.llm_calls, "model call"), r.tool_calls ? n(r.tool_calls, "tool call") : "", n(r.steps, "step")];
     // Token figures (estimates), for replies recorded since they were added.
     if (r.tokens) parts.push(`${n(r.tokens, "token")} used`);
     if (r.context_window) parts.push(`context ${pct(r.context_tokens ?? 0, r.context_window)}`);
@@ -52,17 +54,44 @@
     return parts.filter(Boolean).join(" · ");
   }
 
-  // Keep the newest message in view.
+  // The live run's timer, to a tenth of a second.
+  let nowMs = $state(Date.now());
+  $effect(() => {
+    if (!run) return;
+    nowMs = Date.now();
+    const t = setInterval(() => (nowMs = Date.now()), 100);
+    return () => clearInterval(t);
+  });
+  const elapsed = $derived(run ? stopwatch(nowMs - run.startedMs) : "");
+
+  // Keep the newest message in view, but only while you're at the bottom:
+  // scrolled up (say, reading What happened), the chat stays put.
+  // Only scrolling up leaves the bottom, so a smooth scroll on its way
+  // down (or text arriving mid-way) doesn't count as you scrolling away.
+  let atBottom = true;
+  let lastTop = 0;
+  function onScroll() {
+    if (!scroller) return;
+    const top = scroller.scrollTop;
+    if (scroller.scrollHeight - top - scroller.clientHeight < 80) atBottom = true;
+    else if (top < lastTop) atBottom = false;
+    lastTop = top;
+  }
+  $effect(() => {
+    void chat.chatId;
+    atBottom = true;
+  });
   $effect(() => {
     void chat.messages.length;
     void run?.streaming;
     void run?.replies.length;
     void waiting.length;
+    if (!atBottom) return;
     tick().then(() => scroller?.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" }));
   });
 </script>
 
-<div class="scroller" bind:this={scroller}>
+<div class="scroller" bind:this={scroller} onscroll={onScroll}>
   <div class="thread">
     {#if !chat.messages.length && !run}
       <div class="hello">
@@ -167,6 +196,7 @@
           <div class="activity">
             <span class="pulse"></span>
             <span class="step">{run.currentLabel ? `${run.currentLabel}…` : "Working…"}</span>
+            <span class="timer" title="Time since this run started">{elapsed}</span>
             <Button variant="ghost" icon="stop" onclick={() => commands.stopRun(run.info.run_id)}>Stop</Button>
           </div>
           {#if run.streaming && !run.waitingForYou}<div class="stream">{run.streaming.slice(-600)}</div>{/if}
@@ -411,7 +441,16 @@
     font-size: var(--text-sm);
   }
   .activity .step {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .activity .timer {
     flex: 1;
+    color: var(--text-faint);
+    font-size: var(--text-xs);
+    font-variant-numeric: tabular-nums;
   }
   .pulse {
     width: 8px;

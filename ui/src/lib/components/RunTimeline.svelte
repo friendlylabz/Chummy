@@ -14,12 +14,15 @@
     entries,
     compact = false,
     groups: initialGroups,
+    sort: initialSort = "order",
   }: {
     entries: LogEntry[];
     /** Smaller, for the chat. */
     compact?: boolean;
     /** Kinds shown at first. Default: everything. */
     groups?: Group[];
+    /** How rows are sorted at first. Default: in order (oldest first). */
+    sort?: "order" | "newest" | "slowest";
   } = $props();
 
   let catalog = $state<BlockInfo[]>([]);
@@ -33,7 +36,8 @@
   let query = $state("");
   let category = $state<Category | "">("");
   let failuresOnly = $state(false);
-  let sort = $state<"order" | "newest" | "slowest">("order");
+  // svelte-ignore state_referenced_locally
+  let sort = $state<"order" | "newest" | "slowest">(initialSort);
   let open = $state<Record<number, boolean>>({});
   let limit = $state(300);
 
@@ -60,6 +64,19 @@
     return list;
   });
   const visible = $derived(filtered.slice(0, limit));
+  /** Kinds that have entries but are switched off, e.g. "block steps (140)". */
+  const hidden = $derived(
+    allGroups.filter((g) => counts[g] && !shown.includes(g)).map((g) => `${groupLabel[g].toLowerCase()} (${counts[g]})`),
+  );
+  const countLine = $derived(
+    [
+      filtered.length === t.items.length ? `${t.items.length} entries` : `${filtered.length} of ${t.items.length} entries`,
+      sort === "newest" ? "newest first" : "",
+      hidden.length ? `hidden: ${hidden.join(", ")} (click a chip above to show them)` : "",
+    ]
+      .filter(Boolean)
+      .join(" · "),
+  );
 
   function toggle(g: Group) {
     shown = shown.includes(g) ? shown.filter((x) => x !== g) : [...shown, g];
@@ -157,14 +174,12 @@
       <span>{t.unreadable.lines} line{t.unreadable.lines === 1 ? "" : "s"} can't be read. {t.unreadable.reason}</span>
     </div>
   {/if}
-  <div class="count">
-    {filtered.length === t.items.length ? `${t.items.length} entries` : `${filtered.length} of ${t.items.length} entries`}
-  </div>
+  <div class="count">{countLine}</div>
 
   <ol class="rows">
     {#each visible as i (i.i)}
       {@const e = i.entry}
-      <li class="row" class:failed={i.failed} class:open={open[i.i]} style:--depth={sort === "order" ? i.depth : 0}>
+      <li class="row" class:failed={i.failed} class:open={open[i.i]} style:--depth={sort === "slowest" ? 0 : i.depth}>
         <button type="button" class="row-head" aria-expanded={!!open[i.i]} onclick={() => (open[i.i] = !open[i.i])}>
           <span class="time">{offset(i.at, start)}</span>
           <span class="dot" style:background={dotColor(i)}></span>

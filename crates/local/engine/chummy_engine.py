@@ -344,6 +344,10 @@ class FakeBackend:
 
         if messages and messages[-1]["role"] == "tool":
             text = "Done: " + (messages[-1].get("content") or "")[:150]
+        elif "say what you will do next" in low:
+            # The Chummy assistant's "Say what's next": one short line.
+            request = last.split("request:\n", 1)[-1].split("\n", 1)[0].strip()
+            text = "Working on: " + request[:80]
         elif "clear enough to act on" in low and low.rstrip().endswith("most need answered."):
             text = "CLEAR"
         elif "whole goal in one go" in low:

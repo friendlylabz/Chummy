@@ -268,7 +268,9 @@ under its reply in chat and in the run's log: the tokens the turn added to
 context (your message, every model answer with its tool calls, every tool
 result), how full the context of the latest model call was (what it was
 sent plus its answer, against that model's context length), and the
-model's daily token use when the reply came.
+model's daily token use when the reply came. The reply also keeps how long
+the run took (start to finish, to a tenth of a second), shown first; while
+a run works, a timer shows next to the step it's on. Both work for any loop.
 
 How tools themselves are written, installed and sandboxed is described in
 [tool-format.md](tool-format.md).
@@ -308,6 +310,7 @@ Ports are written `name: kind`.
 | `write_file` | Write file | `path: text`, `content: text` | `out: text` (the path), `error: text` | `append` (false). Creates folders as needed. |
 | `list_files` | List files | `path: text` | `out: list`, `error: text` | none. Folder names end with `/`. Use `.` for the workspace itself. |
 | `output` | Reply | `in: text` | none | none. Adds its input to the agent's reply. |
+| `pane` | Pane output | `in: text` | none | none. Adds its input as one line (whitespace folded, at most 1,000 characters; blank input shows nothing) to the run's **pane**, a live log in the Sessions panel (the run's text button), newest first. Never part of the reply or the conversation. A run's pane keeps its newest 500 lines. |
 | `stop` | Stop with error | `in: text` (the reason) | none | none. Ends the whole run as failed, with its input as the reason; anything still waiting is dropped. It has no *Failed* output, so it can't be caught. |
 | `function` | Function | the function's inputs | the function's outputs | `function`: the id of a function in this loop. See below. |
 
@@ -456,8 +459,17 @@ a function with comments, labels and notes, so it reads well in the editor.
    agent's folder into `{{instructions}}` (your instructions for this
    folder, like a project instruction file), lists the folder's top level
    (first 60 entries) into `{{folder}}`, and starts `{{todos}}` and
-   `{{progress}}`.
-2. **Agent loop.** The exchange starts with a system message that tells
+   `{{progress}}`, and `{{next}}` ("(not decided yet)").
+2. **Say what's next.** Before every *Work* call (the first one, after
+   each round of tool results, and after being sent back), a small extra
+   model call (no tools) gets the request, `{{todos}}` and the newest 2,500
+   characters of the work, and writes one short sentence about what it
+   will do next. Its first line goes to a *Pane output* block (so the
+   run's pane in Sessions shows what the agent is doing, newest first) and
+   is saved as `{{next}}`, which *Work*'s system message shows under "Your
+   next move", so the model sees what it meant to do and can follow it or
+   change course. If the call fails, the work just goes on.
+3. **Agent loop.** The exchange starts with a system message that tells
    the model how to work (say what you're about to do,
    read before changing, don't repeat refused calls, ask before anything
    hard to undo, ask one question if unclear, check your work, report
@@ -467,11 +479,11 @@ a function with comments, labels and notes, so it reads well in the editor.
    you, using Read exchange's **Newest message** so older text isn't
    repeated), *Run tool* (your approvals apply; errors and refusals go back
    to the model) and *Make room*, then back to *Work*.
-3. **Planning** is the model's own checklist. Whenever it writes lines like
+4. **Planning** is the model's own checklist. Whenever it writes lines like
    `- [ ] step` / `- [x] step`, *Keep the to-do list* saves them as
    `{{todos}}`, replacing the old list; the model sees the current list in
    every call. Simple requests skip it.
-4. **Make room.** After each round of tool results the transcript (without
+5. **Make room.** After each round of tool results the transcript (without
    the instructions) is saved as `{{progress}}` (newest 8,000 characters).
    A *Context full?* block then estimates the exchange's tokens, system
    message included; once they reach the model's compaction point
@@ -479,7 +491,7 @@ a function with comments, labels and notes, so it reads well in the editor.
    server reports, unless you change it), the model summarises the work,
    you see a short note, and the work carries on in a fresh exchange: the
    same instructions, then the summary.
-5. **Done?** An answer without tool calls ends the loop: one that ends with
+6. **Done?** An answer without tool calls ends the loop: one that ends with
    a question waits for your reply (the run ends; your next message carries
    on); an empty one, or one given while `{{todos}}` still has unchecked
    steps, is shown and the model is sent back to carry on (in a fresh
@@ -489,4 +501,5 @@ a function with comments, labels and notes, so it reads well in the editor.
 
 A model call that fails (after the engine's bad-call retries) is shown as
 "I couldn't finish: …" and *Stop with error* ends the run as failed. Limits
-are 10,000 steps, 200 model calls and 150 tool calls per run.
+are 10,000 steps, 400 model calls (half of them the short *Say what's
+next* calls) and 150 tool calls per run.

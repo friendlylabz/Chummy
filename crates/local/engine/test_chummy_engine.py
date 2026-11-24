@@ -141,6 +141,10 @@ class SplitterTests(unittest.TestCase):
         self.assertIn('"name": "current_time"', first)
         self.assertTrue(say("But your to-do list still has unchecked steps:\n- [ ] Tell you").startswith("- [x]"))
         self.assertEqual(say("The user wrote:\nhi\n\nTitle for this conversation:"), "A Friendly Greeting")
+        self.assertEqual(
+            say("You are working on the user's request:\nCount the days\n\nYour to-do list:\n(none yet)\n\n"
+                "In one short sentence of at most 15 words, say what you will do next."),
+            "Working on: Count the days")
 
 
 def free_port():

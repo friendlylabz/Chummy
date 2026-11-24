@@ -33,6 +33,22 @@ export function duration(seconds: number): string {
   return `${(seconds / 3600).toFixed(1)} h`;
 }
 
+/**
+ * A stopwatch reading to a tenth of a second: "4.2s" under a minute,
+ * "1:05.3" (minutes:seconds.tenths) after, "1:02:05.3" past an hour.
+ */
+export function stopwatch(ms: number): string {
+  const tenths = Math.max(0, Math.floor(ms / 100));
+  const t = tenths % 10;
+  const totalS = Math.floor(tenths / 10);
+  const s = totalS % 60;
+  const m = Math.floor(totalS / 60) % 60;
+  const h = Math.floor(totalS / 3600);
+  if (!h && !m) return `${s}.${t}s`;
+  const ss = String(s).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${ss}.${t}` : `${m}:${ss}.${t}`;
+}
+
 export function date(unix: number): string {
   return new Date(unix * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }

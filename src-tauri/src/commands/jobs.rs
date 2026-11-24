@@ -80,6 +80,7 @@ impl JobRunner for AppJobs {
                 job_id: Some(job.id.clone()),
                 started_at: now(),
                 cancel: req.cancel.clone(),
+                pane: Default::default(),
             },
             chat::RunMeta {
                 agent_name: Some(agent.name.clone()),

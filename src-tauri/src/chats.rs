@@ -36,6 +36,10 @@ pub struct RunSummary {
     pub llm_calls: u32,
     #[serde(default)]
     pub tool_calls: u32,
+    /// How long the run took, start to finish, in milliseconds (0: not
+    /// recorded, for replies saved before this was added).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub ms: u64,
     /// Estimated tokens this turn added to context.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub tokens: u64,
@@ -424,6 +428,19 @@ mod tests {
             from: None,
             run: None,
         }
+    }
+
+    #[test]
+    fn run_time_is_kept_and_optional() {
+        // Replies saved before run times were recorded still load.
+        let old: RunSummary =
+            serde_json::from_str(r#"{"status":"completed","steps":3,"llm_calls":1}"#).unwrap();
+        assert_eq!(old.ms, 0);
+        assert!(serde_json::to_value(&old).unwrap().get("ms").is_none());
+        let new = RunSummary { ms: 65_300, ..old };
+        let v = serde_json::to_value(&new).unwrap();
+        assert_eq!(v["ms"], 65_300);
+        assert_eq!(serde_json::from_value::<RunSummary>(v).unwrap(), new);
     }
 
     fn tmp() -> PathBuf {

@@ -6,6 +6,7 @@
   import { asks } from "$lib/stores/asks.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
   import Icon from "$lib/components/Icon.svelte";
+  import RunPane from "./RunPane.svelte";
 
   let { open = $bindable(true) }: { open: boolean } = $props();
 
@@ -25,6 +26,8 @@
     step: string;
   }
   let active = $state<Row[]>([]);
+  /** The run whose pane is shown instead of the lists, if any. */
+  let paneFor = $state<Row | null>(null);
   let busyAgents = $state<string[]>([]);
 
   const stepText = (s: string) => (s === "Waiting for you" ? s : `${s}…`);
@@ -59,6 +62,11 @@
 </script>
 
 <aside class="panel" class:open aria-label="Sessions" aria-hidden={!open} inert={!open}>
+  {#if paneFor}
+    <div class="inner">
+      <RunPane runId={paneFor.id} title={paneFor.title} chat={paneFor.chat} onclose={() => (paneFor = null)} />
+    </div>
+  {:else}
   <div class="inner">
     <div class="head">
       <span class="title">Sessions</span>
@@ -104,6 +112,9 @@
             {#if r.chat}<div class="run-chat"><Icon name="chat" size={12} /><span>{r.chat}</span></div>{/if}
             <div class="run-step">{r.step}</div>
           </button>
+          <button class="icon-btn" type="button" aria-label="Show the run's pane" title="Show what it's doing (its pane)" onclick={() => (paneFor = r)}>
+            <Icon name="text" size={14} />
+          </button>
           <button class="icon-btn" type="button" aria-label="Stop" title="Stop" onclick={() => commands.stopRun(r.id)}>
             <Icon name="stop" size={14} />
           </button>
@@ -133,6 +144,7 @@
       {/each}
     </div>
   </div>
+  {/if}
 </aside>
 
 <style>

@@ -22,7 +22,7 @@ use crate::chats;
 use crate::events;
 use crate::host::{AppHost, agent_host};
 use crate::settings::{Agent, Settings};
-use crate::state::{AppState, RunInfo, lock};
+use crate::state::{AppState, PANE_LINES, RunInfo, lock};
 
 pub use crate::chats::{ChatIndex, ChatMessage, ChatMeta, RunSummary};
 
@@ -294,6 +294,15 @@ pub fn get_chat(
 #[tauri::command]
 pub fn list_runs(state: State<'_, AppState>) -> Vec<RunInfo> {
     lock(&state.runs).values().cloned().collect()
+}
+
+/// What a running run's Pane output blocks have shown so far, newest first
+/// (empty for a run that has finished or never used one).
+#[tauri::command]
+pub fn run_pane(state: State<'_, AppState>, run_id: String) -> Vec<String> {
+    let pane = lock(&state.runs).get(&run_id).map(|r| r.pane.clone());
+    pane.map(|p| lock(&p).iter().rev().cloned().collect())
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -607,9 +616,19 @@ pub fn emitter(app: &AppHandle, guard: &RunGuard) -> impl FnMut(Event) + Send + 
     let app = app.clone();
     let run_id = guard.run_id.clone();
     let log = guard.log.clone();
+    let pane = lock(&app.state::<AppState>().runs)
+        .get(&run_id)
+        .map(|r| r.pane.clone());
     move |event| {
         if let Some(l) = &log {
             l.event(&event);
+        }
+        if let (Event::Pane { text, .. }, Some(pane)) = (&event, &pane) {
+            let mut lines = lock(pane);
+            if lines.len() >= PANE_LINES {
+                lines.pop_front();
+            }
+            lines.push_back(text.clone());
         }
         let _ = app.emit(
             events::RUN_EVENT,
@@ -649,6 +668,7 @@ fn start(
         job_id: None,
         started_at: now(),
         cancel: cancel.clone(),
+        pane: Default::default(),
     };
     // However the run ends (even by a panic), it leaves the run list, so
     // the agent never stays "still working".
@@ -672,7 +692,8 @@ fn start(
         let state = app.state::<AppState>();
         lock(&state.runs).remove(&id);
         if let (Some(agent), Some(chat)) = (&agent, &chat_id) {
-            for m in messages_for(&outcome, &id, &end) {
+            let ms = end.ended_at.saturating_sub(guard.started_at);
+            for m in messages_for(&outcome, &id, &end, ms) {
                 let _ = append(&app, &state, &agent.id, chat, m);
             }
             if first && !outcome.replies.is_empty() {
@@ -784,7 +805,7 @@ impl Drop for RunGuard {
 }
 
 /// Chat messages that report a finished run.
-fn messages_for(o: &RunOutcome, run_id: &str, end: &RunEnd) -> Vec<ChatMessage> {
+fn messages_for(o: &RunOutcome, run_id: &str, end: &RunEnd, ms: u64) -> Vec<ChatMessage> {
     let (status, notice) = match &o.status {
         RunStatus::Completed if o.replies.is_empty() => (
             "completed",
@@ -804,6 +825,7 @@ fn messages_for(o: &RunOutcome, run_id: &str, end: &RunEnd) -> Vec<ChatMessage> 
         steps: o.steps,
         llm_calls: o.llm_calls,
         tool_calls: o.tool_calls,
+        ms,
         tokens: end.tokens_added,
         context_tokens: end.context_tokens,
         context_window: end.context_window,

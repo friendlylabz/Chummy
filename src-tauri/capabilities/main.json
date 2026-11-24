@@ -26,6 +26,7 @@
     "allow-send-message",
     "allow-stop-run",
     "allow-list-runs",
+    "allow-run-pane",
     "allow-list-asks",
     "allow-answer-ask",
     "allow-close-activity",

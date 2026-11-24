@@ -2,10 +2,10 @@
   "format": "chummy.loop",
   "version": 3,
   "name": "Chummy assistant",
-  "description": "The default loop. One agent loop, like a coding agent's: the model works with tools, call after call, until it answers without one. It says what it's doing as it goes, plans with its own to-do list when the work has several steps, reads CHUMMY.md from the folder for your instructions, and summarises the conversation when it gets long. If it stops with steps unchecked, it's sent back to finish (twice at most).",
+  "description": "The default loop. One agent loop, like a coding agent's: the model works with tools, call after call, until it answers without one. It says what it's doing as it goes, plans with its own to-do list when the work has several steps, says in one line what it'll do next (in the run's pane: Sessions → the run's text button), reads CHUMMY.md from the folder for your instructions, and summarises the conversation when it gets long. If it stops with steps unchecked, it's sent back to finish (twice at most).",
   "limits": {
     "max_steps": 10000,
-    "max_llm_calls": 200,
+    "max_llm_calls": 400,
     "max_tool_calls": 150
   },
   "blocks": [
@@ -614,6 +614,32 @@
             "key": "progress",
             "max_chars": 8000
           }
+        },
+        {
+          "id": "no_next",
+          "type": "combine",
+          "label": "Nothing decided yet",
+          "position": {
+            "x": 260,
+            "y": 900
+          },
+          "params": {
+            "inputs": 1,
+            "format": "(not decided yet)"
+          }
+        },
+        {
+          "id": "next",
+          "type": "store",
+          "label": "Start the next move",
+          "position": {
+            "x": 520,
+            "y": 900
+          },
+          "params": {
+            "key": "next",
+            "max_chars": 300
+          }
         }
       ],
       "links": [
@@ -838,6 +864,26 @@
             "block": "progress",
             "port": "in"
           }
+        },
+        {
+          "from": {
+            "block": "msg",
+            "port": "out"
+          },
+          "to": {
+            "block": "no_next",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "no_next",
+            "port": "out"
+          },
+          "to": {
+            "block": "next",
+            "port": "in"
+          }
         }
       ],
       "notes": [
@@ -846,7 +892,7 @@
           "text": "Like a coding agent's start-up context: the project's instruction file (here CHUMMY.md) and a look at the folder. Everything stays inside the agent's folder.",
           "position": {
             "x": 0,
-            "y": 900
+            "y": 1050
           },
           "width": 420,
           "height": 100
@@ -990,6 +1036,294 @@
       ]
     },
     {
+      "id": "next_step",
+      "name": "Say what's next",
+      "description": "Before each Work call: the model looks at the request, its to-do list and the newest part of the work, and writes one short sentence about what it will do next. The sentence goes to the run's pane (Sessions → the run's text button) and is kept as {{next}}, which Work's system message includes. If this call fails, the work just goes on. The exchange passes through unchanged.",
+      "inputs": [
+        {
+          "name": "exchange",
+          "label": "Exchange",
+          "to": {
+            "block": "ex",
+            "port": "in"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "exchange",
+          "label": "Exchange",
+          "from": {
+            "block": "ex",
+            "port": "out"
+          }
+        }
+      ],
+      "blocks": [
+        {
+          "id": "ex",
+          "type": "forward",
+          "label": "Exchange",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "params": {}
+        },
+        {
+          "id": "read",
+          "type": "read_exchange",
+          "label": "The work so far",
+          "position": {
+            "x": 260,
+            "y": -200
+          },
+          "params": {
+            "role": "any",
+            "system_in_transcript": false
+          }
+        },
+        {
+          "id": "recent",
+          "type": "store",
+          "label": "The newest part",
+          "position": {
+            "x": 520,
+            "y": -200
+          },
+          "params": {
+            "key": "recent_work",
+            "max_chars": 2500
+          },
+          "comment": "Keeps the newest 2,500 characters, so the prompt stays short."
+        },
+        {
+          "id": "ask",
+          "type": "combine",
+          "label": "Ask what's next",
+          "position": {
+            "x": 780,
+            "y": -200
+          },
+          "params": {
+            "inputs": 1,
+            "format": "You are working on the user's request:\n{{request}}\n\nYour to-do list:\n{{todos}}\n\nThe latest part of your work so far (the newest is at the end):\n_INPUT1_\n\nIn one short sentence of at most 15 words, say what you will do next. Start with a verb, for example: \"Reading notes.txt to find this month's totals.\" If the work is done, say what you'll tell the user. Write only that sentence."
+          }
+        },
+        {
+          "id": "say",
+          "type": "llm",
+          "label": "Say what's next",
+          "position": {
+            "x": 1040,
+            "y": -200
+          },
+          "params": {
+            "temperature": 0.2,
+            "tools": "off"
+          },
+          "comment": "A small extra call: one sentence."
+        },
+        {
+          "id": "first",
+          "type": "regex",
+          "label": "First line",
+          "position": {
+            "x": 1300,
+            "y": -200
+          },
+          "params": {
+            "pattern": "\\A\\s*[^\\n]{0,200}"
+          }
+        },
+        {
+          "id": "line",
+          "type": "join",
+          "label": "As text",
+          "position": {
+            "x": 1560,
+            "y": -200
+          },
+          "params": {
+            "separator": ""
+          }
+        },
+        {
+          "id": "said",
+          "type": "branch",
+          "label": "Said anything?",
+          "position": {
+            "x": 1820,
+            "y": -200
+          },
+          "params": {
+            "pattern": "\\S"
+          }
+        },
+        {
+          "id": "pane",
+          "type": "pane",
+          "label": "Show in the pane",
+          "position": {
+            "x": 2080,
+            "y": -300
+          },
+          "params": {},
+          "comment": "One line in the run's pane."
+        },
+        {
+          "id": "keep",
+          "type": "store",
+          "label": "Remember it",
+          "position": {
+            "x": 2080,
+            "y": -100
+          },
+          "params": {
+            "key": "next",
+            "max_chars": 300
+          },
+          "comment": "{{next}}: Work's system message shows it."
+        },
+        {
+          "id": "skip",
+          "type": "forward",
+          "label": "If that fails",
+          "position": {
+            "x": 1300,
+            "y": 0
+          },
+          "params": {},
+          "comment": "Nothing to show; the work goes on."
+        }
+      ],
+      "links": [
+        {
+          "from": {
+            "block": "ex",
+            "port": "out"
+          },
+          "to": {
+            "block": "read",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "read",
+            "port": "all"
+          },
+          "to": {
+            "block": "recent",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "recent",
+            "port": "out"
+          },
+          "to": {
+            "block": "ask",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "ask",
+            "port": "out"
+          },
+          "to": {
+            "block": "say",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "say",
+            "port": "out"
+          },
+          "to": {
+            "block": "first",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "first",
+            "port": "out"
+          },
+          "to": {
+            "block": "line",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "line",
+            "port": "out"
+          },
+          "to": {
+            "block": "said",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "line",
+            "port": "out"
+          },
+          "to": {
+            "block": "said",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "said",
+            "port": "yes"
+          },
+          "to": {
+            "block": "pane",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "said",
+            "port": "yes"
+          },
+          "to": {
+            "block": "keep",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "say",
+            "port": "error"
+          },
+          "to": {
+            "block": "skip",
+            "port": "in"
+          },
+          "label": "the call failed"
+        }
+      ],
+      "notes": [
+        {
+          "id": "n1",
+          "text": "Says what the agent is about to do, for you (in the pane) and for itself (as {{next}}). The function's Exchange output fires once all of this is done, so Work always sees the newest {{next}}.",
+          "position": {
+            "x": 0,
+            "y": 200
+          },
+          "width": 380,
+          "height": 110
+        }
+      ]
+    },
+    {
       "id": "make_room",
       "name": "Make room",
       "description": "After each round of tool results: saves the latest work as {{progress}}, and if the conversation has reached the model's compaction point (Settings → Models: 80% of its context unless you change it), the model summarises it and the work carries on from the summary in a fresh exchange. If summarising fails, the conversation goes on as it was.",
@@ -1123,7 +1457,7 @@
             "y": -50
           },
           "params": {
-            "system": "You are Chummy, a helpful assistant. You work in the user's folder using the tools you have, and you keep going until the user's request is done.\n\n# How you work\n- Text you write is shown to the user. Before you call tools, say in one short sentence what you're about to do.\n- Use tools to look things up and to make changes. Read a file before you change it. Don't guess what you can check.\n- When tool calls don't depend on each other, make them together.\n- If a tool fails or the user doesn't allow a call, read why. Don't repeat the same call: try another way, or explain what's in the way.\n- Do what was asked, no more. Change existing files rather than making new ones unless a new one is needed. To change part of a file, edit just that part (with edit_file, if you have it) instead of writing the whole file again.\n- Long files and results come in parts. If a result says there's more, read on from where it says.\n- Before anything hard to undo, like deleting or overwriting the user's work, ask the user first.\n- If the request is unclear, ask one short question and stop there.\n\n# Planning\nFor work with 3 or more steps, keep a to-do list. Write it as a checklist, one step per line:\n- [ ] a step to do\n- [x] a step that's done\nWrite the whole list again whenever it changes: when you make it, and each time you finish a step. Work on the first unchecked step. Make each step specific. For simple requests, skip the list and just do it.\n\n# Finishing\nWhen everything is done, check your work if you can (for example, read back a file you wrote). Then give your final answer, with no tool calls: short and direct, what you did and what came out. Be honest: if something failed or you couldn't check it, say so. Use Markdown when it helps; no emojis unless asked.\n\n# Your to-do list now\n{{todos}}\n\n# The user's folder (top level)\n{{folder}}\n\n# The user's instructions for this folder (CHUMMY.md)\n{{instructions}}\n\n# Conversation before this request\n{{conversation}}",
+            "system": "You are Chummy, a helpful assistant. You work in the user's folder using the tools you have, and you keep going until the user's request is done.\n\n# How you work\n- Text you write is shown to the user. Before you call tools, say in one short sentence what you're about to do.\n- Use tools to look things up and to make changes. Read a file before you change it. Don't guess what you can check.\n- When tool calls don't depend on each other, make them together.\n- If a tool fails or the user doesn't allow a call, read why. Don't repeat the same call: try another way, or explain what's in the way.\n- Do what was asked, no more. Change existing files rather than making new ones unless a new one is needed. To change part of a file, edit just that part (with edit_file, if you have it) instead of writing the whole file again.\n- Long files and results come in parts. If a result says there's more, read on from where it says.\n- Before anything hard to undo, like deleting or overwriting the user's work, ask the user first.\n- If the request is unclear, ask one short question and stop there.\n\n# Planning\nFor work with 3 or more steps, keep a to-do list. Write it as a checklist, one step per line:\n- [ ] a step to do\n- [x] a step that's done\nWrite the whole list again whenever it changes: when you make it, and each time you finish a step. Work on the first unchecked step. Make each step specific. For simple requests, skip the list and just do it.\n\n# Finishing\nWhen everything is done, check your work if you can (for example, read back a file you wrote). Then give your final answer, with no tool calls: short and direct, what you did and what came out. Be honest: if something failed or you couldn't check it, say so. Use Markdown when it helps; no emojis unless asked.\n\n# Your to-do list now\n{{todos}}\n\n# Your next move\nWhat you last said you'd do next (a note to yourself: follow it, or change course if what you've found calls for it):\n{{next}}\n\n# The user's folder (top level)\n{{folder}}\n\n# The user's instructions for this folder (CHUMMY.md)\n{{instructions}}\n\n# Conversation before this request\n{{conversation}}",
             "roles": [
               "user"
             ]
@@ -1792,7 +2126,7 @@
     {
       "id": "agent",
       "name": "Agent loop",
-      "description": "The core loop: the model is called with the conversation so far; if it calls tools, what it said is shown, the calls run (your approvals apply) and the results go back to it; when it answers without tool calls, Done? decides whether that's the final answer.",
+      "description": "The core loop: before each call the model says in one line what it will do next (shown in the run's pane); then it's called with the conversation so far; if it calls tools, what it said is shown, the calls run (your approvals apply) and the results go back to it; when it answers without tool calls, Done? decides whether that's the final answer.",
       "inputs": [
         {
           "name": "request",
@@ -1841,7 +2175,7 @@
             "y": 0
           },
           "params": {
-            "system": "You are Chummy, a helpful assistant. You work in the user's folder using the tools you have, and you keep going until the user's request is done.\n\n# How you work\n- Text you write is shown to the user. Before you call tools, say in one short sentence what you're about to do.\n- Use tools to look things up and to make changes. Read a file before you change it. Don't guess what you can check.\n- When tool calls don't depend on each other, make them together.\n- If a tool fails or the user doesn't allow a call, read why. Don't repeat the same call: try another way, or explain what's in the way.\n- Do what was asked, no more. Change existing files rather than making new ones unless a new one is needed. To change part of a file, edit just that part (with edit_file, if you have it) instead of writing the whole file again.\n- Long files and results come in parts. If a result says there's more, read on from where it says.\n- Before anything hard to undo, like deleting or overwriting the user's work, ask the user first.\n- If the request is unclear, ask one short question and stop there.\n\n# Planning\nFor work with 3 or more steps, keep a to-do list. Write it as a checklist, one step per line:\n- [ ] a step to do\n- [x] a step that's done\nWrite the whole list again whenever it changes: when you make it, and each time you finish a step. Work on the first unchecked step. Make each step specific. For simple requests, skip the list and just do it.\n\n# Finishing\nWhen everything is done, check your work if you can (for example, read back a file you wrote). Then give your final answer, with no tool calls: short and direct, what you did and what came out. Be honest: if something failed or you couldn't check it, say so. Use Markdown when it helps; no emojis unless asked.\n\n# Your to-do list now\n{{todos}}\n\n# The user's folder (top level)\n{{folder}}\n\n# The user's instructions for this folder (CHUMMY.md)\n{{instructions}}\n\n# Conversation before this request\n{{conversation}}",
+            "system": "You are Chummy, a helpful assistant. You work in the user's folder using the tools you have, and you keep going until the user's request is done.\n\n# How you work\n- Text you write is shown to the user. Before you call tools, say in one short sentence what you're about to do.\n- Use tools to look things up and to make changes. Read a file before you change it. Don't guess what you can check.\n- When tool calls don't depend on each other, make them together.\n- If a tool fails or the user doesn't allow a call, read why. Don't repeat the same call: try another way, or explain what's in the way.\n- Do what was asked, no more. Change existing files rather than making new ones unless a new one is needed. To change part of a file, edit just that part (with edit_file, if you have it) instead of writing the whole file again.\n- Long files and results come in parts. If a result says there's more, read on from where it says.\n- Before anything hard to undo, like deleting or overwriting the user's work, ask the user first.\n- If the request is unclear, ask one short question and stop there.\n\n# Planning\nFor work with 3 or more steps, keep a to-do list. Write it as a checklist, one step per line:\n- [ ] a step to do\n- [x] a step that's done\nWrite the whole list again whenever it changes: when you make it, and each time you finish a step. Work on the first unchecked step. Make each step specific. For simple requests, skip the list and just do it.\n\n# Finishing\nWhen everything is done, check your work if you can (for example, read back a file you wrote). Then give your final answer, with no tool calls: short and direct, what you did and what came out. Be honest: if something failed or you couldn't check it, say so. Use Markdown when it helps; no emojis unless asked.\n\n# Your to-do list now\n{{todos}}\n\n# Your next move\nWhat you last said you'd do next (a note to yourself: follow it, or change course if what you've found calls for it):\n{{next}}\n\n# The user's folder (top level)\n{{folder}}\n\n# The user's instructions for this folder (CHUMMY.md)\n{{instructions}}\n\n# Conversation before this request\n{{conversation}}",
             "roles": [
               "user"
             ]
@@ -1849,11 +2183,24 @@
           "comment": "The instructions (filled in fresh at every call), then your message."
         },
         {
+          "id": "next",
+          "type": "function",
+          "label": "Say what's next",
+          "position": {
+            "x": 560,
+            "y": 0
+          },
+          "params": {
+            "function": "next_step"
+          },
+          "comment": "One line on what it will do next: to the pane, and to Work as {{next}}."
+        },
+        {
           "id": "work",
           "type": "llm",
           "label": "Work",
           "position": {
-            "x": 560,
+            "x": 860,
             "y": 0
           },
           "params": {
@@ -1867,7 +2214,7 @@
           "type": "function",
           "label": "Show what it says",
           "position": {
-            "x": 860,
+            "x": 1160,
             "y": 250
           },
           "params": {
@@ -1879,11 +2226,11 @@
           "type": "run_tool",
           "label": "Run tool",
           "position": {
-            "x": 1160,
+            "x": 1460,
             "y": 250
           },
           "params": {
-            "max_result_chars": 50000
+            "max_result_chars": 12000
           },
           "comment": "Errors and calls you don't allow go back to the model as the result."
         },
@@ -1892,7 +2239,7 @@
           "type": "function",
           "label": "Make room",
           "position": {
-            "x": 1460,
+            "x": 1760,
             "y": 250
           },
           "params": {
@@ -1905,7 +2252,7 @@
           "type": "function",
           "label": "Done?",
           "position": {
-            "x": 860,
+            "x": 1160,
             "y": -200
           },
           "params": {
@@ -1917,11 +2264,11 @@
           "type": "exchange",
           "label": "Carry on",
           "position": {
-            "x": 1160,
+            "x": 1460,
             "y": -350
           },
           "params": {
-            "system": "You are Chummy, a helpful assistant. You work in the user's folder using the tools you have, and you keep going until the user's request is done.\n\n# How you work\n- Text you write is shown to the user. Before you call tools, say in one short sentence what you're about to do.\n- Use tools to look things up and to make changes. Read a file before you change it. Don't guess what you can check.\n- When tool calls don't depend on each other, make them together.\n- If a tool fails or the user doesn't allow a call, read why. Don't repeat the same call: try another way, or explain what's in the way.\n- Do what was asked, no more. Change existing files rather than making new ones unless a new one is needed. To change part of a file, edit just that part (with edit_file, if you have it) instead of writing the whole file again.\n- Long files and results come in parts. If a result says there's more, read on from where it says.\n- Before anything hard to undo, like deleting or overwriting the user's work, ask the user first.\n- If the request is unclear, ask one short question and stop there.\n\n# Planning\nFor work with 3 or more steps, keep a to-do list. Write it as a checklist, one step per line:\n- [ ] a step to do\n- [x] a step that's done\nWrite the whole list again whenever it changes: when you make it, and each time you finish a step. Work on the first unchecked step. Make each step specific. For simple requests, skip the list and just do it.\n\n# Finishing\nWhen everything is done, check your work if you can (for example, read back a file you wrote). Then give your final answer, with no tool calls: short and direct, what you did and what came out. Be honest: if something failed or you couldn't check it, say so. Use Markdown when it helps; no emojis unless asked.\n\n# Your to-do list now\n{{todos}}\n\n# The user's folder (top level)\n{{folder}}\n\n# The user's instructions for this folder (CHUMMY.md)\n{{instructions}}\n\n# Conversation before this request\n{{conversation}}",
+            "system": "You are Chummy, a helpful assistant. You work in the user's folder using the tools you have, and you keep going until the user's request is done.\n\n# How you work\n- Text you write is shown to the user. Before you call tools, say in one short sentence what you're about to do.\n- Use tools to look things up and to make changes. Read a file before you change it. Don't guess what you can check.\n- When tool calls don't depend on each other, make them together.\n- If a tool fails or the user doesn't allow a call, read why. Don't repeat the same call: try another way, or explain what's in the way.\n- Do what was asked, no more. Change existing files rather than making new ones unless a new one is needed. To change part of a file, edit just that part (with edit_file, if you have it) instead of writing the whole file again.\n- Long files and results come in parts. If a result says there's more, read on from where it says.\n- Before anything hard to undo, like deleting or overwriting the user's work, ask the user first.\n- If the request is unclear, ask one short question and stop there.\n\n# Planning\nFor work with 3 or more steps, keep a to-do list. Write it as a checklist, one step per line:\n- [ ] a step to do\n- [x] a step that's done\nWrite the whole list again whenever it changes: when you make it, and each time you finish a step. Work on the first unchecked step. Make each step specific. For simple requests, skip the list and just do it.\n\n# Finishing\nWhen everything is done, check your work if you can (for example, read back a file you wrote). Then give your final answer, with no tool calls: short and direct, what you did and what came out. Be honest: if something failed or you couldn't check it, say so. Use Markdown when it helps; no emojis unless asked.\n\n# Your to-do list now\n{{todos}}\n\n# Your next move\nWhat you last said you'd do next (a note to yourself: follow it, or change course if what you've found calls for it):\n{{next}}\n\n# The user's folder (top level)\n{{folder}}\n\n# The user's instructions for this folder (CHUMMY.md)\n{{instructions}}\n\n# Conversation before this request\n{{conversation}}",
             "roles": [
               "user"
             ]
@@ -1932,7 +2279,7 @@
           "type": "forward",
           "label": "Final answer",
           "position": {
-            "x": 1160,
+            "x": 1460,
             "y": -150
           },
           "params": {}
@@ -1942,7 +2289,7 @@
           "type": "forward",
           "label": "Failed",
           "position": {
-            "x": 860,
+            "x": 1160,
             "y": 500
           },
           "params": {}
@@ -1963,6 +2310,16 @@
           "from": {
             "block": "start",
             "port": "out"
+          },
+          "to": {
+            "block": "next",
+            "port": "exchange"
+          }
+        },
+        {
+          "from": {
+            "block": "next",
+            "port": "exchange"
           },
           "to": {
             "block": "work",
@@ -2007,8 +2364,8 @@
             "port": "exchange"
           },
           "to": {
-            "block": "work",
-            "port": "in"
+            "block": "next",
+            "port": "exchange"
           },
           "label": "next turn"
         },
@@ -2050,8 +2407,8 @@
             "port": "out"
           },
           "to": {
-            "block": "work",
-            "port": "in"
+            "block": "next",
+            "port": "exchange"
           }
         },
         {
@@ -2069,7 +2426,7 @@
       "notes": [
         {
           "id": "n1",
-          "text": "The core cycle: Work ⇄ Show what it says ⇄ Run tool ⇄ Make room, until the model answers without tool calls. The loop's limits (model calls, tool calls) stop a model that never finishes.",
+          "text": "The core cycle: Say what's next ⇄ Work ⇄ Show what it says ⇄ Run tool ⇄ Make room, until the model answers without tool calls. The loop's limits (model calls, tool calls) stop a model that never finishes.",
           "position": {
             "x": 0,
             "y": -500
@@ -2083,7 +2440,7 @@
   "notes": [
     {
       "id": "n1",
-      "text": "Chummy assistant\n\n1. Get ready: your request, the conversation, CHUMMY.md (your instructions for this folder) and the folder's top level.\n2. Agent loop: one model does the work. Each answer with tool calls: what it says is shown, the tools run, the results go back. Long conversations are summarised.\n3. Planning: the model keeps its own checklist (- [ ] / - [x]) as {{todos}}.\n4. Done? An answer without tool calls is the final answer, unless it's empty or steps are unchecked (then it's sent back, twice at most). A question for you ends the turn.\n\nDouble-click a function block to see inside.",
+      "text": "Chummy assistant\n\n1. Get ready: your request, the conversation, CHUMMY.md (your instructions for this folder) and the folder's top level.\n2. Agent loop: one model does the work. Before each call it says in one line what it'll do next (shown in the run's pane, and kept as {{next}} for itself). Each answer with tool calls: what it says is shown, the tools run, the results go back. Long conversations are summarised.\n3. Planning: the model keeps its own checklist (- [ ] / - [x]) as {{todos}}.\n4. Done? An answer without tool calls is the final answer, unless it's empty or steps are unchecked (then it's sent back, twice at most). A question for you ends the turn.\n\nDouble-click a function block to see inside.",
       "position": {
         "x": 0,
         "y": 450

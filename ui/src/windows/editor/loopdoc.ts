@@ -381,6 +381,8 @@ export function summary(b: Block): string {
       return "Answers each call: not run";
     case "stop":
       return "Ends the run as failed";
+    case "pane":
+      return "One line in the run's pane";
     default:
       return "";
   }

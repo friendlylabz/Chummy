@@ -43,6 +43,8 @@ const RETIRED: &[&str] = &[
     "07af41a040cee6b6ea09a42a4d95effebf6dae06834b53bfd92b519b00e1295d",
     // With token-based compaction (pass 13), before the tooling upgrade.
     "d6415d0b4df576cd1c6fa6b6aa4640a59cffc3a6f58c31b1809c6b253be1463b",
+    // As shipped up to v0.1.2, before "Say what's next" and the pane.
+    "5a3062baee43b61d9de9b533087ae49300f6d3797b898d86fa4b1d74c3b6d2be",
 ];
 
 /// A loop's content as a SHA-256 hex string.

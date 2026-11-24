@@ -592,6 +592,9 @@ pub enum BlockKind {
     History(HistoryParams),
     Fixed(FixedParams),
     Output(Empty),
+    /// Shows its input in the run's pane (Sessions → the run's text
+    /// button): a running log, one line per input, newest first.
+    Pane(Empty),
     /// Ends the run as failed, with its input as the reason.
     Stop(Empty),
     Llm(LlmParams),
@@ -645,7 +648,7 @@ impl BlockKind {
         use ValueKind::*;
         match self {
             Input(_) | History(_) | Fixed(_) | Function(_) => vec![],
-            Output(_) | Split(_) | Regex(_) | Capture(_) => vec![port("in", "In", Text)],
+            Output(_) | Pane(_) | Split(_) | Regex(_) | Capture(_) => vec![port("in", "In", Text)],
             Stop(_) => vec![port("in", "Reason", Text)],
             Llm(_) | AskUser(_) => vec![port("in", "In", Any)],
             DeclineCalls(_) => vec![
@@ -687,7 +690,7 @@ impl BlockKind {
         use BlockKind::*;
         use ValueKind::*;
         match self {
-            Output(_) | Stop(_) | Function(_) => vec![],
+            Output(_) | Pane(_) | Stop(_) | Function(_) => vec![],
             Llm(p) => {
                 let mut v = vec![port("out", "Answer", Text)];
                 if p.tools.any() && p.tool_mode != ToolMode::Off {
@@ -755,6 +758,7 @@ impl BlockKind {
             History(_) => "history",
             Fixed(_) => "fixed",
             Output(_) => "output",
+            Pane(_) => "pane",
             Stop(_) => "stop",
             Llm(_) => "llm",
             Combine(_) => "combine",
@@ -1477,6 +1481,14 @@ pub fn catalog() -> Vec<BlockInfo> {
             "Reply",
             Finish,
             "Sends its input to the chat as the agent's reply. If it runs more than once, each part is added to the reply.",
+            vec![],
+            json!({}),
+        ),
+        info(
+            "pane",
+            "Pane output",
+            Finish,
+            "Adds its input as a line to the run's pane, a live log beside the chat (Sessions → the run's text button), newest first. Use it to say what the loop is doing. It never goes into the reply or the conversation.",
             vec![],
             json!({}),
         ),

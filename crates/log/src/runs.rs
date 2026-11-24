@@ -251,7 +251,11 @@ impl Entry {
                 block: block.clone(),
                 text: text.clone(),
             },
-            Event::BlockState { .. } | Event::BlockOutput { .. } | Event::LlmText { .. } => {
+            // A Pane output's input is in its block step already.
+            Event::BlockState { .. }
+            | Event::BlockOutput { .. }
+            | Event::LlmText { .. }
+            | Event::Pane { .. } => {
                 return None;
             }
         })

@@ -410,6 +410,23 @@ Fixed:
   without them v0.1.0 crashed when setting up tools. The release workflow
   now runs the signed app's `--self-test` before publishing.
 
+## The run pane (after v0.1.2)
+
+- **Pane output** is display only: it can't reach files, tools, the
+  network or the reply. Its lines are model or loop text, so the pane
+  shows them as plain text (Svelte escapes them; no Markdown or links),
+  folded to one line and cut at 1,000 characters, and a run keeps at most
+  500 lines in memory (never on disk, apart from the block's input in the
+  run log like any other step).
+- `run_pane` returns only those lines for a run id and is allowed in the
+  main window only.
+- The Chummy assistant's *Say what's next* call is an ordinary model call
+  inside the loop (no tools, counted in the daily budget and the loop's
+  limits), so the "your model, your call" rule holds. Its sentence goes
+  back into the Work prompt as `{{next}}`, which a prompt injection in
+  tool results could steer; that's no more than the model reading those
+  results directly, and tool permissions and approvals still apply.
+
 ## Known risks and what to do next
 
 In rough order of importance:

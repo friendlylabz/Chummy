@@ -429,6 +429,8 @@ pub enum Event {
     Notice { block: String, text: String },
     /// A Reply block produced part of the answer.
     Reply { block: String, text: String },
+    /// A Pane output block added a line to the run's pane.
+    Pane { block: String, text: String },
     /// A block is waiting for the user (a question, or a tool to allow).
     Asked { block: String, text: String },
     /// The wait ended (answered, timed out or stopped).
@@ -437,6 +439,23 @@ pub enum Event {
     Step(Box<StepLog>),
     /// A model was called: what was sent and what came back.
     ModelCall(Box<ModelLog>),
+}
+
+/// Longest line a Pane output block shows.
+pub const PANE_LINE_CHARS: usize = 1000;
+
+/// One input of a Pane output block as one line: whitespace (newlines
+/// included) folded to single spaces, trimmed, and cut to
+/// [`PANE_LINE_CHARS`] with an ellipsis.
+pub fn pane_line(text: &str) -> String {
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.chars().count() > PANE_LINE_CHARS {
+        let mut cut: String = line.chars().take(PANE_LINE_CHARS - 1).collect();
+        cut.push('…');
+        cut
+    } else {
+        line
+    }
 }
 
 /// Longest argument value shown in full when asking to run a tool.
@@ -1015,6 +1034,13 @@ impl<'a, H: Host> Runner<'a, H> {
                 let text = arg(0).as_text();
                 self.replies.push(text.clone());
                 on_event(Event::Reply { block: path, text });
+                Ok(vec![])
+            }
+            BlockKind::Pane(_) => {
+                let text = pane_line(&arg(0).as_text());
+                if !text.is_empty() {
+                    on_event(Event::Pane { block: path, text });
+                }
                 Ok(vec![])
             }
             BlockKind::Stop(_) => {
@@ -2287,6 +2313,43 @@ mod tests {
         assert_eq!(host.prompts.lock().unwrap()[0], "Q: hello");
         assert!(ev.iter().any(|e| matches!(e, Event::LlmText { .. })));
         assert_eq!((o.steps, o.llm_calls), (3, 1));
+    }
+
+    #[tokio::test]
+    async fn pane_output_sends_one_line_per_input_and_never_replies() {
+        let l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b("sp", "regex", json!({ "pattern": "[^|]+" })),
+                b("each", "for_each", json!({})),
+                b("pane", "pane", json!({})),
+                b("out", "output", json!({})),
+            ],
+            vec![
+                ln("in", "out", "sp", "in"),
+                ln("sp", "out", "each", "in"),
+                ln("each", "out", "pane", "in"),
+                ln("in", "out", "out", "in"),
+            ],
+        );
+        let (o, ev) = go(&l, &Fake::with(&[]), "Reading\n  notes.txt|  |Done").await;
+        assert_eq!(o.status, RunStatus::Completed);
+        assert_eq!(o.replies.len(), 1, "the pane never adds to the reply");
+        let lines: Vec<&str> = ev
+            .iter()
+            .filter_map(|e| match e {
+                Event::Pane { block, text } => {
+                    assert_eq!(block, "pane");
+                    Some(text.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        // Folded to one line each; a blank input shows nothing.
+        assert_eq!(lines, vec!["Reading notes.txt", "Done"]);
+        let long = pane_line(&"word ".repeat(400));
+        assert_eq!(long.chars().count(), PANE_LINE_CHARS);
+        assert!(long.ends_with('…'));
     }
 
     #[tokio::test]

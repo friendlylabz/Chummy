@@ -25,7 +25,14 @@ export interface RunView {
   waitingForYou: boolean;
   /** What the run's log has recorded so far (steps, model calls, tools…). */
   entries: LogEntry[];
+  /** When the run started, in Unix ms (for the live timer). */
+  startedMs: number;
+  /** What its Pane output blocks have shown, newest first (at most PANE_LINES). */
+  pane: string[];
 }
+
+/** Lines a run's pane keeps (as in Rust). */
+export const PANE_LINES = 500;
 
 /** A block that started (and maybe finished), queued for the Sessions panel. */
 interface StatusUpdate {
@@ -48,8 +55,10 @@ class RunsStore {
   async init() {
     if (this.started) return;
     this.started = true;
-    for (const info of await commands.listRuns()) this.add(info);
-    await events.onRunStarted((info) => this.add(info));
+    // Runs already going when this window opened: their start is known to
+    // the second; new ones are timed from the moment they're announced.
+    for (const info of await commands.listRuns()) this.add(info, info.started_at * 1000);
+    await events.onRunStarted((info) => this.add(info, Date.now()));
     await events.onRunEvent(({ run_id, event }) => {
       const r = this.runs[run_id];
       if (!r) return;
@@ -75,6 +84,10 @@ class RunsStore {
           break;
         case "reply":
           r.replies.push(event.text);
+          break;
+        case "pane":
+          r.pane.unshift(event.text);
+          if (r.pane.length > PANE_LINES) r.pane.length = PANE_LINES;
           break;
         case "tool_call":
           r.activity.push({ kind: "call", block: event.block, text: `${event.tool} ${event.arguments}` });
@@ -104,7 +117,7 @@ class RunsStore {
     });
   }
 
-  private add(info: RunInfo) {
+  private add(info: RunInfo, startedMs: number) {
     this.runs[info.run_id] = {
       info,
       blocks: {},
@@ -117,6 +130,8 @@ class RunsStore {
       outcome: null,
       waitingForYou: false,
       entries: [],
+      startedMs,
+      pane: [],
     };
   }
 
@@ -161,6 +176,16 @@ class RunsStore {
     }
     this.shown = new Map([...out].filter(([, l]) => l !== "Waiting for you"));
     return out;
+  }
+
+  /**
+   * Fills in a run's pane from Rust's copy (`run_pane`), for a window that
+   * opened after the run had already shown lines. Rust's copy always has
+   * at least what this window got from events.
+   */
+  seedPane(runId: string, lines: string[]) {
+    const r = this.runs[runId];
+    if (r && lines.length > r.pane.length) r.pane = lines;
   }
 
   get active(): RunView[] {

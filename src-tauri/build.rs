@@ -85,6 +85,7 @@ fn main() {
             "test_run",
             "stop_run",
             "list_runs",
+            "run_pane",
             "list_presets",
             "save_provider",
             "delete_provider",

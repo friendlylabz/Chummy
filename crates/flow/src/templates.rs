@@ -189,6 +189,10 @@ mod tests {
         fail_on: Option<&'static str>,
         /// The model's context (default: 8,192 tokens, room made at 80%).
         limits: Option<crate::engine::ContextLimits>,
+        /// "Say what's next" calls so far.
+        nexts: Mutex<u32>,
+        /// What Pane output blocks showed, in order.
+        pane: Mutex<Vec<String>>,
     }
 
     fn says(t: &str) -> LlmAnswer {
@@ -247,6 +251,15 @@ mod tests {
                 assert!(call.tools.is_empty(), "summaries get no tools");
                 *self.summaries.lock().unwrap() += 1;
                 return Ok(says("SUMMARY of the work"));
+            }
+            if last.contains("say what you will do next") {
+                assert!(call.tools.is_empty(), "saying what's next gets no tools");
+                let mut n = self.nexts.lock().unwrap();
+                *n += 1;
+                // A second line, which only the first line of is kept.
+                return Ok(says(&format!(
+                    "\n  Next move {n}.\nAnd some rambling after it."
+                )));
             }
             assert!(
                 call.messages[0].role == Role::System
@@ -324,7 +337,48 @@ mod tests {
             ],
             ..Default::default()
         };
-        run(&t.file, host, &inputs, &AtomicBool::new(false), |_| {}).await
+        run(&t.file, host, &inputs, &AtomicBool::new(false), |e| {
+            if let crate::engine::Event::Pane { text, .. } = e {
+                host.pane.lock().unwrap().push(text);
+            }
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn assistant_says_whats_next_before_every_work_call() {
+        let host = Agentic::with(vec![echo("I'll look it up.", 1), says("It says hi.")]);
+        let out = assist(&host, "What does echo say?").await;
+        assert_eq!(out.status, RunStatus::Completed, "{out:?}");
+        assert_eq!(host.calls(), 2);
+        assert_eq!(*host.nexts.lock().unwrap(), 2, "one before each Work call");
+        // One line each in the pane; never in the reply.
+        assert_eq!(*host.pane.lock().unwrap(), ["Next move 1.", "Next move 2."]);
+        assert_eq!(out.replies, ["I'll look it up.", "It says hi."]);
+        // Work sees its latest one in the system message.
+        assert!(
+            host.system(0).contains("calls for it):\nNext move 1.\n"),
+            "{}",
+            host.system(0)
+        );
+        assert!(host.system(1).contains("calls for it):\nNext move 2.\n"));
+        assert!(!host.system(1).contains("rambling"));
+    }
+
+    #[tokio::test]
+    async fn assistant_carries_on_if_saying_whats_next_fails() {
+        let host = Agentic {
+            fail_on: Some("say what you will do next"),
+            ..Agentic::with(vec![echo("Looking.", 1), says("Done.")])
+        };
+        let out = assist(&host, "Do it").await;
+        assert_eq!(out.status, RunStatus::Completed, "{out:?}");
+        assert_eq!(host.calls(), 2);
+        assert!(host.pane.lock().unwrap().is_empty());
+        assert!(
+            host.system(1)
+                .contains("calls for it):\n(not decided yet)\n")
+        );
     }
 
     #[tokio::test]
@@ -333,7 +387,8 @@ mod tests {
         let out = assist(&host, "What's the capital of France?").await;
         assert_eq!(out.status, RunStatus::Completed, "{out:?}");
         assert_eq!(out.replies, ["Paris."]);
-        assert_eq!(out.llm_calls, 1);
+        // Say what's next, then Work.
+        assert_eq!(out.llm_calls, 2);
         let sys = host.system(0);
         assert!(sys.contains("# Your to-do list now\n(none yet)"), "{sys}");
         assert!(sys.contains("docs/\nnotes.txt"), "{sys}");
