@@ -53,8 +53,8 @@ an agent's loop.
 - **Comments** on blocks, **labels** on links and **notes** on the canvas
   are saved with the loop, so it explains itself.
 - Loops are saved in the library and can be exported and imported as JSON
-  files. Start from a template: *Chummy assistant*, *Blank* or *Simple
-  chat*.
+  files. Start from a template: *Chummy assistant*, *Terminal assistant*,
+  *Blank* or *Simple chat*.
 
 To change a block's settings for **one agent** without touching the loop,
 use Settings → Agents → your agent → **Agent Loop Configuration**.
@@ -74,6 +74,21 @@ wrong and tries again (3 times at most). (That's one small extra model call
 per step; delete the *Decide what's next* block in the Agent loop, and
 clear Work's Reminder, if you'd rather not.) Open it in the editor to
 see how it's built; every part has comments.
+
+## The Terminal assistant
+
+The same loop, working only through the terminal, for models that are at
+home in a shell. Its Work block has every tool switched off except **Run
+command** (Chummy's own small shell, inside the sandbox), **Run shell**
+(a real `sh`, only with the Container or OpenShell sandbox) and **Fetch
+page**; your agent's own tool and internet switches still apply, so turn
+on Run command for the agent. Its prompts list the shell's commands and
+show how to do everyday jobs with them: read part of a file with
+`sed -n`, search with `grep -rn`, write a file with a heredoc, edit with
+`sed -i`, add things up with `awk`, run `python`. Each command it runs is
+shown in the run's pane under the step it decided on. Run command has no
+variables, loops or `$(…)`; the model is told to use pipes, `xargs`, `awk`
+or a short Python script instead (`help` in the shell lists everything).
 
 ## Building loops that work
 

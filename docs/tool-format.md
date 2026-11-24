@@ -185,15 +185,34 @@ there's no shell inside it. Instead `run_command` is a small shell written in
 Python that runs in the same sandbox as every other tool, in the agent's
 workspace, with no network:
 
-- **Syntax:** quotes, globs (`*.py`, `**/*.md`), pipes `|`, `&&`, `||`, `;`,
-  redirects `<`, `>`, `>>`, `2>&1`, `2>/dev/null`, `cd`. Background jobs (`&`),
-  subshells and variables aren't supported.
-- **Commands:** `echo`, `cat`, `head`, `tail`, `wc`, `grep`, `ls`, `find`,
-  `mkdir`, `rm`, `cp`, `mv`, `touch`, `sort`, `uniq`, `cut`, `tr`, `diff`,
-  `pwd`, `date`, `sleep`, `true`, `false`, `bash -c`/`sh -c`, and
-  `python`/`python3` (a script, `-c`, `-m` or stdin), which runs in the
-  sandbox's own Python. Common flags work; anything else gets exit code 127
-  and the list of commands. `pip` can't install anything.
+- **Syntax:** quotes (with `\` escapes), globs (`*.py`, `**/*.md`), braces
+  (`{a,b}`, `{1..5}`), pipes `|`, `&&`, `||`, `;` or new lines between
+  commands, `\` at the end of a line, `#` comments, redirects `<`, `>`, `>>`,
+  `2>`, `2>>`, `2>&1`, `2>/dev/null`, `&>`, `>&2`, heredocs (`<<EOF`,
+  `<<'EOF'`, `<<-EOF`), here-strings (`<<<`), `$?`, `set -e`,
+  `set -o pipefail`, `exit N`. Not supported, with an error that says what to
+  use instead: variables, `$(…)`, backticks, `for`/`while`/`if`, functions,
+  `( )` subshells, `<(…)` and background jobs (`&`).
+- **Commands:** `ls`, `cat`, `head`, `tail`, `wc`, `grep`/`egrep`/`fgrep`
+  (with `-A/-B/-C`, `-o`, `-q`, `-m`, `-r --include`…), `find` (tests, `!`,
+  `-o`, `-exec … {} \;` / `{} +`, `-delete`), `sed` (s with flags and
+  `\1`/`&`/`\U`, d, p, q, a/i/c, y, =, n/N/D/P, hold space, labels and
+  branches, `{ }`, ranges, `-n`, `-E`, `-i`), `awk` (a POSIX awk interpreter:
+  fields, patterns and ranges, BEGIN/END, arrays, control flow, user
+  functions, printf, the string and math functions; no `getline`,
+  `system()` or pipes), `sort` (`-k`, `-t`, `-n`, `-h`, `-V`…), `uniq`,
+  `cut`, `tr` (classes like `[:upper:]`), `paste`, `column`, `nl`, `tac`,
+  `rev`, `diff`, `echo`, `printf`, `xargs` (runs this shell's commands),
+  `tee`, `seq`, `tree`, `du`, `mkdir`, `rmdir`, `rm`, `cp`, `mv`, `touch`,
+  `cd`, `pwd`, `basename`, `dirname`, `realpath`, `test`/`[`, `which`,
+  `type`, `command -v`, `md5sum`/`sha1sum`/`sha256sum`/`sha512sum`,
+  `base64`, `date`, `sleep`, `true`, `false`, `chmod` (does nothing),
+  `bash -c`/`sh -c`/`bash script.sh`/`./script.sh`, and `python`/`python3`
+  (a script, `-c`, `-m` or stdin), which runs in the sandbox's own Python.
+  `help` lists them and `help NAME` (or `NAME --help`) shows one's options.
+  An unknown command gets exit code 127 and a pointer to `help`; `curl`,
+  `wget`, `npm`, `jq`, `vim` and the like say what to use instead. `pip`
+  can't install anything, and `ln` is refused (a link could point outside).
 - **Paths** stay inside the workspace; anything else is refused. `rm -r` on
   the workspace itself is refused.
 - **Result:** the output (stdout and stderr), cut to 30,000 characters

@@ -187,7 +187,8 @@ class RunCommand(Workspace):
         self.assertIn("refusing", self.run("rm -rf ."))
         self.assertIn("outside the workspace", self.run("cat ../x"))
         self.assertIn("outside the workspace", self.run("ls /etc"))
-        self.assertIn("isn't supported", self.run("find . -exec rm"))
+        self.assertIn("needs a command and", self.run("find . -exec rm"))
+        self.assertIn("isn't supported", self.run("find . -prune"))
         self.assertEqual(self.run("find . -name '*.py' -type f"), "./c.py\n./d.py\n[exit code 0]")
         self.assertEqual(self.run("cd sub 2>&1"), "cd: sub: no such folder\n[exit code 1]")
 
@@ -206,9 +207,12 @@ class RunCommand(Workspace):
 
     def test_unknown_commands_explain_themselves(self):
         r = self.run("npm install")
-        self.assertIn("npm: command not found", r)
-        self.assertIn("python", r)
+        self.assertIn("no Node.js", r)
         self.assertTrue(r.endswith("[exit code 127]"))
+        r = self.run("frobnicate x")
+        self.assertIn("frobnicate: command not found", r)
+        self.assertIn("help", r)
+        self.assertIn("fetch_page", self.run("curl https://example.com"))
         self.assertIn("can't be installed", self.run("pip install requests"))
         self.assertEqual(self.run('bash -c "echo inner"'), "inner\n[exit code 0]")
 
@@ -242,3 +246,316 @@ class RunShell(Workspace):
         self.assertTrue(out.endswith("[exit code 0]"))
         with self.assertRaises(chummy.ToolError):
             self.run("  ")
+
+
+class ShellSyntax(Workspace):
+    def setUp(self):
+        super().setUp()
+        self.run = load("run_command")
+
+    def out(self, cmd):
+        r = self.run(cmd)
+        text, _, code = r.rpartition("\n")
+        return text, code
+
+    def test_several_lines_heredocs_and_continuations(self):
+        r = self.run("mkdir -p src\ncat > src/a.txt <<'EOF'\nline $one\n  two\nEOF\ncat src/a.txt | wc -l")
+        self.assertEqual(r, "2\n[exit code 0]")
+        self.assertEqual(self.get("src/a.txt"), "line $one\n  two\n")
+        self.assertEqual(self.run("cat <<-END\n\tindented\n\tEND"), "indented\n[exit code 0]")
+        self.assertEqual(self.run("echo one \\\n  two"), "one two\n[exit code 0]")
+        self.assertEqual(self.run("echo a |\n  tr a b"), "b\n[exit code 0]")
+        self.assertEqual(self.run("# a comment\necho hi # another\n"), "hi\n[exit code 0]")
+        self.assertEqual(self.run("tr a-z A-Z <<< hello"), "HELLO\n[exit code 0]")
+        self.assertEqual(self.run("python <<'EOF'\nprint(sum(range(5)))\nEOF"), "10\n[exit code 0]")
+        self.assertEqual(self.run("cat <<EOF\nno end"), "no end\n[exit code 0]")
+        self.assertIn("has no end", self.run("cat <<EOF"))
+
+    def test_quotes_braces_and_redirects(self):
+        self.assertEqual(self.run("echo \"a \\\"b\\\" c\" 'd $x'"), 'a "b" c d $x\n[exit code 0]')
+        self.run("mkdir -p p/{a,b,c} && touch p/a/f{1..3}.txt")
+        self.assertEqual(self.run("ls p p/a"), "p:\na/\nb/\nc/\np/a:\nf1.txt\nf2.txt\nf3.txt\n[exit code 0]")
+        self.assertEqual(self.run("echo {x}"), "{x}\n[exit code 0]")
+        self.run("cat missing.txt 2> err.txt; echo out > o.txt")
+        self.assertIn("no such file", self.get("err.txt"))
+        self.assertEqual(self.run("cat missing.txt &> both.txt; cat both.txt"),
+                         "cat: missing.txt: no such file\n[exit code 0]")
+        self.assertEqual(self.run("echo warn >&2 | wc -c"), "0\nwarn\n[exit code 0]")
+        self.assertEqual(self.run("awk '$2>5 {print $1}' <<< 'a 9'"), "a\n[exit code 0]")
+
+    def test_no_variables_or_loops(self):
+        for cmd in ("echo $HOME", "echo \"$(ls)\"", "echo `ls`", "for f in *; do echo $f; done",
+                    "X=1 echo hi", "export A=b"):
+            r = self.run(cmd)
+            self.assertIn("no variables", r, cmd)
+            self.assertNotIn("exit code 0", r, cmd)
+        self.assertIn("subshells", self.run("(cd x && ls)"))
+        self.assertIn("<(…)", self.run("diff <(ls) a"))
+        self.assertEqual(self.run("echo cost: \\$5"), "cost: $5\n[exit code 0]")
+
+    def test_set_e_exit_and_scripts(self):
+        self.assertEqual(self.run("set -e\nfalse\necho never"), "(no output)\n[exit code 1]")
+        self.assertEqual(self.run("false || echo ok; echo next"), "ok\nnext\n[exit code 0]")
+        self.assertEqual(self.run("echo a; exit 3; echo b"), "a\n[exit code 3]")
+        self.assertEqual(self.run("set -o pipefail; false | echo x"), "x\n[exit code 1]")
+        self.put("job.sh", "#!/bin/sh\necho from script\nls *.sh\n")
+        self.assertEqual(self.run("bash job.sh"), "from script\njob.sh\n[exit code 0]")
+        self.assertEqual(self.run("chmod +x job.sh && ./job.sh"), "from script\njob.sh\n[exit code 0]")
+        self.put("t.py", "print('py')\n")
+        self.assertEqual(self.run("./t.py"), "py\n[exit code 0]")
+
+    def test_help(self):
+        r = self.run("help")
+        for name in ("sed", "awk", "xargs", "python", "printf"):
+            self.assertIn(name, r)
+        self.assertIn("s/re/new/", self.run("help sed"))
+        self.assertIn("-F sep", self.run("awk --help"))
+
+
+class Sed(Workspace):
+    def setUp(self):
+        super().setUp()
+        self.run = load("run_command")
+        self.put("f.txt", "alpha 1\nbeta 2\n# note\ngamma 3\n\ndelta 4\n")
+
+    def sed(self, args, data=None):
+        if data is not None:
+            self.put("in.txt", data)
+            args += " in.txt"
+        return self.run("sed " + args)
+
+    def test_substitute(self):
+        self.assertEqual(self.sed("'s/a/A/' f.txt").split("\n")[0], "Alpha 1")
+        self.assertEqual(self.sed("'s/a/A/g' f.txt").split("\n")[0], "AlphA 1")
+        self.assertEqual(self.sed("'s/a/A/2'", "banana\n"), "banAna\n[exit code 0]")
+        self.assertEqual(self.sed("'s/\\(an\\)\\{2\\}/[\\1]/'", "banana\n"), "b[an]a\n[exit code 0]")
+        self.assertEqual(self.sed("-E 's/(an)+/<&>/'", "banana\n"), "b<anan>a\n[exit code 0]")
+        self.assertEqual(self.sed("'s|/usr|/opt|'", "/usr/bin\n"), "/opt/bin\n[exit code 0]")
+        self.assertEqual(self.sed("'s/[[:digit:]]\\+/N/g'", "a1 b22\n"), "aN bN\n[exit code 0]")
+        self.assertEqual(self.sed("'s/\\w\\+/\\u&/g'", "hi there\n"), "Hi There\n[exit code 0]")
+        self.assertEqual(self.sed("-E 's/(.*)=(.*)/\\U\\2\\E=\\1/'", "k=v\n"), "V=k\n[exit code 0]")
+        self.assertEqual(self.sed("'s/x/y/I'", "X\n"), "y\n[exit code 0]")
+        self.assertEqual(self.sed("'s/ /\\n/'", "a b\n"), "a\nb\n[exit code 0]")
+
+    def test_addresses_and_commands(self):
+        self.assertEqual(self.run("sed -n '2,3p' f.txt"), "beta 2\n# note\n[exit code 0]")
+        self.assertEqual(self.run("sed '/^#/d;/^$/d' f.txt | wc -l"), "4\n[exit code 0]")
+        self.assertEqual(self.run("sed -n '/beta/,/gamma/p' f.txt"), "beta 2\n# note\ngamma 3\n[exit code 0]")
+        self.assertEqual(self.run("sed -n '$p' f.txt"), "delta 4\n[exit code 0]")
+        self.assertEqual(self.run("sed '2q' f.txt"), "alpha 1\nbeta 2\n[exit code 0]")
+        self.assertEqual(self.run("sed -n '/gamma/=' f.txt"), "4\n[exit code 0]")
+        self.assertEqual(self.run("sed '1!d' f.txt"), "alpha 1\n[exit code 0]")
+        self.assertEqual(self.run("sed -n '1~2p' f.txt"), "alpha 1\n# note\n[exit code 0]")
+        self.assertEqual(self.run("sed -n '2,+1p' f.txt"), "beta 2\n# note\n[exit code 0]")
+        self.assertEqual(self.run("sed '1a after\n1i before' f.txt | head -3"),
+                         "before\nalpha 1\nafter\n[exit code 0]")
+        self.assertEqual(self.run("sed '/beta/c\\\nreplaced' f.txt | head -2"), "alpha 1\nreplaced\n[exit code 0]")
+        self.assertEqual(self.run("sed -n '/alpha/{s/1/one/;p}' f.txt"), "alpha one\n[exit code 0]")
+        self.assertEqual(self.sed("'y/abc/xyz/'", "aabbcc\n"), "xxyyzz\n[exit code 0]")
+        self.assertEqual(self.sed("':a;N;$!ba;s/\\n/,/g'", "1\n2\n3\n"), "1,2,3\n[exit code 0]")
+        self.assertEqual(self.sed("'$!N;P;D'", "a\nb\nc\n"), "a\nb\nc\n[exit code 0]")
+        self.assertEqual(self.sed("-n 'h;n;G;p'", "1\n2\n3\n4\n"), "2\n1\n4\n3\n[exit code 0]")
+        self.assertEqual(self.run("printf 'no newline' | sed 's/no/a/'"), "a newline\n[exit code 0]")
+
+    def test_in_place(self):
+        self.run("sed -i 's/beta/BETA/' f.txt")
+        self.assertIn("BETA 2", self.get("f.txt"))
+        self.run("sed -i.bak '1d' f.txt")
+        self.assertTrue(self.get("f.txt").startswith("BETA"))
+        self.assertTrue(self.get("f.txt.bak").startswith("alpha"))
+        self.run("sed -i '' 's/BETA/beta/' f.txt")
+        self.assertTrue(self.get("f.txt").startswith("beta"))
+        self.put("x.txt", "a\nb")
+        self.run("sed -i 's/b/c/' x.txt")
+        self.assertEqual(self.get("x.txt"), "a\nc")
+
+    def test_errors(self):
+        self.assertIn("unterminated", self.run("sed 's/a/b' f.txt"))
+        self.assertIn("unknown command", self.run("sed 'k' f.txt"))
+        self.assertIn("outside the workspace", self.run("sed -i s/a/b/ /etc/passwd"))
+
+
+class Awk(Workspace):
+    def setUp(self):
+        super().setUp()
+        self.run = load("run_command")
+        self.put("d.csv", "name,dept,pay\nann,eng,100\nbob,ops,80\ncat,eng,120\n")
+
+    def awk(self, prog, data=None, opts=""):
+        if data is not None:
+            self.put("in.txt", data)
+        return self.run(f"awk {opts} '{prog}' " + ("in.txt" if data is not None else "d.csv"))
+
+    def test_fields_patterns_and_end(self):
+        self.assertEqual(self.awk("{print $1}", opts="-F,"), "name\nann\nbob\ncat\n[exit code 0]")
+        self.assertEqual(self.awk("NR > 1 && $3 >= 100 {print $1}", opts="-F,"), "ann\ncat\n[exit code 0]")
+        self.assertEqual(self.awk("NR>1 {s += $3} END {print s, s/(NR-1)}", opts="-F,"), "300 100\n[exit code 0]")
+        self.assertEqual(self.awk("/eng/", opts="-F,"), "ann,eng,100\ncat,eng,120\n[exit code 0]")
+        self.assertEqual(self.awk("$2 ~ /^o/ {print NR\": \"$0}", opts="-F,"), "3: bob,ops,80\n[exit code 0]")
+        self.assertEqual(self.awk("{print NF, $NF}", "a b c\n  d  \n"), "3 c\n1 d\n[exit code 0]")
+        self.assertEqual(self.awk("{$2 = \"X\"; print}", "a b c\n"), "a X c\n[exit code 0]")
+        self.assertEqual(self.awk("BEGIN {OFS=\"-\"} {$1=$1; print}", "a b c\n"), "a-b-c\n[exit code 0]")
+        self.assertEqual(self.awk("{print $(NF-1)}", "a b c\n"), "b\n[exit code 0]")
+        self.assertEqual(self.awk("NR==2, NR==3 {print $1}", opts="-F,"), "ann\nbob\n[exit code 0]")
+        self.assertEqual(self.awk("{print $2}", "a\tb c\n", opts="-F'\\t'"), "b c\n[exit code 0]")
+
+    def test_arrays_loops_and_functions(self):
+        r = self.awk("NR>1 {n[$2]++; t[$2]+=$3} END {for (d in n) printf \"%s %d %.1f\\n\", d, n[d], t[d]/n[d]}",
+                     opts="-F,")
+        self.assertEqual(r, "eng 2 110.0\nops 1 80.0\n[exit code 0]")
+        self.assertEqual(self.awk("BEGIN {for (i = 1; i <= 3; i++) s = s i; print s}"), "123\n[exit code 0]")
+        self.assertEqual(self.awk("BEGIN {n = split(\"a:b:c\", p, \":\"); print n, p[3]; delete p[3]; print length(p)}"),
+                         "3 c\n2\n[exit code 0]")
+        self.assertEqual(self.awk("BEGIN {x = 3; while (x > 0) {printf \"%d \", x--}; print \"\"}"), "3 2 1 \n[exit code 0]")
+        self.assertEqual(self.awk("function sq(v) { return v * v } BEGIN { print sq(7) }"), "49\n[exit code 0]")
+        self.assertEqual(self.awk("function fill(a) { a[\"k\"] = 1 } BEGIN { fill(m); print (\"k\" in m) }"),
+                         "1\n[exit code 0]")
+        self.assertEqual(self.awk("{ if ($1 > 5) print \"big\"; else print \"small\" }", "3\n9\n"),
+                         "small\nbig\n[exit code 0]")
+        self.assertEqual(self.awk("!seen[$0]++", "a\nb\na\n"), "a\nb\n[exit code 0]")
+        self.assertEqual(self.awk("{ a[NR] = $0 } END { for (i = NR; i > 0; i--) print a[i] }", "1\n2\n"),
+                         "2\n1\n[exit code 0]")
+        self.assertEqual(self.awk("NR == 1 { next } { print } NR == 3 { exit }", "a\nb\nc\nd\n"), "b\nc\n[exit code 0]")
+
+    def test_strings_and_numbers(self):
+        self.assertEqual(self.awk("BEGIN {s = \"Hello World\"; print length(s), substr(s, 7), index(s, \"o\"), toupper(s)}"),
+                         "11 World 5 HELLO WORLD\n[exit code 0]")
+        self.assertEqual(self.awk("{gsub(/o/, \"0\"); sub(/l/, \"L\"); print}", "hello world\n"), "heLl0 w0rld\n[exit code 0]")
+        self.assertEqual(self.awk("{n = gsub(/[aeiou]/, \"<&>\"); print n, $0}", "tea\n"), "2 t<e><a>\n[exit code 0]")
+        self.assertEqual(self.awk("match($0, /[0-9]+/) {print RSTART, RLENGTH, substr($0, RSTART, RLENGTH)}",
+                                  "abc 123 x\n"), "5 3 123\n[exit code 0]")
+        self.assertEqual(self.awk("BEGIN {printf \"%5.2f|%-4s|%03d|%x|%c|%e\\n\", 3.14159, \"ab\", 7, 255, 65, 1234.5}"),
+                         " 3.14|ab  |007|ff|A|1.234500e+03\n[exit code 0]")
+        self.assertEqual(self.awk("BEGIN {print 1/3, 2^10, 7%3, int(-3.7), 1e3, 0.1+0.2}"),
+                         "0.333333 1024 1 -3 1000 0.3\n[exit code 0]")
+        self.assertEqual(self.awk("{print ($1 < $2)}", "10 9\n"), "0\n[exit code 0]")
+        self.assertEqual(self.awk("BEGIN {print (\"10\" < \"9\"), (x == 0), (x == \"\")}"), "1 1 1\n[exit code 0]")
+        self.assertEqual(self.awk("BEGIN {print sprintf(\"%s-%s\", \"a\", 1) \"!\"}"), "a-1!\n[exit code 0]")
+        self.assertEqual(self.awk("{print $1 > \"out.txt\"}", "x y\n"), "(no output)\n[exit code 0]")
+        self.assertEqual(self.get("out.txt"), "x\n")
+        self.assertEqual(self.run("awk -v n=2 '{print $1 * n}' <<< 21"), "42\n[exit code 0]")
+        self.assertEqual(self.run("echo 'a b' | awk '{print $2}'"), "b\n[exit code 0]")
+
+    def test_errors(self):
+        self.assertEqual(self.awk("{print $1"), "awk: a { isn't closed near the end\n[exit code 2]")
+        self.assertIn("syntax error", self.awk("{print $1 +}"))
+        self.assertIn("getline", self.awk("{getline x}"))
+        self.assertIn("system()", self.awk("BEGIN {system(\"ls\")}"))
+        self.assertIn("division by zero", self.awk("BEGIN {print 1/0}"))
+        self.assertIn("outside the workspace", self.awk("BEGIN {print 1 > \"/etc/x\"}"))
+
+
+class MoreCommands(Workspace):
+    def setUp(self):
+        super().setUp()
+        self.run = load("run_command")
+
+    def test_printf_echo_seq(self):
+        self.assertEqual(self.run("printf '%s=%d\\n' a 1 b 2"), "a=1\nb=2\n[exit code 0]")
+        self.assertEqual(self.run("printf '%-5s|%5.1f|%%\\n' ab 2.25"), "ab   |  2.2|%\n[exit code 0]")
+        self.assertEqual(self.run("echo -e 'a\\tb'"), "a\tb\n[exit code 0]")
+        self.assertEqual(self.run("echo -n x; echo y"), "xy\n[exit code 0]")
+        self.assertEqual(self.run("seq 3"), "1\n2\n3\n[exit code 0]")
+        self.assertEqual(self.run("seq -s, 2 2 8"), "2,4,6,8\n[exit code 0]")
+        self.assertEqual(self.run("seq -w 8 10"), "08\n09\n10\n[exit code 0]")
+
+    def test_xargs_and_find_exec(self):
+        self.put("a.txt", "x\n")
+        self.put("b.txt", "y\ny\n")
+        self.put("sub/c.log", "z\n")
+        self.assertEqual(self.run("ls *.txt | xargs wc -l"), "1 a.txt\n2 b.txt\n3 total\n[exit code 0]")
+        self.assertEqual(self.run("ls *.txt | xargs -I {} echo file {}"), "file a.txt\nfile b.txt\n[exit code 0]")
+        self.assertEqual(self.run("echo a b c | xargs -n 1 echo"), "a\nb\nc\n[exit code 0]")
+        self.assertEqual(self.run("find . -name '*.txt' -exec grep -l y {} +"), "./b.txt\n[exit code 0]")
+        self.assertEqual(self.run("find . -name '*.txt' -exec echo got {} \\;"), "got ./a.txt\ngot ./b.txt\n[exit code 0]")
+        self.assertEqual(self.run("find . -type f -not -name '*.txt'"), "./sub/c.log\n[exit code 0]")
+        self.assertEqual(self.run("find . -name '*.log' -o -name 'a*'"), "./a.txt\n./sub/c.log\n[exit code 0]")
+        self.assertEqual(self.run("find sub -maxdepth 0"), "sub\n[exit code 0]")
+        self.run("find . -name '*.log' -delete")
+        self.assertFalse(os.path.exists(os.path.join(self.ws, "sub/c.log")))
+        self.assertIn("command not found", self.run("echo x | xargs nosuch"))
+
+    def test_text_tools(self):
+        self.put("t.txt", "b 2\na 10\nc 1\na 10\n")
+        self.assertEqual(self.run("sort -k2 -n t.txt"), "c 1\nb 2\na 10\na 10\n[exit code 0]")
+        self.assertEqual(self.run("sort -t' ' -k2,2nr -u t.txt"), "a 10\nb 2\nc 1\n[exit code 0]")
+        self.assertEqual(self.run("sort t.txt | uniq -c"), "      2 a 10\n      1 b 2\n      1 c 1\n[exit code 0]")
+        self.assertEqual(self.run("sort t.txt | uniq -d"), "a 10\n[exit code 0]")
+        self.assertEqual(self.run("tr '[:lower:]' '[:upper:]' < t.txt | head -1"), "B 2\n[exit code 0]")
+        self.assertEqual(self.run("tr '\\n' ' ' < t.txt"), "b 2 a 10 c 1 a 10 \n[exit code 0]")
+        self.assertEqual(self.run("echo 'aa  bb' | tr -s ' '"), "aa bb\n[exit code 0]")
+        self.assertEqual(self.run("echo 'a1b2' | tr -cd '[:digit:]'"), "12\n[exit code 0]")
+        self.assertEqual(self.run("tac t.txt | head -1"), "a 10\n[exit code 0]")
+        self.assertEqual(self.run("echo abc | rev"), "cba\n[exit code 0]")
+        self.assertEqual(self.run("nl t.txt | head -1"), "     1\tb 2\n[exit code 0]")
+        self.assertEqual(self.run("seq 4 | paste -sd+"), "1+2+3+4\n[exit code 0]")
+        self.assertEqual(self.run("printf 'a bb\\nccc d\\n' | column -t"), "a    bb\nccc  d\n[exit code 0]")
+        self.assertEqual(self.run("echo hi | tee x.txt | wc -c"), "3\n[exit code 0]")
+        self.assertEqual(self.get("x.txt"), "hi\n")
+
+    def test_grep_context_and_more(self):
+        self.put("g.txt", "one\ntwo\nthree\nfour\nfive\n")
+        self.put("src/a.py", "TODO: x\n")
+        self.put("src/b.md", "TODO: y\n")
+        self.assertEqual(self.run("grep -n -A1 two g.txt"), "2:two\n3-three\n[exit code 0]")
+        self.assertEqual(self.run("grep -B1 -m1 'f' g.txt"), "three\nfour\n[exit code 0]")
+        self.assertEqual(self.run("grep -E 'one|five' g.txt"), "one\nfive\n[exit code 0]")
+        self.assertEqual(self.run("grep 'o\\|v' g.txt | wc -l"), "4\n[exit code 0]")
+        self.assertEqual(self.run("grep -rn --include='*.py' TODO src"), "src/a.py:1:TODO: x\n[exit code 0]")
+        self.assertEqual(self.run("grep -q two g.txt && echo yes"), "yes\n[exit code 0]")
+        self.assertEqual(self.run("grep -c six g.txt"), "0\n[exit code 1]")
+        self.assertEqual(self.run("grep -x 'fo.r' g.txt"), "four\n[exit code 0]")
+
+    def test_paths_tests_and_sums(self):
+        self.put("d/x.txt", "hello\n")
+        self.assertEqual(self.run("basename d/x.txt .txt; dirname d/x.txt"), "x\nd\n[exit code 0]")
+        self.assertEqual(self.run("realpath d"), os.path.join(self.ws, "d") + "\n[exit code 0]")
+        self.assertEqual(self.run("[ -f d/x.txt ] && echo file; test -d d && echo dir; [ -e nope ] || echo none"),
+                         "file\ndir\nnone\n[exit code 0]")
+        self.assertEqual(self.run("[ 3 -gt 2 ] && [ abc = abc ] && echo ok"), "ok\n[exit code 0]")
+        self.assertEqual(self.run("[ 1 -eq 2 ]"), "(no output)\n[exit code 1]")
+        self.assertEqual(self.run("sha256sum d/x.txt"),
+                         "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03  d/x.txt\n[exit code 0]")
+        self.assertEqual(self.run("md5sum < d/x.txt"), "b1946ac92492d2347c6235b4d2611184  -\n[exit code 0]")
+        self.assertEqual(self.run("echo hello | base64"), "aGVsbG8K\n[exit code 0]")
+        self.assertEqual(self.run("echo aGVsbG8K | base64 -d"), "hello\n[exit code 0]")
+        self.assertEqual(self.run("tree"), ".\n└── d/\n    └── x.txt\n\n1 directory, 1 file\n[exit code 0]")
+        self.assertEqual(self.run("du -s d"), "1\td\n[exit code 0]")
+        self.assertEqual(self.run("which sed awk nope"), "sed: built into this shell\nawk: built into this shell\nwhich: no nope here\n[exit code 1]")
+        self.assertEqual(self.run("command -v grep"), "grep\n[exit code 0]")
+        self.assertIn("outside the workspace", self.run("realpath /etc"))
+        self.assertIn("outside the workspace", self.run("echo x | tee /tmp/x"))
+
+
+class TerminalPromptExamples(Workspace):
+    """Every command the Terminal assistant's prompt shows the model
+    (crates/flow/templates/terminal.py) works in run_command."""
+
+    EXAMPLES = [
+        "ls -la", "tree -L 2", "find . -name '*.py'", "du -sh *",
+        "cat -n f.txt", "head -n 40 f.txt", "sed -n '120,160p' f.txt", "grep -n 'def ' app.py",
+        "grep -rn 'TODO' --include='*.py' .", "grep -rl 'word' .", "grep -c 'ERROR' app.log",
+        "cat > plan.md <<'EOF'\n# Plan\n- first step\nEOF",
+        "sed -i 's/old/new/g' f.txt", "sed -i '12s/.*/new line 12/' f.txt", "sed -i '/^#/d' f.txt",
+        "python - <<'EOF'\nprint('edited')\nEOF",
+        "awk -F, 'NR>1 {s[$2] += $3} END {for (k in s) print k, s[k]}' data.csv | sort",
+        "cut -d, -f1,3 data.csv", "sort -t, -k3 -n data.csv", "sort data.csv | uniq -c | sort -rn",
+        "find . -name '*.log' | xargs wc -l", "find src -name '*.py' -exec grep -l TODO {} +",
+        "python script.py", "python -c \"print(2**10)\"", "help", "help sed", "sed --help",
+        "echo {a,b} {1..3} | wc -w", "cat f.txt 2>/dev/null | head -1 > out.txt && cat out.txt",
+    ]
+
+    def test_examples_run(self):
+        run = load("run_command")
+        self.put("f.txt", "".join(f"line {i} old\n" for i in range(1, 200)) + "# comment\n")
+        self.put("app.py", "def main():\n    pass  # TODO word\n")
+        self.put("app.log", "ERROR one\nINFO two\n")
+        self.put("data.csv", "name,dept,pay\nann,eng,100\nbob,ops,80\n")
+        self.put("src/x.py", "# TODO\n")
+        self.put("script.py", "print('ran')\n")
+        for cmd in self.EXAMPLES:
+            r = run(cmd)
+            self.assertTrue(r.endswith("[exit code 0]"), f"{cmd}\n{r}")
+        self.assertEqual(self.get("plan.md"), "# Plan\n- first step\n")
+        self.assertIn("new line 12", self.get("f.txt"))
+        self.assertNotIn("# comment", self.get("f.txt"))

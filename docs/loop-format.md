@@ -465,6 +465,21 @@ Message ──────┘                  └─ Check ─ Branch.test
                                     └────────────────────────────┘
 ```
 
+## Example: Terminal assistant
+
+[`terminal.chummy.json`](../crates/flow/templates/terminal.chummy.json)
+(written by `make_templates.py` from `terminal.py`) is the Chummy assistant
+below with other prompts and one difference in tools: its Work block's tools
+are a per-tool map that turns everything off except the shell tools,
+
+```json
+"tools": { "all": "off", "each": { "fetch_page": "inherit", "run_command": "inherit", "run_shell": "inherit" } }
+```
+
+and *Show what it says* also sends the first line of each `command` argument
+to a Pane output block (Read exchange's Calls output → Capture groups →
+Join → Combine `$ _INPUT1_`).
+
 ## Example: Chummy assistant (the default)
 
 [`assistant.chummy.json`](../crates/flow/templates/assistant.chummy.json)

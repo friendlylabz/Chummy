@@ -218,7 +218,15 @@ async fn builtin_file_tools_work_inside_the_workspace_only() {
     };
     let r = run("grep -c line long.txt && python hi.py a b | wc -l").await;
     assert_eq!(r.text, "499\n1\n[exit code 0]", "{r:?}");
+    // sed, awk, heredocs and hashes, inside WebAssembly too.
+    let r = run("printf 'b 2\\na 1\\n' | sort | awk '{s += $2; k = k $1} END {print k, s}'").await;
+    assert_eq!(r.text, "ab 3\n[exit code 0]", "{r:?}");
+    let r = run("cat > t.txt <<'EOF'\nhello\nEOF\nsed -i 's/hello/bye/' t.txt && cat t.txt && sha256sum t.txt | cut -c1-8 && rm t.txt").await;
+    assert_eq!(r.text, "bye\nabc6fd59\n[exit code 0]", "{r:?}");
     let r = run("cat /etc/passwd").await;
+    assert!(r.text.contains("outside the workspace"), "{r:?}");
+    let r = run("echo x | tee /etc/x; sed -n p /etc/passwd").await;
+    assert!(!r.text.contains("root:"), "{r:?}");
     assert!(r.text.contains("outside the workspace"), "{r:?}");
     let r = run("cd .. && ls").await;
     assert!(r.text.contains("outside the workspace"), "{r:?}");

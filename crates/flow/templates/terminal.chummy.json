@@ -1,0 +1,3150 @@
+{
+  "format": "chummy.loop",
+  "version": 3,
+  "name": "Terminal assistant",
+  "description": "The Chummy assistant's loop, working only through the terminal: Work has every tool off except Run command (Chummy's own sandboxed shell), Run shell and Fetch page, and the prompts teach the shell's commands (grep, find, sed, awk, xargs, heredocs, python…) with examples. Each command it runs is shown in the run's pane, next to the step it decided on.",
+  "limits": {
+    "max_steps": 10000,
+    "max_llm_calls": 400,
+    "max_tool_calls": 150
+  },
+  "blocks": [
+    {
+      "id": "message",
+      "type": "input",
+      "label": "Your message",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "params": {}
+    },
+    {
+      "id": "history",
+      "type": "history",
+      "label": "Recent conversation",
+      "position": {
+        "x": 0,
+        "y": 200
+      },
+      "params": {
+        "max_messages": 20
+      }
+    },
+    {
+      "id": "ready",
+      "type": "function",
+      "label": "Get ready",
+      "position": {
+        "x": 300,
+        "y": 100
+      },
+      "params": {
+        "function": "get_ready"
+      },
+      "comment": "Reads CHUMMY.md and the folder, starts the to-do list."
+    },
+    {
+      "id": "agent",
+      "type": "function",
+      "label": "Agent loop",
+      "position": {
+        "x": 600,
+        "y": 100
+      },
+      "params": {
+        "function": "agent"
+      },
+      "comment": "The model works with tools until it's done."
+    },
+    {
+      "id": "reply",
+      "type": "final",
+      "label": "Final answer",
+      "position": {
+        "x": 900,
+        "y": 0
+      },
+      "params": {},
+      "comment": "Adds the final answer to the response and ends the run."
+    },
+    {
+      "id": "why",
+      "type": "combine",
+      "label": "What went wrong",
+      "position": {
+        "x": 900,
+        "y": 250
+      },
+      "params": {
+        "inputs": 1,
+        "format": "**I couldn't finish:** _INPUT1_"
+      }
+    },
+    {
+      "id": "show_why",
+      "type": "output",
+      "label": "Show it",
+      "position": {
+        "x": 1200,
+        "y": 200
+      },
+      "params": {}
+    },
+    {
+      "id": "stop",
+      "type": "stop",
+      "label": "Stop with error",
+      "position": {
+        "x": 1200,
+        "y": 350
+      },
+      "params": {},
+      "comment": "The run ends as failed, with the reason."
+    }
+  ],
+  "links": [
+    {
+      "from": {
+        "block": "message",
+        "port": "out"
+      },
+      "to": {
+        "block": "ready",
+        "port": "message"
+      }
+    },
+    {
+      "from": {
+        "block": "history",
+        "port": "out"
+      },
+      "to": {
+        "block": "ready",
+        "port": "conversation"
+      }
+    },
+    {
+      "from": {
+        "block": "ready",
+        "port": "ready"
+      },
+      "to": {
+        "block": "agent",
+        "port": "request"
+      }
+    },
+    {
+      "from": {
+        "block": "agent",
+        "port": "answer"
+      },
+      "to": {
+        "block": "reply",
+        "port": "in"
+      },
+      "label": "final answer"
+    },
+    {
+      "from": {
+        "block": "agent",
+        "port": "failed"
+      },
+      "to": {
+        "block": "why",
+        "port": "in1"
+      },
+      "label": "the model call failed"
+    },
+    {
+      "from": {
+        "block": "why",
+        "port": "out"
+      },
+      "to": {
+        "block": "show_why",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "block": "why",
+        "port": "out"
+      },
+      "to": {
+        "block": "stop",
+        "port": "in"
+      }
+    }
+  ],
+  "functions": [
+    {
+      "id": "keep_todos",
+      "name": "Keep the to-do list",
+      "description": "Finds checklist lines (- [ ] / - [x]) in the model's text and, if there are any, saves them as {{todos}}, replacing the old list. Text without a checklist leaves the list as it was.",
+      "inputs": [
+        {
+          "name": "text",
+          "label": "Text",
+          "to": {
+            "block": "text",
+            "port": "in"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "after",
+          "label": "After",
+          "from": {
+            "block": "text",
+            "port": "out"
+          }
+        }
+      ],
+      "blocks": [
+        {
+          "id": "text",
+          "type": "forward",
+          "label": "Text",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "params": {}
+        },
+        {
+          "id": "find",
+          "type": "regex",
+          "label": "Checklist lines",
+          "position": {
+            "x": 260,
+            "y": 0
+          },
+          "params": {
+            "pattern": "(?m)^[ \\t]*[-*+] \\[[ xX]\\] .*\\S.*$"
+          }
+        },
+        {
+          "id": "join",
+          "type": "join",
+          "label": "As one list",
+          "position": {
+            "x": 520,
+            "y": 0
+          },
+          "params": {
+            "separator": "\n"
+          }
+        },
+        {
+          "id": "any",
+          "type": "branch",
+          "label": "Any?",
+          "position": {
+            "x": 780,
+            "y": 0
+          },
+          "params": {
+            "pattern": "\\S"
+          },
+          "comment": "No checklist in this text: keep the old list."
+        },
+        {
+          "id": "save",
+          "type": "store",
+          "label": "Save the to-do list",
+          "position": {
+            "x": 1040,
+            "y": 0
+          },
+          "params": {
+            "key": "todos",
+            "max_chars": 3000
+          },
+          "comment": "Read anywhere as {{todos}}."
+        }
+      ],
+      "links": [
+        {
+          "from": {
+            "block": "text",
+            "port": "out"
+          },
+          "to": {
+            "block": "find",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "find",
+            "port": "out"
+          },
+          "to": {
+            "block": "join",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "join",
+            "port": "out"
+          },
+          "to": {
+            "block": "any",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "join",
+            "port": "out"
+          },
+          "to": {
+            "block": "any",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "any",
+            "port": "yes"
+          },
+          "to": {
+            "block": "save",
+            "port": "in"
+          },
+          "label": "a new list"
+        }
+      ],
+      "notes": [
+        {
+          "id": "n1",
+          "text": "The model plans with its own checklist, like a to-do tool: it writes the whole list whenever it changes, and the latest one is kept.",
+          "position": {
+            "x": 0,
+            "y": 200
+          },
+          "width": 320,
+          "height": 110
+        }
+      ]
+    },
+    {
+      "id": "get_ready",
+      "name": "Get ready",
+      "description": "Before the first model call: remembers the request and the conversation, reads CHUMMY.md (the user's instructions for this folder) and the folder's top level, and starts an empty to-do list. Ready fires once everything is saved.",
+      "inputs": [
+        {
+          "name": "message",
+          "label": "Message",
+          "to": {
+            "block": "msg",
+            "port": "in"
+          }
+        },
+        {
+          "name": "conversation",
+          "label": "Conversation",
+          "to": {
+            "block": "conv",
+            "port": "in"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "ready",
+          "label": "Ready",
+          "from": {
+            "block": "msg",
+            "port": "out"
+          }
+        }
+      ],
+      "blocks": [
+        {
+          "id": "msg",
+          "type": "forward",
+          "label": "Message",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "params": {}
+        },
+        {
+          "id": "conv",
+          "type": "store",
+          "label": "Remember the conversation",
+          "position": {
+            "x": 0,
+            "y": 200
+          },
+          "params": {
+            "key": "conversation",
+            "max_chars": 6000
+          },
+          "comment": "{{conversation}}: the chat before this message."
+        },
+        {
+          "id": "req",
+          "type": "store",
+          "label": "Remember the request",
+          "position": {
+            "x": 260,
+            "y": -200
+          },
+          "params": {
+            "key": "request",
+            "max_chars": 8000
+          },
+          "comment": "{{request}}"
+        },
+        {
+          "id": "which",
+          "type": "combine",
+          "label": "CHUMMY.md",
+          "position": {
+            "x": 260,
+            "y": 0
+          },
+          "params": {
+            "inputs": 1,
+            "format": "CHUMMY.md"
+          }
+        },
+        {
+          "id": "read",
+          "type": "read_file",
+          "label": "Read CHUMMY.md",
+          "position": {
+            "x": 520,
+            "y": 0
+          },
+          "params": {},
+          "comment": "Only inside the agent's folder."
+        },
+        {
+          "id": "no_file",
+          "type": "combine",
+          "label": "No CHUMMY.md",
+          "position": {
+            "x": 780,
+            "y": 120
+          },
+          "params": {
+            "inputs": 1,
+            "format": "(none: this folder has no CHUMMY.md)"
+          }
+        },
+        {
+          "id": "instr",
+          "type": "store",
+          "label": "Remember the instructions",
+          "position": {
+            "x": 1040,
+            "y": 0
+          },
+          "params": {
+            "key": "instructions",
+            "max_chars": 4000
+          },
+          "comment": "{{instructions}}"
+        },
+        {
+          "id": "top",
+          "type": "combine",
+          "label": "Top of the folder",
+          "position": {
+            "x": 260,
+            "y": 300
+          },
+          "params": {
+            "inputs": 1,
+            "format": "."
+          }
+        },
+        {
+          "id": "ls",
+          "type": "list_files",
+          "label": "List the folder",
+          "position": {
+            "x": 520,
+            "y": 300
+          },
+          "params": {}
+        },
+        {
+          "id": "lines",
+          "type": "join",
+          "label": "One per line",
+          "position": {
+            "x": 780,
+            "y": 300
+          },
+          "params": {
+            "separator": "\n"
+          }
+        },
+        {
+          "id": "head",
+          "type": "regex",
+          "label": "First 60",
+          "position": {
+            "x": 1040,
+            "y": 300
+          },
+          "params": {
+            "pattern": "\\A(?:[^\\n]*(?:\\n|\\z)){1,60}"
+          }
+        },
+        {
+          "id": "head_text",
+          "type": "join",
+          "label": "As text",
+          "position": {
+            "x": 1300,
+            "y": 300
+          },
+          "params": {
+            "separator": ""
+          }
+        },
+        {
+          "id": "not_empty",
+          "type": "branch",
+          "label": "Anything?",
+          "position": {
+            "x": 1560,
+            "y": 300
+          },
+          "params": {
+            "pattern": "\\S"
+          }
+        },
+        {
+          "id": "empty",
+          "type": "combine",
+          "label": "Empty folder",
+          "position": {
+            "x": 1820,
+            "y": 420
+          },
+          "params": {
+            "inputs": 1,
+            "format": "(empty)"
+          }
+        },
+        {
+          "id": "no_list",
+          "type": "combine",
+          "label": "Couldn't list",
+          "position": {
+            "x": 780,
+            "y": 450
+          },
+          "params": {
+            "inputs": 1,
+            "format": "(couldn't list it: _INPUT1_)"
+          }
+        },
+        {
+          "id": "folder",
+          "type": "store",
+          "label": "Remember the folder",
+          "position": {
+            "x": 2080,
+            "y": 300
+          },
+          "params": {
+            "key": "folder",
+            "max_chars": 3000
+          },
+          "comment": "{{folder}}"
+        },
+        {
+          "id": "no_todos",
+          "type": "combine",
+          "label": "No to-do list yet",
+          "position": {
+            "x": 260,
+            "y": 600
+          },
+          "params": {
+            "inputs": 1,
+            "format": "(none yet)"
+          }
+        },
+        {
+          "id": "todos",
+          "type": "store",
+          "label": "Start the to-do list",
+          "position": {
+            "x": 520,
+            "y": 600
+          },
+          "params": {
+            "key": "todos",
+            "max_chars": 3000
+          }
+        },
+        {
+          "id": "no_progress",
+          "type": "combine",
+          "label": "No work yet",
+          "position": {
+            "x": 260,
+            "y": 750
+          },
+          "params": {
+            "inputs": 1,
+            "format": "(nothing yet)"
+          }
+        },
+        {
+          "id": "progress",
+          "type": "store",
+          "label": "Start the progress",
+          "position": {
+            "x": 520,
+            "y": 750
+          },
+          "params": {
+            "key": "progress",
+            "max_chars": 8000
+          }
+        },
+        {
+          "id": "no_next",
+          "type": "combine",
+          "label": "Nothing decided yet",
+          "position": {
+            "x": 260,
+            "y": 900
+          },
+          "params": {
+            "inputs": 1,
+            "format": "(not decided yet)"
+          }
+        },
+        {
+          "id": "next",
+          "type": "store",
+          "label": "Start the next move",
+          "position": {
+            "x": 520,
+            "y": 900
+          },
+          "params": {
+            "key": "next",
+            "max_chars": 300
+          }
+        }
+      ],
+      "links": [
+        {
+          "from": {
+            "block": "msg",
+            "port": "out"
+          },
+          "to": {
+            "block": "req",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "msg",
+            "port": "out"
+          },
+          "to": {
+            "block": "which",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "which",
+            "port": "out"
+          },
+          "to": {
+            "block": "read",
+            "port": "path"
+          }
+        },
+        {
+          "from": {
+            "block": "read",
+            "port": "out"
+          },
+          "to": {
+            "block": "instr",
+            "port": "in"
+          },
+          "label": "found"
+        },
+        {
+          "from": {
+            "block": "read",
+            "port": "error"
+          },
+          "to": {
+            "block": "no_file",
+            "port": "in1"
+          },
+          "label": "no file"
+        },
+        {
+          "from": {
+            "block": "no_file",
+            "port": "out"
+          },
+          "to": {
+            "block": "instr",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "msg",
+            "port": "out"
+          },
+          "to": {
+            "block": "top",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "top",
+            "port": "out"
+          },
+          "to": {
+            "block": "ls",
+            "port": "path"
+          }
+        },
+        {
+          "from": {
+            "block": "ls",
+            "port": "out"
+          },
+          "to": {
+            "block": "lines",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "lines",
+            "port": "out"
+          },
+          "to": {
+            "block": "head",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "head",
+            "port": "out"
+          },
+          "to": {
+            "block": "head_text",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "head_text",
+            "port": "out"
+          },
+          "to": {
+            "block": "not_empty",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "head_text",
+            "port": "out"
+          },
+          "to": {
+            "block": "not_empty",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "not_empty",
+            "port": "yes"
+          },
+          "to": {
+            "block": "folder",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "not_empty",
+            "port": "no"
+          },
+          "to": {
+            "block": "empty",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "empty",
+            "port": "out"
+          },
+          "to": {
+            "block": "folder",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "ls",
+            "port": "error"
+          },
+          "to": {
+            "block": "no_list",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "no_list",
+            "port": "out"
+          },
+          "to": {
+            "block": "folder",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "msg",
+            "port": "out"
+          },
+          "to": {
+            "block": "no_todos",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "no_todos",
+            "port": "out"
+          },
+          "to": {
+            "block": "todos",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "msg",
+            "port": "out"
+          },
+          "to": {
+            "block": "no_progress",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "no_progress",
+            "port": "out"
+          },
+          "to": {
+            "block": "progress",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "msg",
+            "port": "out"
+          },
+          "to": {
+            "block": "no_next",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "no_next",
+            "port": "out"
+          },
+          "to": {
+            "block": "next",
+            "port": "in"
+          }
+        }
+      ],
+      "notes": [
+        {
+          "id": "n1",
+          "text": "Like a coding agent's start-up context: the project's instruction file (here CHUMMY.md) and a look at the folder. Everything stays inside the agent's folder.",
+          "position": {
+            "x": 0,
+            "y": 1050
+          },
+          "width": 420,
+          "height": 100
+        }
+      ]
+    },
+    {
+      "id": "show",
+      "name": "Show what it says",
+      "description": "When the model calls tools, whatever it wrote alongside the calls (\"I'll read the file first.\") is shown to you, and any checklist in it becomes the to-do list. Each shell command it runs is shown in the run's pane. The exchange goes on unchanged.",
+      "inputs": [
+        {
+          "name": "exchange",
+          "label": "Tool call",
+          "to": {
+            "block": "ex",
+            "port": "in"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "exchange",
+          "label": "Tool call",
+          "from": {
+            "block": "ex",
+            "port": "out"
+          }
+        }
+      ],
+      "blocks": [
+        {
+          "id": "ex",
+          "type": "forward",
+          "label": "Tool call",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "params": {}
+        },
+        {
+          "id": "read",
+          "type": "read_exchange",
+          "label": "What it said",
+          "position": {
+            "x": 260,
+            "y": 0
+          },
+          "params": {
+            "role": "assistant"
+          },
+          "comment": "Newest message: empty when the model only called tools, so older text is never shown twice."
+        },
+        {
+          "id": "said",
+          "type": "branch",
+          "label": "Said anything?",
+          "position": {
+            "x": 520,
+            "y": 0
+          },
+          "params": {
+            "pattern": "\\S"
+          }
+        },
+        {
+          "id": "reply",
+          "type": "output",
+          "label": "Show it",
+          "position": {
+            "x": 780,
+            "y": -100
+          },
+          "params": {}
+        },
+        {
+          "id": "todos",
+          "type": "function",
+          "label": "Keep the to-do list",
+          "position": {
+            "x": 780,
+            "y": 100
+          },
+          "params": {
+            "function": "keep_todos"
+          }
+        },
+        {
+          "id": "cmds",
+          "type": "capture",
+          "label": "The commands",
+          "position": {
+            "x": 520,
+            "y": 300
+          },
+          "params": {
+            "pattern": "(?m)^command: ([^\\n]*)"
+          },
+          "comment": "The first line of each command it's about to run."
+        },
+        {
+          "id": "cmd_lines",
+          "type": "join",
+          "label": "One per line",
+          "position": {
+            "x": 780,
+            "y": 300
+          },
+          "params": {
+            "separator": "\n$ "
+          }
+        },
+        {
+          "id": "any_cmd",
+          "type": "branch",
+          "label": "Any command?",
+          "position": {
+            "x": 1040,
+            "y": 300
+          },
+          "params": {
+            "pattern": "\\S"
+          }
+        },
+        {
+          "id": "cmd_text",
+          "type": "combine",
+          "label": "Like a prompt",
+          "position": {
+            "x": 1300,
+            "y": 300
+          },
+          "params": {
+            "inputs": 1,
+            "format": "$ _INPUT1_"
+          }
+        },
+        {
+          "id": "cmd_pane",
+          "type": "pane",
+          "label": "Show in the pane",
+          "position": {
+            "x": 1560,
+            "y": 300
+          },
+          "params": {},
+          "comment": "You see each command as it runs."
+        }
+      ],
+      "links": [
+        {
+          "from": {
+            "block": "ex",
+            "port": "out"
+          },
+          "to": {
+            "block": "read",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "read",
+            "port": "newest"
+          },
+          "to": {
+            "block": "said",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "read",
+            "port": "newest"
+          },
+          "to": {
+            "block": "said",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "said",
+            "port": "yes"
+          },
+          "to": {
+            "block": "reply",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "said",
+            "port": "yes"
+          },
+          "to": {
+            "block": "todos",
+            "port": "text"
+          }
+        },
+        {
+          "from": {
+            "block": "read",
+            "port": "calls"
+          },
+          "to": {
+            "block": "cmds",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "cmds",
+            "port": "group1"
+          },
+          "to": {
+            "block": "cmd_lines",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "cmd_lines",
+            "port": "out"
+          },
+          "to": {
+            "block": "any_cmd",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "cmd_lines",
+            "port": "out"
+          },
+          "to": {
+            "block": "any_cmd",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "any_cmd",
+            "port": "yes"
+          },
+          "to": {
+            "block": "cmd_text",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "cmd_text",
+            "port": "out"
+          },
+          "to": {
+            "block": "cmd_pane",
+            "port": "in"
+          }
+        }
+      ]
+    },
+    {
+      "id": "decide_next",
+      "name": "Decide what's next",
+      "description": "Before each Work call: a small call without tools looks at the request, the to-do list, the step until now and the newest part of the work, and decides the ONE next step, as a direct instruction. It's shown in the run's pane (Sessions → the run's text button) and kept as {{next}}: Work's system message names it as the current step and Work's Reminder sends it last, so the model stays on task. If the call fails, {{next}} says to carry on with the to-do list. The exchange passes through unchanged.",
+      "inputs": [
+        {
+          "name": "exchange",
+          "label": "Exchange",
+          "to": {
+            "block": "ex",
+            "port": "in"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "exchange",
+          "label": "Exchange",
+          "from": {
+            "block": "ex",
+            "port": "out"
+          }
+        }
+      ],
+      "blocks": [
+        {
+          "id": "ex",
+          "type": "forward",
+          "label": "Exchange",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "params": {}
+        },
+        {
+          "id": "read",
+          "type": "read_exchange",
+          "label": "The work so far",
+          "position": {
+            "x": 260,
+            "y": -200
+          },
+          "params": {
+            "role": "any",
+            "system_in_transcript": false
+          }
+        },
+        {
+          "id": "recent",
+          "type": "store",
+          "label": "The newest part",
+          "position": {
+            "x": 520,
+            "y": -200
+          },
+          "params": {
+            "key": "recent_work",
+            "max_chars": 2500
+          },
+          "comment": "Keeps the newest 2,500 characters, so the prompt stays short."
+        },
+        {
+          "id": "ask",
+          "type": "combine",
+          "label": "Ask for the next step",
+          "position": {
+            "x": 780,
+            "y": -200
+          },
+          "params": {
+            "inputs": 1,
+            "format": "You are directing the work on the user's request, done with shell commands:\n{{request}}\n\nThe to-do list:\n{{todos}}\n\nThe step being worked on until now:\n{{next}}\n\nThe latest part of the work (the newest is at the end):\n_INPUT1_\n\nDecide the ONE next step to take now to finish the user's request. If the to-do list has an unchecked item, the step is the first one. If the last command failed, the step is to fix that command. Stay on the request: no side tasks, nothing the user didn't ask for. Write the step as a direct instruction in one sentence of at most 30 words, starting with a verb and naming the command to run and the file it's about, for example: \"Run grep -n total notes.txt to find this month's total.\" If the request is fully done, write: \"Give the user the final answer now.\" Write only that sentence."
+          }
+        },
+        {
+          "id": "decide",
+          "type": "llm",
+          "label": "Decide what's next",
+          "position": {
+            "x": 1040,
+            "y": -200
+          },
+          "params": {
+            "temperature": 0,
+            "tools": "off"
+          },
+          "comment": "A small extra call: one instruction."
+        },
+        {
+          "id": "first",
+          "type": "regex",
+          "label": "First line",
+          "position": {
+            "x": 1300,
+            "y": -200
+          },
+          "params": {
+            "pattern": "\\A\\s*[^\\n]{0,200}"
+          }
+        },
+        {
+          "id": "line",
+          "type": "join",
+          "label": "As text",
+          "position": {
+            "x": 1560,
+            "y": -200
+          },
+          "params": {
+            "separator": ""
+          }
+        },
+        {
+          "id": "said",
+          "type": "branch",
+          "label": "Decided anything?",
+          "position": {
+            "x": 1820,
+            "y": -200
+          },
+          "params": {
+            "pattern": "\\S"
+          }
+        },
+        {
+          "id": "pane",
+          "type": "pane",
+          "label": "Show in the pane",
+          "position": {
+            "x": 2080,
+            "y": -300
+          },
+          "params": {},
+          "comment": "One line in the run's pane."
+        },
+        {
+          "id": "keep",
+          "type": "store",
+          "label": "The step now",
+          "position": {
+            "x": 2080,
+            "y": -100
+          },
+          "params": {
+            "key": "next",
+            "max_chars": 300
+          },
+          "comment": "{{next}}: Work's system message and Reminder use it."
+        },
+        {
+          "id": "fallback",
+          "type": "combine",
+          "label": "If that fails",
+          "position": {
+            "x": 1560,
+            "y": 0
+          },
+          "params": {
+            "inputs": 1,
+            "format": "Carry on with the user's request: do the first unchecked item on the to-do list, or answer if it's done."
+          },
+          "comment": "No step decided: carry on with the to-do list."
+        }
+      ],
+      "links": [
+        {
+          "from": {
+            "block": "ex",
+            "port": "out"
+          },
+          "to": {
+            "block": "read",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "read",
+            "port": "all"
+          },
+          "to": {
+            "block": "recent",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "recent",
+            "port": "out"
+          },
+          "to": {
+            "block": "ask",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "ask",
+            "port": "out"
+          },
+          "to": {
+            "block": "decide",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "decide",
+            "port": "out"
+          },
+          "to": {
+            "block": "first",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "first",
+            "port": "out"
+          },
+          "to": {
+            "block": "line",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "line",
+            "port": "out"
+          },
+          "to": {
+            "block": "said",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "line",
+            "port": "out"
+          },
+          "to": {
+            "block": "said",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "said",
+            "port": "yes"
+          },
+          "to": {
+            "block": "pane",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "said",
+            "port": "yes"
+          },
+          "to": {
+            "block": "keep",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "said",
+            "port": "no"
+          },
+          "to": {
+            "block": "fallback",
+            "port": "in1"
+          },
+          "label": "nothing decided"
+        },
+        {
+          "from": {
+            "block": "decide",
+            "port": "error"
+          },
+          "to": {
+            "block": "fallback",
+            "port": "in1"
+          },
+          "label": "the call failed"
+        },
+        {
+          "from": {
+            "block": "fallback",
+            "port": "out"
+          },
+          "to": {
+            "block": "keep",
+            "port": "in"
+          }
+        }
+      ],
+      "notes": [
+        {
+          "id": "n1",
+          "text": "Steers the agent: one step at a time, decided fresh before each Work call, for you (in the pane) and for the model (as {{next}}, sent last by Work's Reminder). The function's Exchange output fires once all of this is done, so Work always sees the newest {{next}}.",
+          "position": {
+            "x": 0,
+            "y": 200
+          },
+          "width": 400,
+          "height": 120
+        }
+      ]
+    },
+    {
+      "id": "report_error",
+      "name": "Report what went wrong",
+      "description": "When Work or Run tool fails, this gets the exchange with the failure as its last message. The model says in a sentence or two what went wrong and what it will do differently; that goes to the chat and the run's pane, and becomes {{next}} so the next step takes it into account. Then the failure is taken back out of the exchange (and any tool calls left waiting are answered as not run), and the exchange goes back to the start of the Agent loop to try again. After 3 failures in one run it gives up, and the run stops with the last error.",
+      "inputs": [
+        {
+          "name": "exchange",
+          "label": "Failed exchange",
+          "to": {
+            "block": "ex",
+            "port": "in"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "exchange",
+          "label": "Try again",
+          "from": {
+            "block": "decline",
+            "port": "out"
+          }
+        },
+        {
+          "name": "gave_up",
+          "label": "Gave up",
+          "from": {
+            "block": "why",
+            "port": "out"
+          }
+        }
+      ],
+      "blocks": [
+        {
+          "id": "ex",
+          "type": "forward",
+          "label": "Failed exchange",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "params": {}
+        },
+        {
+          "id": "err",
+          "type": "read_exchange",
+          "label": "The failure",
+          "position": {
+            "x": 260,
+            "y": -250
+          },
+          "params": {
+            "role": "user"
+          },
+          "comment": "The last user message: the failure."
+        },
+        {
+          "id": "keep_err",
+          "type": "store",
+          "label": "Remember it",
+          "position": {
+            "x": 520,
+            "y": -250
+          },
+          "params": {
+            "key": "last_error",
+            "max_chars": 600
+          }
+        },
+        {
+          "id": "count",
+          "type": "combine",
+          "label": "Count it",
+          "position": {
+            "x": 780,
+            "y": -250
+          },
+          "params": {
+            "inputs": 1,
+            "format": "{{errors}}x"
+          }
+        },
+        {
+          "id": "save_count",
+          "type": "store",
+          "label": "Failures so far",
+          "position": {
+            "x": 1040,
+            "y": -250
+          },
+          "params": {
+            "key": "errors",
+            "max_chars": 100
+          }
+        },
+        {
+          "id": "spent",
+          "type": "branch",
+          "label": "Failed 3 times?",
+          "position": {
+            "x": 1300,
+            "y": 0
+          },
+          "params": {
+            "pattern": "^x{3}"
+          }
+        },
+        {
+          "id": "gave_up",
+          "type": "read_exchange",
+          "label": "Giving up",
+          "position": {
+            "x": 1560,
+            "y": 300
+          },
+          "params": {
+            "role": "user"
+          }
+        },
+        {
+          "id": "why",
+          "type": "combine",
+          "label": "Give up",
+          "position": {
+            "x": 1820,
+            "y": 300
+          },
+          "params": {
+            "inputs": 1,
+            "format": "It failed 3 times. The last time: {{last_error}}"
+          }
+        },
+        {
+          "id": "report",
+          "type": "llm",
+          "label": "Say what went wrong",
+          "position": {
+            "x": 1560,
+            "y": -250
+          },
+          "params": {
+            "system": "You are Chummy, working on the user's request with shell commands:\n{{request}}\n\nA step of the work just failed: the failure is the last message of the conversation.",
+            "reminder": "In one or two short sentences: what went wrong, and what will you do differently on the next try (which command, or which change to it)? Don't call tools, and don't apologise.",
+            "temperature": 0.2,
+            "tools": "off"
+          },
+          "comment": "Sees the conversation with the failure at its end."
+        },
+        {
+          "id": "fallback",
+          "type": "combine",
+          "label": "If that fails too",
+          "position": {
+            "x": 1820,
+            "y": -100
+          },
+          "params": {
+            "inputs": 1,
+            "format": "{{last_error}}"
+          }
+        },
+        {
+          "id": "show_msg",
+          "type": "combine",
+          "label": "For the chat",
+          "position": {
+            "x": 2080,
+            "y": -400
+          },
+          "params": {
+            "inputs": 1,
+            "format": "_Something went wrong: _INPUT1_ Trying again._"
+          }
+        },
+        {
+          "id": "show",
+          "type": "output",
+          "label": "Show it",
+          "position": {
+            "x": 2340,
+            "y": -400
+          },
+          "params": {},
+          "comment": "Added to the response; the run carries on."
+        },
+        {
+          "id": "pane",
+          "type": "pane",
+          "label": "Show in the pane",
+          "position": {
+            "x": 2340,
+            "y": -250
+          },
+          "params": {}
+        },
+        {
+          "id": "note",
+          "type": "combine",
+          "label": "For the next step",
+          "position": {
+            "x": 2080,
+            "y": -100
+          },
+          "params": {
+            "inputs": 1,
+            "format": "The last try failed: _INPUT1_ Take another way."
+          }
+        },
+        {
+          "id": "keep_note",
+          "type": "store",
+          "label": "The step now",
+          "position": {
+            "x": 2340,
+            "y": -100
+          },
+          "params": {
+            "key": "next",
+            "max_chars": 300
+          },
+          "comment": "{{next}}: Decide what's next sees it."
+        },
+        {
+          "id": "drop",
+          "type": "drop_last",
+          "label": "Take the failure out",
+          "position": {
+            "x": 1560,
+            "y": 100
+          },
+          "params": {
+            "count": 1
+          }
+        },
+        {
+          "id": "not_run",
+          "type": "combine",
+          "label": "Why calls weren't run",
+          "position": {
+            "x": 1820,
+            "y": 200
+          },
+          "params": {
+            "inputs": 1,
+            "format": "Not run: the step failed."
+          }
+        },
+        {
+          "id": "decline",
+          "type": "decline_calls",
+          "label": "Answer waiting calls",
+          "position": {
+            "x": 2080,
+            "y": 100
+          },
+          "params": {},
+          "comment": "Tool calls left waiting are answered as not run, so the exchange is valid again."
+        }
+      ],
+      "links": [
+        {
+          "from": {
+            "block": "ex",
+            "port": "out"
+          },
+          "to": {
+            "block": "err",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "err",
+            "port": "last"
+          },
+          "to": {
+            "block": "keep_err",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "keep_err",
+            "port": "out"
+          },
+          "to": {
+            "block": "count",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "count",
+            "port": "out"
+          },
+          "to": {
+            "block": "save_count",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "ex",
+            "port": "out"
+          },
+          "to": {
+            "block": "spent",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "save_count",
+            "port": "out"
+          },
+          "to": {
+            "block": "spent",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "spent",
+            "port": "yes"
+          },
+          "to": {
+            "block": "gave_up",
+            "port": "in"
+          },
+          "label": "3 failures"
+        },
+        {
+          "from": {
+            "block": "gave_up",
+            "port": "last"
+          },
+          "to": {
+            "block": "why",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "spent",
+            "port": "no"
+          },
+          "to": {
+            "block": "report",
+            "port": "in"
+          },
+          "label": "try again"
+        },
+        {
+          "from": {
+            "block": "report",
+            "port": "out"
+          },
+          "to": {
+            "block": "show_msg",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "report",
+            "port": "out"
+          },
+          "to": {
+            "block": "pane",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "report",
+            "port": "out"
+          },
+          "to": {
+            "block": "note",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "report",
+            "port": "error"
+          },
+          "to": {
+            "block": "fallback",
+            "port": "in1"
+          },
+          "label": "the report failed too"
+        },
+        {
+          "from": {
+            "block": "fallback",
+            "port": "out"
+          },
+          "to": {
+            "block": "show_msg",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "fallback",
+            "port": "out"
+          },
+          "to": {
+            "block": "pane",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "fallback",
+            "port": "out"
+          },
+          "to": {
+            "block": "note",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "show_msg",
+            "port": "out"
+          },
+          "to": {
+            "block": "show",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "note",
+            "port": "out"
+          },
+          "to": {
+            "block": "keep_note",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "spent",
+            "port": "no"
+          },
+          "to": {
+            "block": "drop",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "drop",
+            "port": "out"
+          },
+          "to": {
+            "block": "decline",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "keep_err",
+            "port": "out"
+          },
+          "to": {
+            "block": "not_run",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "not_run",
+            "port": "out"
+          },
+          "to": {
+            "block": "decline",
+            "port": "reason"
+          }
+        }
+      ],
+      "notes": [
+        {
+          "id": "n1",
+          "text": "Failures are reported, not hidden: you see a line in the chat and the pane, the model's next step knows what went wrong, and the exchange goes back without the failure in it. Three failures in one run and it stops for real.",
+          "position": {
+            "x": 0,
+            "y": 250
+          },
+          "width": 420,
+          "height": 110
+        }
+      ]
+    },
+    {
+      "id": "make_room",
+      "name": "Make room",
+      "description": "After each round of tool results: saves the latest work as {{progress}}, and if the conversation has reached the model's compaction point (Settings → Models: 80% of its context unless you change it), the model summarises it and the work carries on from the summary in a fresh exchange. If summarising fails, the conversation goes on as it was.",
+      "inputs": [
+        {
+          "name": "exchange",
+          "label": "Results",
+          "to": {
+            "block": "ex",
+            "port": "in"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "exchange",
+          "label": "Exchange",
+          "from": {
+            "block": "out",
+            "port": "out"
+          }
+        }
+      ],
+      "blocks": [
+        {
+          "id": "ex",
+          "type": "forward",
+          "label": "Results",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "params": {}
+        },
+        {
+          "id": "read",
+          "type": "read_exchange",
+          "label": "The work so far",
+          "position": {
+            "x": 260,
+            "y": -200
+          },
+          "params": {
+            "role": "any",
+            "system_in_transcript": false
+          }
+        },
+        {
+          "id": "save",
+          "type": "store",
+          "label": "Save the progress",
+          "position": {
+            "x": 520,
+            "y": -200
+          },
+          "params": {
+            "key": "progress",
+            "max_chars": 8000
+          },
+          "comment": "{{progress}} keeps the newest 8,000 characters."
+        },
+        {
+          "id": "check",
+          "type": "context_check",
+          "label": "Context full?",
+          "position": {
+            "x": 260,
+            "y": 100
+          },
+          "params": {},
+          "comment": "Estimated tokens (system message included) against the model's compaction point."
+        },
+        {
+          "id": "read_full",
+          "type": "read_exchange",
+          "label": "Everything so far",
+          "position": {
+            "x": 560,
+            "y": -50
+          },
+          "params": {
+            "role": "any",
+            "system_in_transcript": false
+          }
+        },
+        {
+          "id": "ask",
+          "type": "combine",
+          "label": "Ask for a summary",
+          "position": {
+            "x": 820,
+            "y": -50
+          },
+          "params": {
+            "inputs": 1,
+            "format": "Here is your work on the user's request so far:\n\n_INPUT1_\n\nIt's getting long, so write a summary to carry on from. Include what the user asked for, what you've done, the key facts you found (file names, values, errors, decisions), the commands that worked and what's left to do, with your to-do list if you have one. Write only the summary, at most 25 short lines."
+          }
+        },
+        {
+          "id": "summ",
+          "type": "llm",
+          "label": "Summarise the work",
+          "position": {
+            "x": 1080,
+            "y": -50
+          },
+          "params": {
+            "temperature": 0.2,
+            "tools": "off"
+          }
+        },
+        {
+          "id": "resume",
+          "type": "combine",
+          "label": "Carry on from it",
+          "position": {
+            "x": 1340,
+            "y": -50
+          },
+          "params": {
+            "inputs": 1,
+            "format": "The user's request:\n{{request}}\n\nYour work on it so far, summarised to save room:\n_INPUT1_\n\nCarry on from where you left off."
+          }
+        },
+        {
+          "id": "restart",
+          "type": "exchange",
+          "label": "Fresh exchange",
+          "position": {
+            "x": 1600,
+            "y": -50
+          },
+          "params": {
+            "system": "You are Chummy, a helpful assistant that works in the user's folder through a terminal. You do the work with shell commands, and you keep going until the user's request is done.\n\n# Your tools\n- run_command: Chummy's own small shell, locked to the user's folder. It isn't bash, but the everyday commands below work in it.\n- run_shell, if you have it: a real sh in a sandbox, with whatever programs it has installed. Use it only for a program run_command doesn't have.\n- fetch_page, if you have it: reads a web page. The shells have no network (no curl or wget).\nIf you have none of these tools, tell the user to turn on Run command for this agent, and stop.\n\n# The shell (run_command)\nCommands: ls cat head tail wc grep find sed awk sort uniq cut tr paste column nl tac rev diff echo printf xargs tee seq tree du mkdir cp mv rm rmdir touch cd pwd basename dirname realpath test [ md5sum sha256sum base64 date sleep, and python (Python 3 with its standard library). `help` lists them, `help sed` (or `sed --help`) shows a command's options.\nWorks: pipes |, && and ||, ; or new lines between commands, redirects > >> < 2>&1 2>/dev/null, heredocs, quotes, globs (* ? **), braces ({a,b} {1..3}).\nDoesn't work: variables ($x), $(…), backticks, for/while/if, ( ) subshells, & background jobs, network, installing anything, paths outside the folder. Instead use pipes and xargs, awk for per-line logic and sums, or a short python script. cd lasts only for that one command line.\n\n# How to do common jobs\n- Look around: ls -la, tree -L 2, find . -name '*.py', du -sh *\n- Read: cat -n f.txt, head -n 40 f.txt, sed -n '120,160p' f.txt, grep -n 'def ' app.py\n- Search: grep -rn 'TODO' --include='*.py' . or grep -rl 'word' . or grep -c 'ERROR' app.log\n- Write a whole file (the text is kept exactly):\n  cat > plan.md <<'EOF'\n  # Plan\n  - first step\n  EOF\n- Change a file: sed -i 's/old/new/g' f.txt, sed -i '12s/.*/new line 12/' f.txt, sed -i '/^#/d' f.txt. For bigger edits, write a python script in a heredoc (python - <<'EOF' … EOF).\n- Data: awk -F, 'NR>1 {s[$2] += $3} END {for (k in s) print k, s[k]}' data.csv | sort, cut -d, -f1,3, sort -t, -k3 -n, sort | uniq -c | sort -rn\n- Many files: find . -name '*.log' | xargs wc -l, find src -name '*.py' -exec grep -l TODO {} +\n- Run code: python script.py, python -c \"print(2**10)\"\n\n# How you work\n- Text you write is shown to the user. Before you call a tool, say in one short sentence what you're about to do.\n- Look before you change anything, and read a file before you edit it. Don't guess what you can check.\n- One step per call: a command line can chain a few commands, but keep it to one job.\n- Read every result. It ends with [exit code N]: 0 means it worked. If a command fails, read the error and fix the command; don't run the same thing again.\n- Long output is cut, so narrow it first: grep, head, sed -n '…p', wc -l.\n- After changing a file, check it (cat, grep or diff), or run the tests.\n- Do what was asked, no more. Before deleting or overwriting the user's work, ask the user first.\n- If the request is unclear, ask one short question and stop there.\n\n# Planning\nFor work with 3 or more steps, keep a to-do list. Write it as a checklist, one step per line:\n- [ ] a step to do\n- [x] a step that's done\nWrite the whole list again whenever it changes: when you make it, and each time you finish a step. Work on the first unchecked step. Make each step specific. For simple requests, skip the list and just do it.\n\n# Finishing\nWhen everything is done, give your final answer, with no tool calls: short and direct, what you did and what came out. Be honest: if something failed or you couldn't check it, say so. Use Markdown when it helps; no emojis unless asked.\n\n# Your to-do list now\n{{todos}}\n\n# Your current step\n{{next}}\nWork on this step only. Stay on the user's request: no side tasks. When the step is done, stop; the next one is decided for you.\n\n# The user's folder (top level)\n{{folder}}\n\n# The user's instructions for this folder (CHUMMY.md)\n{{instructions}}\n\n# Conversation before this request\n{{conversation}}",
+            "roles": [
+              "user"
+            ]
+          },
+          "comment": "The same instructions, then the summary."
+        },
+        {
+          "id": "say",
+          "type": "combine",
+          "label": "Tell you",
+          "position": {
+            "x": 1340,
+            "y": -250
+          },
+          "params": {
+            "inputs": 1,
+            "format": "_(The work so far got long, so I summarised it to make room.)_"
+          }
+        },
+        {
+          "id": "show",
+          "type": "output",
+          "label": "Show that",
+          "position": {
+            "x": 1600,
+            "y": -250
+          },
+          "params": {}
+        },
+        {
+          "id": "keep",
+          "type": "branch",
+          "label": "If that fails",
+          "position": {
+            "x": 1340,
+            "y": 200
+          },
+          "params": {
+            "pattern": "(?s)."
+          },
+          "comment": "Carry on with the long conversation."
+        },
+        {
+          "id": "out",
+          "type": "forward",
+          "label": "Exchange",
+          "position": {
+            "x": 1860,
+            "y": 100
+          },
+          "params": {}
+        }
+      ],
+      "links": [
+        {
+          "from": {
+            "block": "ex",
+            "port": "out"
+          },
+          "to": {
+            "block": "read",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "read",
+            "port": "all"
+          },
+          "to": {
+            "block": "save",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "ex",
+            "port": "out"
+          },
+          "to": {
+            "block": "check",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "check",
+            "port": "room"
+          },
+          "to": {
+            "block": "out",
+            "port": "in"
+          },
+          "label": "has room"
+        },
+        {
+          "from": {
+            "block": "check",
+            "port": "full"
+          },
+          "to": {
+            "block": "read_full",
+            "port": "in"
+          },
+          "label": "full"
+        },
+        {
+          "from": {
+            "block": "read_full",
+            "port": "all"
+          },
+          "to": {
+            "block": "ask",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "ask",
+            "port": "out"
+          },
+          "to": {
+            "block": "summ",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "summ",
+            "port": "out"
+          },
+          "to": {
+            "block": "resume",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "resume",
+            "port": "out"
+          },
+          "to": {
+            "block": "restart",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "restart",
+            "port": "out"
+          },
+          "to": {
+            "block": "out",
+            "port": "in"
+          },
+          "label": "from the summary"
+        },
+        {
+          "from": {
+            "block": "summ",
+            "port": "out"
+          },
+          "to": {
+            "block": "say",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "say",
+            "port": "out"
+          },
+          "to": {
+            "block": "show",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "check",
+            "port": "full"
+          },
+          "to": {
+            "block": "keep",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "summ",
+            "port": "error"
+          },
+          "to": {
+            "block": "keep",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "keep",
+            "port": "yes"
+          },
+          "to": {
+            "block": "out",
+            "port": "in"
+          },
+          "label": "summary failed"
+        }
+      ],
+      "notes": [
+        {
+          "id": "n1",
+          "text": "Like auto-compaction: a long conversation is summarised so the model's context doesn't overflow. When it happens is set per model in Settings → Models (Make room at), or here with Context full?'s own percentage.",
+          "position": {
+            "x": 0,
+            "y": 350
+          },
+          "width": 420,
+          "height": 130
+        }
+      ]
+    },
+    {
+      "id": "done_check",
+      "name": "Done?",
+      "description": "When the model answers without tool calls. Keeps any checklist in the answer, then decides: an answer that ends with a question waits for you; an empty answer, or one given while the to-do list still has unchecked steps, is sent back to carry on (twice at most per message); anything else is the final answer.",
+      "inputs": [
+        {
+          "name": "answer",
+          "label": "Answer",
+          "to": {
+            "block": "ans",
+            "port": "in"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "done",
+          "label": "Final answer",
+          "from": {
+            "block": "done",
+            "port": "out"
+          }
+        },
+        {
+          "name": "again",
+          "label": "Carry on",
+          "from": {
+            "block": "again",
+            "port": "out"
+          }
+        }
+      ],
+      "blocks": [
+        {
+          "id": "ans",
+          "type": "forward",
+          "label": "Answer",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "params": {}
+        },
+        {
+          "id": "todos_fn",
+          "type": "function",
+          "label": "Keep the to-do list",
+          "position": {
+            "x": 260,
+            "y": 0
+          },
+          "params": {
+            "function": "keep_todos"
+          }
+        },
+        {
+          "id": "nudged",
+          "type": "recall",
+          "label": "Times sent back",
+          "position": {
+            "x": 520,
+            "y": -200
+          },
+          "params": {
+            "key": "nudged"
+          }
+        },
+        {
+          "id": "spent",
+          "type": "branch",
+          "label": "Sent back twice?",
+          "position": {
+            "x": 780,
+            "y": 0
+          },
+          "params": {
+            "pattern": "x{2}"
+          },
+          "comment": "Twice already: take this answer."
+        },
+        {
+          "id": "question",
+          "type": "branch",
+          "label": "Asks you?",
+          "position": {
+            "x": 1040,
+            "y": 0
+          },
+          "params": {
+            "pattern": "\\?[\\s*_)\\\"'”»]*$"
+          },
+          "comment": "Ends with a question: the turn ends and your reply carries on."
+        },
+        {
+          "id": "empty",
+          "type": "branch",
+          "label": "Any answer?",
+          "position": {
+            "x": 1300,
+            "y": 0
+          },
+          "params": {
+            "pattern": "\\S"
+          }
+        },
+        {
+          "id": "todos",
+          "type": "recall",
+          "label": "The to-do list",
+          "position": {
+            "x": 1560,
+            "y": -200
+          },
+          "params": {
+            "key": "todos"
+          }
+        },
+        {
+          "id": "open",
+          "type": "branch",
+          "label": "Unchecked steps?",
+          "position": {
+            "x": 1820,
+            "y": 0
+          },
+          "params": {
+            "pattern": "(?m)^[ \\t]*[-*+] \\[ \\]"
+          }
+        },
+        {
+          "id": "open_msg",
+          "type": "combine",
+          "label": "Carry on with the list",
+          "position": {
+            "x": 2080,
+            "y": 150
+          },
+          "params": {
+            "inputs": 1,
+            "format": "The user's request:\n{{request}}\n\nYour latest work on it:\n{{progress}}\n\nYou then said:\n_INPUT1_\n\nBut your to-do list still has unchecked steps:\n{{todos}}\n\nIf there's more to do, carry on with the next unchecked step now. If every step is actually done or isn't needed, write the list again with each step checked, then your final answer."
+          }
+        },
+        {
+          "id": "show",
+          "type": "output",
+          "label": "Show what it said",
+          "position": {
+            "x": 2080,
+            "y": -250
+          },
+          "params": {},
+          "comment": "You still see what the model said."
+        },
+        {
+          "id": "empty_msg",
+          "type": "combine",
+          "label": "Carry on after nothing",
+          "position": {
+            "x": 1560,
+            "y": 300
+          },
+          "params": {
+            "inputs": 1,
+            "format": "The user's request:\n{{request}}\n\nYour latest work on it:\n{{progress}}\n\nYour last reply was empty. If the work is done, give your final answer now. If not, carry on."
+          }
+        },
+        {
+          "id": "again",
+          "type": "forward",
+          "label": "Carry on",
+          "position": {
+            "x": 2340,
+            "y": 250
+          },
+          "params": {}
+        },
+        {
+          "id": "count",
+          "type": "combine",
+          "label": "Count it",
+          "position": {
+            "x": 2600,
+            "y": 400
+          },
+          "params": {
+            "inputs": 1,
+            "format": "{{nudged}}x"
+          }
+        },
+        {
+          "id": "save_count",
+          "type": "store",
+          "label": "Remember the count",
+          "position": {
+            "x": 2860,
+            "y": 400
+          },
+          "params": {
+            "key": "nudged",
+            "max_chars": 100
+          }
+        },
+        {
+          "id": "done",
+          "type": "forward",
+          "label": "Final answer",
+          "position": {
+            "x": 2340,
+            "y": -100
+          },
+          "params": {}
+        }
+      ],
+      "links": [
+        {
+          "from": {
+            "block": "ans",
+            "port": "out"
+          },
+          "to": {
+            "block": "todos_fn",
+            "port": "text"
+          }
+        },
+        {
+          "from": {
+            "block": "todos_fn",
+            "port": "after"
+          },
+          "to": {
+            "block": "nudged",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "todos_fn",
+            "port": "after"
+          },
+          "to": {
+            "block": "spent",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "nudged",
+            "port": "out"
+          },
+          "to": {
+            "block": "spent",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "spent",
+            "port": "yes"
+          },
+          "to": {
+            "block": "done",
+            "port": "in"
+          },
+          "label": "sent back twice"
+        },
+        {
+          "from": {
+            "block": "spent",
+            "port": "no"
+          },
+          "to": {
+            "block": "question",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "spent",
+            "port": "no"
+          },
+          "to": {
+            "block": "question",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "question",
+            "port": "yes"
+          },
+          "to": {
+            "block": "done",
+            "port": "in"
+          },
+          "label": "a question for you"
+        },
+        {
+          "from": {
+            "block": "question",
+            "port": "no"
+          },
+          "to": {
+            "block": "empty",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "question",
+            "port": "no"
+          },
+          "to": {
+            "block": "empty",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "empty",
+            "port": "no"
+          },
+          "to": {
+            "block": "empty_msg",
+            "port": "in1"
+          },
+          "label": "empty"
+        },
+        {
+          "from": {
+            "block": "empty_msg",
+            "port": "out"
+          },
+          "to": {
+            "block": "again",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "empty",
+            "port": "yes"
+          },
+          "to": {
+            "block": "todos",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "empty",
+            "port": "yes"
+          },
+          "to": {
+            "block": "open",
+            "port": "value"
+          }
+        },
+        {
+          "from": {
+            "block": "todos",
+            "port": "out"
+          },
+          "to": {
+            "block": "open",
+            "port": "test"
+          }
+        },
+        {
+          "from": {
+            "block": "open",
+            "port": "yes"
+          },
+          "to": {
+            "block": "open_msg",
+            "port": "in1"
+          },
+          "label": "steps left"
+        },
+        {
+          "from": {
+            "block": "open",
+            "port": "yes"
+          },
+          "to": {
+            "block": "show",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "open_msg",
+            "port": "out"
+          },
+          "to": {
+            "block": "again",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "open",
+            "port": "no"
+          },
+          "to": {
+            "block": "done",
+            "port": "in"
+          },
+          "label": "finished"
+        },
+        {
+          "from": {
+            "block": "again",
+            "port": "out"
+          },
+          "to": {
+            "block": "count",
+            "port": "in1"
+          }
+        },
+        {
+          "from": {
+            "block": "count",
+            "port": "out"
+          },
+          "to": {
+            "block": "save_count",
+            "port": "in"
+          }
+        }
+      ],
+      "notes": [
+        {
+          "id": "n1",
+          "text": "Not in the original loop, which simply stops when the model stops calling tools. Small models often stop half-way, so this sends them back (at most twice). Delete the Done? block in the Agent loop and link Answer straight out to get the original behaviour.",
+          "position": {
+            "x": 0,
+            "y": 300
+          },
+          "width": 420,
+          "height": 130
+        }
+      ]
+    },
+    {
+      "id": "agent",
+      "name": "Agent loop",
+      "description": "The core loop: before each call, Decide what's next picks the one next step (shown in the run's pane and sent to Work as its last message); then Work is called with the conversation so far; if it calls tools, what it said is shown, the calls run (your approvals apply) and the results go back to it; when it answers without tool calls, Done? decides whether that's the final answer. If Work or Run tool fails, Report what went wrong says why and the loop tries again from the start (3 times at most).",
+      "inputs": [
+        {
+          "name": "request",
+          "label": "Request",
+          "to": {
+            "block": "req",
+            "port": "in"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "answer",
+          "label": "Final answer",
+          "from": {
+            "block": "answer",
+            "port": "out"
+          }
+        },
+        {
+          "name": "failed",
+          "label": "Failed",
+          "from": {
+            "block": "failed",
+            "port": "out"
+          }
+        }
+      ],
+      "blocks": [
+        {
+          "id": "req",
+          "type": "forward",
+          "label": "Request",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "params": {}
+        },
+        {
+          "id": "start",
+          "type": "exchange",
+          "label": "Start the exchange",
+          "position": {
+            "x": 260,
+            "y": 0
+          },
+          "params": {
+            "system": "You are Chummy, a helpful assistant that works in the user's folder through a terminal. You do the work with shell commands, and you keep going until the user's request is done.\n\n# Your tools\n- run_command: Chummy's own small shell, locked to the user's folder. It isn't bash, but the everyday commands below work in it.\n- run_shell, if you have it: a real sh in a sandbox, with whatever programs it has installed. Use it only for a program run_command doesn't have.\n- fetch_page, if you have it: reads a web page. The shells have no network (no curl or wget).\nIf you have none of these tools, tell the user to turn on Run command for this agent, and stop.\n\n# The shell (run_command)\nCommands: ls cat head tail wc grep find sed awk sort uniq cut tr paste column nl tac rev diff echo printf xargs tee seq tree du mkdir cp mv rm rmdir touch cd pwd basename dirname realpath test [ md5sum sha256sum base64 date sleep, and python (Python 3 with its standard library). `help` lists them, `help sed` (or `sed --help`) shows a command's options.\nWorks: pipes |, && and ||, ; or new lines between commands, redirects > >> < 2>&1 2>/dev/null, heredocs, quotes, globs (* ? **), braces ({a,b} {1..3}).\nDoesn't work: variables ($x), $(…), backticks, for/while/if, ( ) subshells, & background jobs, network, installing anything, paths outside the folder. Instead use pipes and xargs, awk for per-line logic and sums, or a short python script. cd lasts only for that one command line.\n\n# How to do common jobs\n- Look around: ls -la, tree -L 2, find . -name '*.py', du -sh *\n- Read: cat -n f.txt, head -n 40 f.txt, sed -n '120,160p' f.txt, grep -n 'def ' app.py\n- Search: grep -rn 'TODO' --include='*.py' . or grep -rl 'word' . or grep -c 'ERROR' app.log\n- Write a whole file (the text is kept exactly):\n  cat > plan.md <<'EOF'\n  # Plan\n  - first step\n  EOF\n- Change a file: sed -i 's/old/new/g' f.txt, sed -i '12s/.*/new line 12/' f.txt, sed -i '/^#/d' f.txt. For bigger edits, write a python script in a heredoc (python - <<'EOF' … EOF).\n- Data: awk -F, 'NR>1 {s[$2] += $3} END {for (k in s) print k, s[k]}' data.csv | sort, cut -d, -f1,3, sort -t, -k3 -n, sort | uniq -c | sort -rn\n- Many files: find . -name '*.log' | xargs wc -l, find src -name '*.py' -exec grep -l TODO {} +\n- Run code: python script.py, python -c \"print(2**10)\"\n\n# How you work\n- Text you write is shown to the user. Before you call a tool, say in one short sentence what you're about to do.\n- Look before you change anything, and read a file before you edit it. Don't guess what you can check.\n- One step per call: a command line can chain a few commands, but keep it to one job.\n- Read every result. It ends with [exit code N]: 0 means it worked. If a command fails, read the error and fix the command; don't run the same thing again.\n- Long output is cut, so narrow it first: grep, head, sed -n '…p', wc -l.\n- After changing a file, check it (cat, grep or diff), or run the tests.\n- Do what was asked, no more. Before deleting or overwriting the user's work, ask the user first.\n- If the request is unclear, ask one short question and stop there.\n\n# Planning\nFor work with 3 or more steps, keep a to-do list. Write it as a checklist, one step per line:\n- [ ] a step to do\n- [x] a step that's done\nWrite the whole list again whenever it changes: when you make it, and each time you finish a step. Work on the first unchecked step. Make each step specific. For simple requests, skip the list and just do it.\n\n# Finishing\nWhen everything is done, give your final answer, with no tool calls: short and direct, what you did and what came out. Be honest: if something failed or you couldn't check it, say so. Use Markdown when it helps; no emojis unless asked.\n\n# Your to-do list now\n{{todos}}\n\n# Your current step\n{{next}}\nWork on this step only. Stay on the user's request: no side tasks. When the step is done, stop; the next one is decided for you.\n\n# The user's folder (top level)\n{{folder}}\n\n# The user's instructions for this folder (CHUMMY.md)\n{{instructions}}\n\n# Conversation before this request\n{{conversation}}",
+            "roles": [
+              "user"
+            ]
+          },
+          "comment": "The instructions (filled in fresh at every call), then your message."
+        },
+        {
+          "id": "next",
+          "type": "function",
+          "label": "Decide what's next",
+          "position": {
+            "x": 560,
+            "y": 0
+          },
+          "params": {
+            "function": "decide_next"
+          },
+          "comment": "The one next step, as {{next}}: to the pane, and to Work."
+        },
+        {
+          "id": "work",
+          "type": "llm",
+          "label": "Work",
+          "position": {
+            "x": 860,
+            "y": 0
+          },
+          "params": {
+            "retries": 3,
+            "on_limit": "ask",
+            "reminder": "(A note from your own planning, not from the user.) Your step now: {{next}}\nDo just this step: run the command it needs (a few commands can go in one call, joined with && or on separate lines). If the whole request is done, give the final answer.",
+            "tools": {
+              "all": "off",
+              "each": {
+                "fetch_page": "inherit",
+                "run_command": "inherit",
+                "run_shell": "inherit"
+              }
+            }
+          },
+          "comment": "Uses only the shell tools (Run command, Run shell, Fetch page) of the ones this agent allows. The system message (with {{todos}} and {{next}}) is filled in fresh at every call, and the Reminder sends the step last."
+        },
+        {
+          "id": "show",
+          "type": "function",
+          "label": "Show what it says",
+          "position": {
+            "x": 1160,
+            "y": 250
+          },
+          "params": {
+            "function": "show"
+          }
+        },
+        {
+          "id": "run",
+          "type": "run_tool",
+          "label": "Run tool",
+          "position": {
+            "x": 1460,
+            "y": 250
+          },
+          "params": {
+            "max_result_chars": 12000
+          },
+          "comment": "Errors and calls you don't allow go back to the model as the result."
+        },
+        {
+          "id": "room",
+          "type": "function",
+          "label": "Make room",
+          "position": {
+            "x": 1760,
+            "y": 250
+          },
+          "params": {
+            "function": "make_room"
+          },
+          "comment": "Summarises a long conversation."
+        },
+        {
+          "id": "check",
+          "type": "function",
+          "label": "Done?",
+          "position": {
+            "x": 1160,
+            "y": -200
+          },
+          "params": {
+            "function": "done_check"
+          }
+        },
+        {
+          "id": "restart",
+          "type": "exchange",
+          "label": "Carry on",
+          "position": {
+            "x": 1460,
+            "y": -350
+          },
+          "params": {
+            "system": "You are Chummy, a helpful assistant that works in the user's folder through a terminal. You do the work with shell commands, and you keep going until the user's request is done.\n\n# Your tools\n- run_command: Chummy's own small shell, locked to the user's folder. It isn't bash, but the everyday commands below work in it.\n- run_shell, if you have it: a real sh in a sandbox, with whatever programs it has installed. Use it only for a program run_command doesn't have.\n- fetch_page, if you have it: reads a web page. The shells have no network (no curl or wget).\nIf you have none of these tools, tell the user to turn on Run command for this agent, and stop.\n\n# The shell (run_command)\nCommands: ls cat head tail wc grep find sed awk sort uniq cut tr paste column nl tac rev diff echo printf xargs tee seq tree du mkdir cp mv rm rmdir touch cd pwd basename dirname realpath test [ md5sum sha256sum base64 date sleep, and python (Python 3 with its standard library). `help` lists them, `help sed` (or `sed --help`) shows a command's options.\nWorks: pipes |, && and ||, ; or new lines between commands, redirects > >> < 2>&1 2>/dev/null, heredocs, quotes, globs (* ? **), braces ({a,b} {1..3}).\nDoesn't work: variables ($x), $(…), backticks, for/while/if, ( ) subshells, & background jobs, network, installing anything, paths outside the folder. Instead use pipes and xargs, awk for per-line logic and sums, or a short python script. cd lasts only for that one command line.\n\n# How to do common jobs\n- Look around: ls -la, tree -L 2, find . -name '*.py', du -sh *\n- Read: cat -n f.txt, head -n 40 f.txt, sed -n '120,160p' f.txt, grep -n 'def ' app.py\n- Search: grep -rn 'TODO' --include='*.py' . or grep -rl 'word' . or grep -c 'ERROR' app.log\n- Write a whole file (the text is kept exactly):\n  cat > plan.md <<'EOF'\n  # Plan\n  - first step\n  EOF\n- Change a file: sed -i 's/old/new/g' f.txt, sed -i '12s/.*/new line 12/' f.txt, sed -i '/^#/d' f.txt. For bigger edits, write a python script in a heredoc (python - <<'EOF' … EOF).\n- Data: awk -F, 'NR>1 {s[$2] += $3} END {for (k in s) print k, s[k]}' data.csv | sort, cut -d, -f1,3, sort -t, -k3 -n, sort | uniq -c | sort -rn\n- Many files: find . -name '*.log' | xargs wc -l, find src -name '*.py' -exec grep -l TODO {} +\n- Run code: python script.py, python -c \"print(2**10)\"\n\n# How you work\n- Text you write is shown to the user. Before you call a tool, say in one short sentence what you're about to do.\n- Look before you change anything, and read a file before you edit it. Don't guess what you can check.\n- One step per call: a command line can chain a few commands, but keep it to one job.\n- Read every result. It ends with [exit code N]: 0 means it worked. If a command fails, read the error and fix the command; don't run the same thing again.\n- Long output is cut, so narrow it first: grep, head, sed -n '…p', wc -l.\n- After changing a file, check it (cat, grep or diff), or run the tests.\n- Do what was asked, no more. Before deleting or overwriting the user's work, ask the user first.\n- If the request is unclear, ask one short question and stop there.\n\n# Planning\nFor work with 3 or more steps, keep a to-do list. Write it as a checklist, one step per line:\n- [ ] a step to do\n- [x] a step that's done\nWrite the whole list again whenever it changes: when you make it, and each time you finish a step. Work on the first unchecked step. Make each step specific. For simple requests, skip the list and just do it.\n\n# Finishing\nWhen everything is done, give your final answer, with no tool calls: short and direct, what you did and what came out. Be honest: if something failed or you couldn't check it, say so. Use Markdown when it helps; no emojis unless asked.\n\n# Your to-do list now\n{{todos}}\n\n# Your current step\n{{next}}\nWork on this step only. Stay on the user's request: no side tasks. When the step is done, stop; the next one is decided for you.\n\n# The user's folder (top level)\n{{folder}}\n\n# The user's instructions for this folder (CHUMMY.md)\n{{instructions}}\n\n# Conversation before this request\n{{conversation}}",
+            "roles": [
+              "user"
+            ]
+          }
+        },
+        {
+          "id": "answer",
+          "type": "forward",
+          "label": "Final answer",
+          "position": {
+            "x": 1460,
+            "y": -150
+          },
+          "params": {}
+        },
+        {
+          "id": "oops",
+          "type": "function",
+          "label": "Report what went wrong",
+          "position": {
+            "x": 1160,
+            "y": 500
+          },
+          "params": {
+            "function": "report_error"
+          },
+          "comment": "Work or Run tool failed: say why, take it back out, try again (3 times at most)."
+        },
+        {
+          "id": "failed",
+          "type": "forward",
+          "label": "Failed",
+          "position": {
+            "x": 1460,
+            "y": 650
+          },
+          "params": {}
+        }
+      ],
+      "links": [
+        {
+          "from": {
+            "block": "req",
+            "port": "out"
+          },
+          "to": {
+            "block": "start",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "start",
+            "port": "out"
+          },
+          "to": {
+            "block": "next",
+            "port": "exchange"
+          }
+        },
+        {
+          "from": {
+            "block": "next",
+            "port": "exchange"
+          },
+          "to": {
+            "block": "work",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "work",
+            "port": "tool"
+          },
+          "to": {
+            "block": "show",
+            "port": "exchange"
+          },
+          "label": "tool calls"
+        },
+        {
+          "from": {
+            "block": "show",
+            "port": "exchange"
+          },
+          "to": {
+            "block": "run",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "run",
+            "port": "out"
+          },
+          "to": {
+            "block": "room",
+            "port": "exchange"
+          },
+          "label": "results"
+        },
+        {
+          "from": {
+            "block": "room",
+            "port": "exchange"
+          },
+          "to": {
+            "block": "next",
+            "port": "exchange"
+          },
+          "label": "next turn"
+        },
+        {
+          "from": {
+            "block": "work",
+            "port": "out"
+          },
+          "to": {
+            "block": "check",
+            "port": "answer"
+          },
+          "label": "no tool calls"
+        },
+        {
+          "from": {
+            "block": "check",
+            "port": "done"
+          },
+          "to": {
+            "block": "answer",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "block": "check",
+            "port": "again"
+          },
+          "to": {
+            "block": "restart",
+            "port": "in"
+          },
+          "label": "not done yet"
+        },
+        {
+          "from": {
+            "block": "restart",
+            "port": "out"
+          },
+          "to": {
+            "block": "next",
+            "port": "exchange"
+          }
+        },
+        {
+          "from": {
+            "block": "work",
+            "port": "failed_exchange"
+          },
+          "to": {
+            "block": "oops",
+            "port": "exchange"
+          },
+          "label": "the model call failed"
+        },
+        {
+          "from": {
+            "block": "run",
+            "port": "failed_exchange"
+          },
+          "to": {
+            "block": "oops",
+            "port": "exchange"
+          },
+          "label": "running tools failed"
+        },
+        {
+          "from": {
+            "block": "oops",
+            "port": "exchange"
+          },
+          "to": {
+            "block": "next",
+            "port": "exchange"
+          },
+          "label": "try again"
+        },
+        {
+          "from": {
+            "block": "oops",
+            "port": "gave_up"
+          },
+          "to": {
+            "block": "failed",
+            "port": "in"
+          },
+          "label": "gave up"
+        }
+      ],
+      "notes": [
+        {
+          "id": "n1",
+          "text": "The core cycle: Decide what's next ⇄ Work ⇄ Show what it says ⇄ Run tool ⇄ Make room, until the model answers without tool calls. The loop's limits (model calls, tool calls) stop a model that never finishes.",
+          "position": {
+            "x": 0,
+            "y": -500
+          },
+          "width": 460,
+          "height": 100
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "id": "n1",
+      "text": "Terminal assistant\n\nThe Chummy assistant's loop, working through the terminal only.\n1. Get ready: your request, the conversation, CHUMMY.md and the folder's top level.\n2. Agent loop: Decide what's next picks the next step and the command for it; Work runs commands. Work's tools are all off except Run command, Run shell and Fetch page (select Work to see them). Each command is shown in the run's pane.\n3. Planning: the model keeps its own checklist (- [ ] / - [x]) as {{todos}}.\n4. Done? An answer without tool calls is the final answer, unless it's empty or steps are unchecked (then it's sent back, twice at most). A question for you ends the turn.\n5. If Work or Run tool fails, the model says what went wrong and the loop tries again, 3 times at most.\n\nDouble-click a function block to see inside.",
+      "position": {
+        "x": 0,
+        "y": 450
+      },
+      "width": 460,
+      "height": 300
+    }
+  ]
+}

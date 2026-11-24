@@ -68,9 +68,16 @@ answers. Add it in Settings → Models as "Other OpenAI-compatible server" at
 - **New setting:** a field with a default in `settings.rs` (bump `VERSION`
   only for changes that need a migration), expose it in `SettingsView`,
   mirror it in `ipc.ts`, then the UI.
-- **Built-in loop change:** edit `make_templates.py`, regenerate, and add
-  the old version's fingerprint to `RETIRED` in `src-tauri/src/library.rs`
-  so unedited saved copies get upgraded.
+- **Built-in loop change:** edit the generator (`assistant.py` holds the
+  shared agent loop and the Chummy assistant's prompts, `terminal.py` the
+  Terminal assistant's), regenerate with `make_templates.py`, and add the
+  old version's fingerprint to `RETIRED` in `src-tauri/src/library.rs` so
+  unedited saved copies get upgraded.
+- **Built-in tool change:** tools in `crates/tools/builtin/` reinstall when
+  their source changes. Test their logic with
+  `python3 -m unittest discover -s crates/tools/tests -p 'test_*.py'`; the
+  `TerminalPromptExamples` test there runs every command the Terminal
+  assistant's prompt shows, so keep it in step with `terminal.py`.
 
 ## CI and releases
 

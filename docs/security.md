@@ -160,7 +160,10 @@ on your computer: it is a small shell written in Python that runs in the same
 WebAssembly sandbox as every other tool, in the agent's folder, with no
 network (`python` runs in the sandbox's own interpreter; `pip` can't install
 anything). Paths outside the folder are refused, and so is deleting the
-folder itself.
+folder itself. Its commands (sed, awk, find, xargs and the rest) are Python
+too, run every path they touch through the same check, and can only run
+other commands of this small shell: `awk` has no `system()` or pipes, `xargs`
+and `find -exec` run built-in commands only, and links can't be made.
 
 What it *can* do is a lot of damage inside the folder in one call (`rm -rf
 src`, a `python` script that rewrites every file). So it is marked

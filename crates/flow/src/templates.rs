@@ -8,6 +8,8 @@ use crate::format::{Block, Link, LoopFile, Position};
 
 /// The id of the template new agents get when nothing is configured.
 pub const ASSISTANT: &str = "assistant";
+/// The Chummy assistant's loop, working only through the terminal.
+pub const TERMINAL: &str = "terminal";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Template {
@@ -82,10 +84,12 @@ pub fn templates() -> Vec<Template> {
         l("answer", "out", "reply", "in"),
     ];
 
-    // Written by templates/make_templates.py.
-    // Written by templates/make_templates.py from templates/assistant.py.
+    // Written by templates/make_templates.py from templates/assistant.py
+    // and templates/terminal.py.
     let assistant = LoopFile::from_json(include_str!("../templates/assistant.chummy.json"))
         .expect("the built-in assistant template is a valid loop file");
+    let terminal = LoopFile::from_json(include_str!("../templates/terminal.chummy.json"))
+        .expect("the built-in terminal template is a valid loop file");
 
     vec![
         Template {
@@ -93,6 +97,12 @@ pub fn templates() -> Vec<Template> {
             name: "Chummy assistant",
             description: "The default: one agent loop, like a coding agent's. The model works with tools, call after call, until it's done. It says what it's doing as it goes, keeps its own to-do list for bigger jobs, reads CHUMMY.md from the folder for your instructions, and summarises long conversations. Sent back to finish if it stops with steps unchecked.",
             file: assistant,
+        },
+        Template {
+            id: TERMINAL,
+            name: "Terminal assistant",
+            description: "The Chummy assistant, working only through the terminal: every tool is off except Run command (Chummy's own sandboxed shell), Run shell and Fetch page, and its prompts teach the shell's commands (grep, find, sed, awk, xargs, heredocs, python…) with examples. Each command it runs is shown in the run's pane.",
+            file: terminal,
         },
         Template {
             id: "blank",
@@ -120,6 +130,9 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::AtomicBool;
 
+    /// The only tools the Terminal assistant's Work block may use.
+    const TERMINAL_TOOLS: [&str; 3] = ["fetch_page", "run_command", "run_shell"];
+
     #[test]
     fn only_the_working_blocks_get_tools() {
         use crate::blocks::{BlockKind, Switch};
@@ -137,7 +150,16 @@ mod tests {
                     "{} {} inherits the model's",
                     t.id, blk.id
                 );
-                if blk.id == "work" {
+                if blk.id == "work" && t.id == TERMINAL {
+                    // Only the shell tools (and the agent's own settings on top).
+                    assert_eq!(p.tools.all, Switch::Off);
+                    assert_eq!(
+                        p.tools.each.keys().map(String::as_str).collect::<Vec<_>>(),
+                        TERMINAL_TOOLS
+                    );
+                    assert!(p.tools.each.values().all(|s| *s == Switch::Inherit));
+                    assert_eq!(p.network, Switch::Inherit);
+                } else if blk.id == "work" {
                     assert!(
                         p.tools.is_inherit() && p.network == Switch::Inherit,
                         "{}",
@@ -202,6 +224,19 @@ mod tests {
     fn says(t: &str) -> LlmAnswer {
         LlmAnswer {
             text: t.into(),
+            ..Default::default()
+        }
+    }
+
+    fn command(t: &str, n: u32, command: &str) -> LlmAnswer {
+        LlmAnswer {
+            text: t.into(),
+            calls: vec![ToolCall {
+                id: format!("c{n}"),
+                name: "run_command".into(),
+                arguments: json!({ "command": command }),
+                network: crate::blocks::Switch::Inherit,
+            }],
             ..Default::default()
         }
     }
@@ -300,14 +335,21 @@ mod tests {
                 .unwrap_or_else(|| says("(script ran out)")))
         }
         fn tool_names(&self) -> Vec<String> {
-            vec!["echo".into()]
+            vec!["echo".into(), "read_file".into(), "run_command".into()]
         }
         fn tool_info(&self, name: &str) -> Option<ToolInfo> {
-            (name == "echo").then(|| ToolInfo {
-                name: name.into(),
-                description: "Echoes.".into(),
-                parameters: json!({ "type": "object", "properties": { "text": { "type": "string" } } }),
-            })
+            let arg = if name == "run_command" {
+                "command"
+            } else {
+                "text"
+            };
+            ["echo", "read_file", "run_command"]
+                .contains(&name)
+                .then(|| ToolInfo {
+                    name: name.into(),
+                    description: "Echoes.".into(),
+                    parameters: json!({ "type": "object", "properties": { arg: { "type": "string" } } }),
+                })
         }
         fn agent_allows(&self, _: &str) -> bool {
             true
@@ -346,7 +388,11 @@ mod tests {
     }
 
     async fn assist(host: &Agentic, message: &str) -> crate::engine::RunOutcome {
-        let t = templates().into_iter().find(|t| t.id == ASSISTANT).unwrap();
+        assist_with(ASSISTANT, host, message).await
+    }
+
+    async fn assist_with(id: &str, host: &Agentic, message: &str) -> crate::engine::RunOutcome {
+        let t = templates().into_iter().find(|t| t.id == id).unwrap();
         let inputs = RunInputs {
             message: message.into(),
             history: vec![
@@ -713,5 +759,79 @@ mod tests {
         assert_eq!(texts(0).len(), texts(1).len(), "{:#?}", texts(1));
         assert!(texts(1).iter().all(|t| !t.contains("last step failed")));
         assert_eq!(*host.nexts.lock().unwrap(), 2);
+    }
+
+    // ------------------------------------------------------------------
+    // The Terminal assistant: the same loop, through the terminal only.
+
+    #[tokio::test]
+    async fn terminal_assistant_only_offers_the_shell_tools() {
+        let host = Agentic::with(vec![
+            command("I'll count them.", 1, "grep -c TODO *.py\nwc -l notes.txt"),
+            says("There are 3."),
+        ]);
+        let out = assist_with(TERMINAL, &host, "How many TODOs?").await;
+        assert_eq!(out.status, RunStatus::Completed, "{out:?}");
+        assert_eq!(out.replies, ["I'll count them.", "There are 3."]);
+        // The host has echo, read_file and run_command: Work gets only the shell.
+        for call in host.work.lock().unwrap().iter() {
+            let names: Vec<&str> = call.tools.iter().map(|t| t.name.as_str()).collect();
+            assert_eq!(names, ["run_command"]);
+        }
+        assert_eq!(
+            *host.tools_run.lock().unwrap(),
+            [json!({ "command": "grep -c TODO *.py\nwc -l notes.txt" })]
+        );
+        // The prompts teach the shell.
+        let sys = host.system(0);
+        for part in [
+            "sed -i 's/old/new/g'",
+            "<<'EOF'",
+            "awk -F,",
+            "Doesn't work: variables",
+            "[exit code N]",
+        ] {
+            assert!(sys.contains(part), "{part}: {sys}");
+        }
+        assert!(
+            sys.contains("docs/\nnotes.txt"),
+            "the folder is still listed"
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_assistant_shows_each_command_in_the_pane() {
+        let host = Agentic::with(vec![
+            command("Looking.", 1, "ls -la\necho more"),
+            says("Done."),
+        ]);
+        let out = assist_with(TERMINAL, &host, "What's here?").await;
+        assert_eq!(out.status, RunStatus::Completed, "{out:?}");
+        // The step, then the command (its first line), then the next step.
+        assert_eq!(
+            *host.pane.lock().unwrap(),
+            ["Next move 1.", "$ ls -la", "Next move 2."]
+        );
+        // Not in the chat.
+        assert!(out.replies.iter().all(|r| !r.contains("$ ls")));
+    }
+
+    #[tokio::test]
+    async fn terminal_assistant_reports_a_failure_and_tries_again() {
+        let host = Agentic::with(vec![says("All done.")]);
+        *host.fail_work.lock().unwrap() = 1;
+        let out = assist_with(TERMINAL, &host, "Do it").await;
+        assert_eq!(out.status, RunStatus::Completed, "{out:?}");
+        assert_eq!(out.replies.last().unwrap(), "All done.");
+        let reports = host.reports.lock().unwrap();
+        assert_eq!(reports.len(), 1);
+        assert!(
+            reports[0]
+                .messages
+                .last()
+                .unwrap()
+                .text
+                .contains("which command")
+        );
     }
 }

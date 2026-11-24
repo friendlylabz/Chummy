@@ -155,6 +155,21 @@ ERRORS_SPENT = r"^x{%d}" % 3
 FIRST_LINE = r"\A\s*[^\n]{0,200}"
 # The first 60 lines (the folder listing shown to the model).
 HEAD = r"\A(?:[^\n]*(?:\n|\z)){1,60}"
+# The first line of each shell command in a round of tool calls.
+COMMAND_LINE = r"(?m)^command: ([^\n]*)"
+
+# Everything that differs between assistants built from these functions
+# (the Terminal assistant in terminal.py is another).
+CHUMMY = {
+    "name": "Chummy assistant",
+    "system": SYSTEM, "summarize": SUMMARIZE, "resume": RESUME, "open_nudge": OPEN_NUDGE,
+    "empty_nudge": EMPTY_NUDGE, "next": NEXT, "next_fallback": NEXT_FALLBACK, "work_reminder": WORK_REMINDER,
+    "report_system": REPORT_SYSTEM, "report_ask": REPORT_ASK, "compacted": COMPACTED,
+    # The Work block's tool switches (None: the agent's tools).
+    "work_tools": None,
+    # Show each shell command it runs in the run's pane.
+    "pane_commands": False,
+}
 
 
 def keep_todos_fn():
@@ -245,30 +260,49 @@ def get_ready_fn():
     )
 
 
-def show_fn():
+def show_fn(t=None):
+    t = t or CHUMMY
+    blocks = [
+        b("ex", "forward", "Tool call", 0, 0),
+        b("read", "read_exchange", "What it said", 260, 0, {"role": "assistant"},
+          "Newest message: empty when the model only called tools, so older text is never shown twice."),
+        b("said", "branch", "Said anything?", 520, 0, {"pattern": HAS_TEXT}),
+        b("reply", "output", "Show it", 780, -100),
+        b("todos", "function", "Keep the to-do list", 780, 100, {"function": "keep_todos"}),
+    ]
+    links = [
+        l("ex", "out", "read", "in"),
+        l("read", "newest", "said", "value"), l("read", "newest", "said", "test"),
+        l("said", "yes", "reply", "in"), l("said", "yes", "todos", "text"),
+    ]
+    if t["pane_commands"]:
+        blocks += [
+            b("cmds", "capture", "The commands", 520, 300, {"pattern": COMMAND_LINE},
+              "The first line of each command it's about to run."),
+            b("cmd_lines", "join", "One per line", 780, 300, {"separator": "\n$ "}),
+            b("any_cmd", "branch", "Any command?", 1040, 300, {"pattern": HAS_TEXT}),
+            b("cmd_text", "combine", "Like a prompt", 1300, 300, {"inputs": 1, "format": "$ _INPUT1_"}),
+            b("cmd_pane", "pane", "Show in the pane", 1560, 300, {}, "You see each command as it runs."),
+        ]
+        links += [
+            l("read", "calls", "cmds", "in"), l("cmds", "group1", "cmd_lines", "in"),
+            l("cmd_lines", "out", "any_cmd", "value"), l("cmd_lines", "out", "any_cmd", "test"),
+            l("any_cmd", "yes", "cmd_text", "in1"), l("cmd_text", "out", "cmd_pane", "in"),
+        ]
     return fn(
         "show", "Show what it says",
         "When the model calls tools, whatever it wrote alongside the calls (\"I'll read the file first.\") is "
-        "shown to you, and any checklist in it becomes the to-do list. The exchange goes on unchanged.",
+        "shown to you, and any checklist in it becomes the to-do list."
+        + (" Each shell command it runs is shown in the run's pane." if t["pane_commands"] else "")
+        + " The exchange goes on unchanged.",
         [("exchange", "Tool call", "ex", "in")],
         [("exchange", "Tool call", "ex", "out")],
-        [
-            b("ex", "forward", "Tool call", 0, 0),
-            b("read", "read_exchange", "What it said", 260, 0, {"role": "assistant"},
-              "Newest message: empty when the model only called tools, so older text is never shown twice."),
-            b("said", "branch", "Said anything?", 520, 0, {"pattern": HAS_TEXT}),
-            b("reply", "output", "Show it", 780, -100),
-            b("todos", "function", "Keep the to-do list", 780, 100, {"function": "keep_todos"}),
-        ],
-        [
-            l("ex", "out", "read", "in"),
-            l("read", "newest", "said", "value"), l("read", "newest", "said", "test"),
-            l("said", "yes", "reply", "in"), l("said", "yes", "todos", "text"),
-        ],
+        blocks, links,
     )
 
 
-def decide_next_fn():
+def decide_next_fn(t=None):
+    t = t or CHUMMY
     return fn(
         "decide_next", "Decide what's next",
         "Before each Work call: a small call without tools looks at the request, the to-do list, the step "
@@ -285,7 +319,7 @@ def decide_next_fn():
               {"role": "any", "system_in_transcript": False}),
             b("recent", "store", "The newest part", 520, -200, {"key": "recent_work", "max_chars": 2500},
               "Keeps the newest 2,500 characters, so the prompt stays short."),
-            b("ask", "combine", "Ask for the next step", 780, -200, {"inputs": 1, "format": NEXT}),
+            b("ask", "combine", "Ask for the next step", 780, -200, {"inputs": 1, "format": t["next"]}),
             b("decide", "llm", "Decide what's next", 1040, -200, {"temperature": 0},
               "A small extra call: one instruction."),
             b("first", "regex", "First line", 1300, -200, {"pattern": FIRST_LINE}),
@@ -294,7 +328,7 @@ def decide_next_fn():
             b("pane", "pane", "Show in the pane", 2080, -300, {}, "One line in the run's pane."),
             b("keep", "store", "The step now", 2080, -100, {"key": "next", "max_chars": 300},
               "{{next}}: Work's system message and Reminder use it."),
-            b("fallback", "combine", "If that fails", 1560, 0, {"inputs": 1, "format": NEXT_FALLBACK},
+            b("fallback", "combine", "If that fails", 1560, 0, {"inputs": 1, "format": t["next_fallback"]},
               "No step decided: carry on with the to-do list."),
         ],
         [
@@ -314,7 +348,8 @@ def decide_next_fn():
     )
 
 
-def report_error_fn():
+def report_error_fn(t=None):
+    t = t or CHUMMY
     return fn(
         "report_error", "Report what went wrong",
         "When Work or Run tool fails, this gets the exchange with the failure as its last message. The model "
@@ -337,7 +372,7 @@ def report_error_fn():
             b("why", "combine", "Give up", 1820, 300, {
                 "inputs": 1, "format": "It failed 3 times. The last time: {{last_error}}"}),
             b("report", "llm", "Say what went wrong", 1560, -250,
-              {"system": REPORT_SYSTEM, "reminder": REPORT_ASK, "temperature": 0.2},
+              {"system": t["report_system"], "reminder": t["report_ask"], "temperature": 0.2},
               "Sees the conversation with the failure at its end."),
             b("fallback", "combine", "If that fails too", 1820, -100, {"inputs": 1, "format": "{{last_error}}"}),
             b("show_msg", "combine", "For the chat", 2080, -400, {
@@ -375,7 +410,8 @@ def report_error_fn():
     )
 
 
-def make_room_fn():
+def make_room_fn(t=None):
+    t = t or CHUMMY
     return fn(
         "make_room", "Make room",
         "After each round of tool results: saves the latest work as {{progress}}, and if the conversation has "
@@ -394,12 +430,12 @@ def make_room_fn():
               "Estimated tokens (system message included) against the model's compaction point."),
             b("read_full", "read_exchange", "Everything so far", 560, -50,
               {"role": "any", "system_in_transcript": False}),
-            b("ask", "combine", "Ask for a summary", 820, -50, {"inputs": 1, "format": SUMMARIZE}),
+            b("ask", "combine", "Ask for a summary", 820, -50, {"inputs": 1, "format": t["summarize"]}),
             b("summ", "llm", "Summarise the work", 1080, -50, {"temperature": 0.2}),
-            b("resume", "combine", "Carry on from it", 1340, -50, {"inputs": 1, "format": RESUME}),
-            b("restart", "exchange", "Fresh exchange", 1600, -50, {"system": SYSTEM, "roles": ["user"]},
+            b("resume", "combine", "Carry on from it", 1340, -50, {"inputs": 1, "format": t["resume"]}),
+            b("restart", "exchange", "Fresh exchange", 1600, -50, {"system": t["system"], "roles": ["user"]},
               "The same instructions, then the summary."),
-            b("say", "combine", "Tell you", 1340, -250, {"inputs": 1, "format": COMPACTED}),
+            b("say", "combine", "Tell you", 1340, -250, {"inputs": 1, "format": t["compacted"]}),
             b("show", "output", "Show that", 1600, -250),
             b("keep", "branch", "If that fails", 1340, 200, {"pattern": ANY},
               "Carry on with the long conversation."),
@@ -423,7 +459,8 @@ def make_room_fn():
     )
 
 
-def done_fn():
+def done_fn(t=None):
+    t = t or CHUMMY
     return fn(
         "done_check", "Done?",
         "When the model answers without tool calls. Keeps any checklist in the answer, then decides: an answer "
@@ -443,9 +480,9 @@ def done_fn():
             b("empty", "branch", "Any answer?", 1300, 0, {"pattern": HAS_TEXT}),
             b("todos", "recall", "The to-do list", 1560, -200, {"key": "todos"}),
             b("open", "branch", "Unchecked steps?", 1820, 0, {"pattern": OPEN}),
-            b("open_msg", "combine", "Carry on with the list", 2080, 150, {"inputs": 1, "format": OPEN_NUDGE}),
+            b("open_msg", "combine", "Carry on with the list", 2080, 150, {"inputs": 1, "format": t["open_nudge"]}),
             b("show", "output", "Show what it said", 2080, -250, {}, "You still see what the model said."),
-            b("empty_msg", "combine", "Carry on after nothing", 1560, 300, {"inputs": 1, "format": EMPTY_NUDGE}),
+            b("empty_msg", "combine", "Carry on after nothing", 1560, 300, {"inputs": 1, "format": t["empty_nudge"]}),
             b("again", "forward", "Carry on", 2340, 250),
             b("count", "combine", "Count it", 2600, 400, {"inputs": 1, "format": "{{nudged}}x"}),
             b("save_count", "store", "Remember the count", 2860, 400, {"key": "nudged", "max_chars": 100}),
@@ -473,7 +510,11 @@ def done_fn():
     )
 
 
-def agent_fn():
+def agent_fn(t=None):
+    t = t or CHUMMY
+    work = {"retries": 3, "on_limit": "ask", "reminder": t["work_reminder"]}
+    if t["work_tools"] is not None:
+        work["tools"] = t["work_tools"]
     return fn(
         "agent", "Agent loop",
         "The core loop: before each call, Decide what's next picks the one next step (shown in the run's pane "
@@ -485,12 +526,13 @@ def agent_fn():
         [("answer", "Final answer", "answer", "out"), ("failed", "Failed", "failed", "out")],
         [
             b("req", "forward", "Request", 0, 0),
-            b("start", "exchange", "Start the exchange", 260, 0, {"system": SYSTEM, "roles": ["user"]},
+            b("start", "exchange", "Start the exchange", 260, 0, {"system": t["system"], "roles": ["user"]},
               "The instructions (filled in fresh at every call), then your message."),
             b("next", "function", "Decide what's next", 560, 0, {"function": "decide_next"},
               "The one next step, as {{next}}: to the pane, and to Work."),
-            b("work", "llm", "Work", 860, 0, {"retries": 3, "on_limit": "ask", "reminder": WORK_REMINDER},
-              "Uses the tools this agent allows. The system message (with {{todos}} and {{next}}) is filled "
+            b("work", "llm", "Work", 860, 0, work,
+              ("Uses only the shell tools (Run command, Run shell, Fetch page) of the ones this agent allows."
+               if t["work_tools"] is not None else "Uses the tools this agent allows.") + " The system message (with {{todos}} and {{next}}) is filled "
               "in fresh at every call, and the Reminder sends the step last."),
             b("show", "function", "Show what it says", 1160, 250, {"function": "show"}),
             b("run", "run_tool", "Run tool", 1460, 250, {"max_result_chars": 12000},
@@ -498,7 +540,7 @@ def agent_fn():
             b("room", "function", "Make room", 1760, 250, {"function": "make_room"},
               "Summarises a long conversation."),
             b("check", "function", "Done?", 1160, -200, {"function": "done_check"}),
-            b("restart", "exchange", "Carry on", 1460, -350, {"system": SYSTEM, "roles": ["user"]}),
+            b("restart", "exchange", "Carry on", 1460, -350, {"system": t["system"], "roles": ["user"]}),
             b("answer", "forward", "Final answer", 1460, -150),
             b("oops", "function", "Report what went wrong", 1160, 500, {"function": "report_error"},
               "Work or Run tool failed: say why, take it back out, try again (3 times at most)."),
@@ -523,7 +565,8 @@ def agent_fn():
     )
 
 
-def assistant():
+def assistant(t=None):
+    t = t or CHUMMY
     blocks = [
         b("message", "input", "Your message", 0, 0),
         b("history", "history", "Recent conversation", 0, 200, {"max_messages": 20}),
@@ -545,8 +588,8 @@ def assistant():
         l("why", "out", "show_why", "in"), l("why", "out", "stop", "in"),
     ]
     return {
-        "format": "chummy.loop", "version": 3, "name": "Chummy assistant",
-        "description": (
+        "format": "chummy.loop", "version": 3, "name": t["name"],
+        "description": t.get("description") or (
             "The default loop. One agent loop, like a coding agent's: the model works with tools, call after call, "
             "until it "
             "answers without one. It says what it's doing as it goes, plans with its own to-do list when the work "
@@ -558,10 +601,10 @@ def assistant():
         # Every Work call has a small Decide what's next call before it, so twice the model calls.
         "limits": {"max_steps": 10000, "max_llm_calls": 400, "max_tool_calls": 150},
         "blocks": blocks, "links": links,
-        "functions": [keep_todos_fn(), get_ready_fn(), show_fn(), decide_next_fn(), report_error_fn(), make_room_fn(), done_fn(),
-                      agent_fn()],
+        "functions": [keep_todos_fn(), get_ready_fn(), show_fn(t), decide_next_fn(t), report_error_fn(t), make_room_fn(t),
+                      done_fn(t), agent_fn(t)],
         "notes": [
-            note("n1", 0, 450,
+            note("n1", 0, 450, t.get("overview") or
                  "Chummy assistant\n\n"
                  "1. Get ready: your request, the conversation, CHUMMY.md (your instructions for this folder) "
                  "and the folder's top level.\n"
