@@ -273,9 +273,16 @@ pub fn save_agent(
         .unwrap_or_else(|| format!("agent-{}", chummy_store::random_id(4)));
     let created_at = existing.as_ref().map(|a| a.created_at).unwrap_or_else(now);
     // New agents start with no tools and no internet; existing ones keep theirs.
-    let (tools, network, loop_config) = existing
+    let (tools, network, loop_config, model_options) = existing
         .as_ref()
-        .map(|a| (a.tools.clone(), a.network, a.loop_config.clone()))
+        .map(|a| {
+            (
+                a.tools.clone(),
+                a.network,
+                a.loop_config.clone(),
+                a.model_options.clone(),
+            )
+        })
         .unwrap_or_default();
     let new = Agent {
         id: id.clone(),
@@ -287,6 +294,7 @@ pub fn save_agent(
         tools,
         network,
         loop_config,
+        model_options,
     };
     state.update(&app, |s| {
         match s.agents.iter_mut().find(|a| a.id == new.id) {
@@ -431,6 +439,7 @@ mod tests {
             tools: tools.iter().map(|t| t.to_string()).collect(),
             network,
             loop_config: Default::default(),
+            model_options: Default::default(),
         }
     }
 

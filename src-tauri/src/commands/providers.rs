@@ -56,8 +56,11 @@ fn validate(cfg: &ProviderConfig) -> Result<(), String> {
     {
         return Err("Temperature must be between 0 and 2.".into());
     }
-    if !(16..=32_768).contains(&cfg.max_tokens) {
+    if !(chummy_llm::MIN_ANSWER_TOKENS..=chummy_llm::MAX_ANSWER_TOKENS).contains(&cfg.max_tokens) {
         return Err("The longest answer must be 16–32,768 tokens.".into());
+    }
+    if let Some(p) = cfg.generation.problems().into_iter().next() {
+        return Err(p);
     }
     if cfg.daily_tokens.is_some_and(|n| n < 1000) {
         return Err("The daily token limit must be at least 1,000 (or turned off).".into());
@@ -476,6 +479,7 @@ mod tests {
             context_tokens: None,
             compact_at: None,
             use_in_app: false,
+            generation: Default::default(),
         };
         assert!(validate(&c).is_err());
         c.base_url = "http://localhost:8080/v1".into();

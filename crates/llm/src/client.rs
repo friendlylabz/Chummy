@@ -44,6 +44,7 @@ pub struct Client {
     model: String,
     api_key: Option<String>,
     default_temperature: Option<f32>,
+    generation: crate::Generation,
     http: reqwest::Client,
 }
 
@@ -106,6 +107,7 @@ impl Client {
                 .map(|k| k.trim().to_string())
                 .filter(|k| !k.is_empty()),
             default_temperature: cfg.temperature,
+            generation: cfg.generation.clone(),
             http,
         })
     }
@@ -222,6 +224,7 @@ impl Client {
         if req.temperature.is_none() {
             req.temperature = self.default_temperature;
         }
+        req.generation = req.generation.or(&self.generation).for_kind(self.kind);
         let (body, mut decoder) = match self.kind {
             k if k.speaks_openai() => (
                 openai::body(&self.model, &req, k == ProviderKind::OpenAi),
@@ -384,6 +387,7 @@ mod tests {
             context_tokens: None,
             compact_at: None,
             use_in_app: false,
+            generation: Default::default(),
         }
     }
 
@@ -444,6 +448,34 @@ mod tests {
             .unwrap();
         assert_eq!(resp.text, "hi");
         assert_eq!(resp.usage.unwrap().output_tokens, 1);
+    }
+
+    #[tokio::test]
+    async fn sends_the_connections_generation_settings_it_supports() {
+        let body = r#"{"choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}"#;
+        let (base, server) = serve_once("application/json", body.into()).await;
+        let mut c = cfg(base, ProviderKind::OpenAi);
+        c.generation = crate::Generation {
+            top_p: Some(0.5),
+            min_p: Some(0.1), // OpenAI doesn't take it: never sent
+            seed: Some(1),
+            ..Default::default()
+        };
+        let client = Client::new(&c, Some("sk".into())).unwrap();
+        let req = ChatRequest {
+            messages: vec![Message::user("x")],
+            // The request's own setting wins over the connection's.
+            generation: crate::Generation {
+                seed: Some(9),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        client.chat(&req, |_| {}).await.unwrap();
+        let raw = server.await.unwrap();
+        assert!(raw.contains(r#""top_p":0.5"#), "{raw}");
+        assert!(raw.contains(r#""seed":9"#), "{raw}");
+        assert!(!raw.contains("min_p"), "{raw}");
     }
 
     #[test]

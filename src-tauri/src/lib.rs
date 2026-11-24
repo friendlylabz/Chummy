@@ -178,6 +178,7 @@ pub fn run() {
             agent_setup::set_agent_access,
             agent_setup::agent_loop_config,
             agent_setup::set_agent_block_config,
+            agent_setup::set_agent_model_options,
             agent_setup::export_agent_loop_config,
             agent_setup::import_agent_loop_config,
             agent_setup::usage_today,

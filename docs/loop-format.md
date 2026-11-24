@@ -284,7 +284,7 @@ Ports are written `name: kind`.
 | `input` | Message | none | `out: text` | none. Sends the chat message. |
 | `history` | Conversation | none | `out: text` | `max_messages` (10): recent messages, formatted `User: …` / `Assistant: …`. |
 | `fixed` | Fixed text | none | `out: text` | `text` (""). |
-| `llm` | Ask the model | `in: any` | `out: text` (Answer), `tool: exchange` (Tool call, only with tools and `tool_mode` not `off`), `reasoning: text`, `error: text` | `prompt` ("_INPUT_"), `system` (""), `model` (unset = the agent's model; otherwise a model connection id), `temperature` (unset = the model connection's setting; 0–2), `max_tokens` (unset = the model connection's longest answer, 1,024 unless changed in Settings → Models; 1–32,768), `tools` ("inherit"; see Tool switches), `tool_mode` ("native", "prompted" or "off"), `network` ("inherit"), `on_limit` ("ask", "wait" or "stop"), `tool_choice` ("auto" or "required"), `on_bad_call` ("retry", "fail" or "answer"), `retries` (2; 0–5). `_TOOLS_` in the prompt or system message lists the block's tools; `{{name}}` includes memory. Text input: `_INPUT_` in the prompt is replaced by it (or it's added after the prompt). Exchange input: the exchange is continued; a non-empty `system` replaces its system message for this call. `<think>…</think>` sections are moved from the answer to Reasoning. |
+| `llm` | Ask the model | `in: any` | `out: text` (Answer), `tool: exchange` (Tool call, only with tools and `tool_mode` not `off`), `reasoning: text`, `error: text` | `prompt` ("_INPUT_"), `system` (""), `model` (unset = the agent's model; otherwise a model connection id), `temperature` (unset = the model connection's setting; 0–2), `max_tokens` (unset = the model connection's longest answer, 1,024 unless changed in Settings → Models; 1–32,768), `tools` ("inherit"; see Tool switches), `tool_mode` ("native", "prompted" or "off"), `network` ("inherit"), `on_limit` ("ask", "wait" or "stop"), `tool_choice` ("auto" or "required"), `on_bad_call` ("retry", "fail" or "answer"), `retries` (2; 0–5), `reminder` (""; exchange input only: a note sent last, as a user message, for this call only and never kept in the exchange; `{{name}}` reads memory; empty after filling sends nothing). `_TOOLS_` in the prompt or system message lists the block's tools; `{{name}}` includes memory. Text input: `_INPUT_` in the prompt is replaced by it (or it's added after the prompt). Exchange input: the exchange is continued; a non-empty `system` replaces its system message for this call. `<think>…</think>` sections are moved from the answer to Reasoning. |
 | `run_tool` | Run tool | `in: exchange` | `out: exchange`, `error: text` | `max_result_chars` (50000), `on_error` ("tell_model" or "fail"), `confirm` (false). Runs the pending tool calls at the end of the exchange and adds their results. Longer results are cut, and so are results over about half the model's context (at least 12,000 characters). With `confirm`, each call waits for the user to allow it (see *Asking the user*). |
 | `ask_user` | Ask me | `in: any` | `out: text`, `error: text` | `prompt` ("_INPUT_"; `_INPUT_` is replaced by the input, or the input is added after it), `timeout_minutes` (0 = wait as long as it takes; at most 10080), `default_answer` (""). Asks the user and sends the answer on. If the wait times out, `default_answer` is used, or the run stops if it's empty. |
 | `exchange` | Start exchange | `in: any` | `out: exchange` | `system` (""), `roles` (["user"]). Text becomes one message with the first role; a list becomes one message per item, with the roles in turn. |
@@ -460,15 +460,21 @@ a function with comments, labels and notes, so it reads well in the editor.
    folder, like a project instruction file), lists the folder's top level
    (first 60 entries) into `{{folder}}`, and starts `{{todos}}` and
    `{{progress}}`, and `{{next}}` ("(not decided yet)").
-2. **Say what's next.** Before every *Work* call (the first one, after
-   each round of tool results, and after being sent back), a small extra
-   model call (no tools) gets the request, `{{todos}}` and the newest 2,500
-   characters of the work, and writes one short sentence about what it
-   will do next. Its first line goes to a *Pane output* block (so the
-   run's pane in Sessions shows what the agent is doing, newest first) and
-   is saved as `{{next}}`, which *Work*'s system message shows under "Your
-   next move", so the model sees what it meant to do and can follow it or
-   change course. If the call fails, the work just goes on.
+2. **Decide what's next** steers the work. Before every *Work* call (the
+   first one, after each round of tool results, and after being sent
+   back), a small extra model call (no tools, temperature 0) gets the
+   request, `{{todos}}`, the step until now (`{{next}}`) and the newest
+   2,500 characters of the work, and decides the ONE next step (the first
+   unchecked to-do if there is one) as a direct instruction of at most 25
+   words, or "Give the user the final answer now." Its first line goes to
+   a *Pane output* block (so the run's pane in Sessions shows each step,
+   newest first) and is saved as `{{next}}`. *Work*'s system message names
+   it under "Your current step" (work on this step only, no side tasks),
+   and *Work*'s **Reminder** sends it as the very last message ("Your step
+   now: …", marked as the agent's own planning, not the user), because
+   small models follow the last thing they read. The reminder isn't kept
+   in the conversation. If the call fails or decides nothing, `{{next}}`
+   says to carry on with the first unchecked to-do.
 3. **Agent loop.** The exchange starts with a system message that tells
    the model how to work (say what you're about to do,
    read before changing, don't repeat refused calls, ask before anything

@@ -121,6 +121,7 @@ fn main() {
             "set_agent_access",
             "agent_loop_config",
             "set_agent_block_config",
+            "set_agent_model_options",
             "export_agent_loop_config",
             "import_agent_loop_config",
             "usage_today",

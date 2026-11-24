@@ -335,6 +335,11 @@ class FakeBackend:
         time.sleep(0.05)
 
     def generate(self, messages, tools, max_tokens, temperature, stop=None) -> Iterator[str]:
+        # A step reminder sent last (the Chummy assistant's Work block) isn't
+        # what the rules answer: look past it.
+        if (messages and messages[-1]["role"] == "user"
+                and (messages[-1].get("content") or "").startswith("(A note from your own planning")):
+            messages = messages[:-1]
         last = next((m.get("content") or "" for m in reversed(messages) if m["role"] == "user"), "")
         low = last.lower()
         names = [t["function"]["name"] for t in (tools or [])]
@@ -344,10 +349,10 @@ class FakeBackend:
 
         if messages and messages[-1]["role"] == "tool":
             text = "Done: " + (messages[-1].get("content") or "")[:150]
-        elif "say what you will do next" in low:
-            # The Chummy assistant's "Say what's next": one short line.
+        elif "decide the one next step" in low:
+            # The Chummy assistant's "Decide what's next": one instruction.
             request = last.split("request:\n", 1)[-1].split("\n", 1)[0].strip()
-            text = "Working on: " + request[:80]
+            text = "Work on the request: " + request[:80]
         elif "clear enough to act on" in low and low.rstrip().endswith("most need answered."):
             text = "CLEAR"
         elif "whole goal in one go" in low:

@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::generation::Generation;
+
 /// Which wire protocol a provider speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -110,6 +112,14 @@ pub struct ProviderConfig {
     /// model is the user's, for their loops.
     #[serde(default, skip_serializing_if = "is_false")]
     pub use_in_app: bool,
+    /// Reasoning effort, sampling, penalties, seed and stop sequences
+    /// (all optional; unset means the server's default).
+    #[serde(default, skip_serializing_if = "is_default_generation")]
+    pub generation: Generation,
+}
+
+fn is_default_generation(g: &Generation) -> bool {
+    *g == Generation::default()
 }
 
 fn is_false(b: &bool) -> bool {
@@ -125,6 +135,9 @@ pub const MIN_CONTEXT: u32 = 512;
 
 /// The answer length new connections start with.
 pub const DEFAULT_MAX_TOKENS: u32 = 1024;
+/// The shortest and longest "Longest answer" accepted, in tokens.
+pub const MIN_ANSWER_TOKENS: u32 = 16;
+pub const MAX_ANSWER_TOKENS: u32 = 32_768;
 
 fn default_max_tokens() -> u32 {
     DEFAULT_MAX_TOKENS
@@ -339,6 +352,7 @@ mod tests {
             context_tokens: None,
             compact_at: None,
             use_in_app: false,
+            generation: Default::default(),
         };
         // Nothing known: the default, made room for at 80%.
         assert_eq!(p.context_window(), DEFAULT_CONTEXT);
@@ -380,6 +394,7 @@ mod tests {
             context_tokens: None,
             compact_at: None,
             use_in_app: false,
+            generation: Default::default(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
         assert!(json.contains("\"kind\":\"ollama\""));

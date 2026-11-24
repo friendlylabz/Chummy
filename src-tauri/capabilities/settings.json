@@ -59,6 +59,7 @@
     "allow-set-agent-access",
     "allow-agent-loop-config",
     "allow-set-agent-block-config",
+    "allow-set-agent-model-options",
     "allow-export-agent-loop-config",
     "allow-import-agent-loop-config",
     "allow-usage-today",

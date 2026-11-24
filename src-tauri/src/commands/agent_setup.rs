@@ -197,6 +197,27 @@ pub fn set_agent_block_config(
     })
 }
 
+/// Sets an agent's changes to its model's settings (empty: inherit all).
+#[tauri::command]
+pub fn set_agent_model_options(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    agent_id: String,
+    options: chummy_llm::ModelOverrides,
+) -> CmdResult<()> {
+    if let Some(p) = options.problems().into_iter().next() {
+        return Err(p);
+    }
+    if state.settings().agent(&agent_id).is_none() {
+        return Err("That agent no longer exists.".into());
+    }
+    state.update(&app, |s| {
+        if let Some(a) = s.agents.iter_mut().find(|a| a.id == agent_id) {
+            a.model_options = options;
+        }
+    })
+}
+
 /// Saves an agent's loop configuration to a file.
 #[tauri::command]
 pub async fn export_agent_loop_config(

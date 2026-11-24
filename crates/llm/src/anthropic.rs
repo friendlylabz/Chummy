@@ -87,7 +87,17 @@ pub(crate) fn body(model: &str, req: &ChatRequest) -> Value {
         }
     }
     if let Some(t) = req.temperature {
-        b["temperature"] = json!(t);
+        b["temperature"] = crate::generation::num(t);
+    }
+    let g = &req.generation;
+    if let Some(p) = g.top_p {
+        b["top_p"] = crate::generation::num(p);
+    }
+    if let Some(k) = g.top_k {
+        b["top_k"] = json!(k);
+    }
+    if !g.stop.is_empty() {
+        b["stop_sequences"] = json!(g.stop);
     }
     b
 }
@@ -308,5 +318,23 @@ mod tests {
         assert_eq!(msgs[2]["role"], "user");
         assert_eq!(msgs[2]["content"][0]["type"], "tool_result");
         assert_eq!(msgs[2]["content"][1]["text"], "and?");
+    }
+
+    #[test]
+    fn sends_top_p_top_k_and_stop_sequences() {
+        let req = ChatRequest {
+            messages: vec![Message::user("hi")],
+            generation: crate::Generation {
+                top_p: Some(0.8),
+                top_k: Some(5),
+                stop: vec!["END".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let b = body("m", &req);
+        assert_eq!(b["top_p"], 0.8);
+        assert_eq!(b["top_k"], 5);
+        assert_eq!(b["stop_sequences"][0], "END");
     }
 }

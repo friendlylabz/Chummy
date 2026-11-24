@@ -28,6 +28,7 @@ mod config;
 mod context;
 mod error;
 mod gemini;
+mod generation;
 mod openai;
 mod probe;
 mod sse;
@@ -36,10 +37,13 @@ mod types;
 pub use client::Client;
 pub use config::{
     DEFAULT_COMPACT_PERCENT, DEFAULT_CONTEXT, DEFAULT_DAILY_TOKENS, DEFAULT_MAX_TOKENS, LocalModel,
-    MIN_CONTEXT, Precision, Preset, ProviderConfig, ProviderKind, endpoint_problem, presets,
-    unencrypted_remote,
+    MAX_ANSWER_TOKENS, MIN_ANSWER_TOKENS, MIN_CONTEXT, Precision, Preset, ProviderConfig,
+    ProviderKind, endpoint_problem, presets, unencrypted_remote,
 };
 pub use error::LlmError;
+pub use generation::{
+    Generation, MAX_SEED, MAX_STOP, ModelOverrides, Param, ReasoningEffort, support,
+};
 pub use probe::{ProbeReport, ProbeStep, StepStatus, probe};
 pub use types::{
     ChatEvent, ChatRequest, ChatResponse, Message, Role, StopReason, ToolCall, ToolChoice,

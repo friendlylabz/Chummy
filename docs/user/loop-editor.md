@@ -20,7 +20,7 @@ The blocks you'll use most:
 
 | Block | What it does |
 |---|---|
-| **Ask the model** | Sends a prompt (with `_INPUT_` where the input goes) and outputs the Answer, a Tool call, the Reasoning, or Failed. |
+| **Ask the model** | Sends a prompt (with `_INPUT_` where the input goes) and outputs the Answer, a Tool call, the Reasoning, or Failed. With an exchange, its **Reminder** is sent last for that call only: a good place for "do this step now". |
 | **Run tool** | Runs the tool calls the model asked for and adds the results to the conversation. |
 | **Start / Add to / Read exchange** | Build and read a conversation with the model that flows between blocks. |
 | **Combine**, **Split**, **Join**, **Find matches** | Put text together, cut it up, or pick parts out. |
@@ -64,11 +64,13 @@ The recommended loop. One model works with tools, call after call, until it
 answers without one, like a coding agent. It says what it's doing, keeps
 its own to-do list for bigger jobs, reads `CHUMMY.md` from the folder,
 summarises the conversation when the context gets full, and is sent back
-(twice at most) if it stops with steps unchecked. Before each step it says
-in one short line what it'll do next: you see these lines in the run's
-pane, and the model sees its latest one too, which helps a small model
-stay on track. (That's one small extra model call per step; delete the
-*Say what's next* block in the Agent loop if you'd rather not.) Open it in the editor to
+(twice at most) if it stops with steps unchecked. It works **one step at a
+time**: before each step, *Decide what's next* picks the next step (the
+first unchecked to-do), you see it in the run's pane, and the model doing
+the work is told to do just that step, as the last thing it reads. This
+keeps small models from wandering off. (That's one small extra model call
+per step; delete the *Decide what's next* block in the Agent loop, and
+clear Work's Reminder, if you'd rather not.) Open it in the editor to
 see how it's built; every part has comments.
 
 ## Building loops that work

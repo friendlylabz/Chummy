@@ -147,9 +147,10 @@ listed in [docs/README.md](docs/README.md).
   without one. It says what it's doing as it goes, keeps its own to-do list
   (a checklist it rewrites as it works) for bigger jobs, reads `CHUMMY.md`
   from the agent's folder for your instructions, and summarises the
-  conversation when it gets long. Before each step it writes one short line
-  on what it'll do next: shown in the run's pane, and kept in its own
-  instructions so it stays on track. If it stops with steps unchecked or with
+  conversation when it gets long. It works one step at a time: before each
+  step a small call decides the next one (shown in the run's pane), and the
+  model is told to do just that step, as the last thing it reads, so small
+  models stay on task. If it stops with steps unchecked or with
   an empty answer, it's sent back to finish (twice at most). Onboarding
   offers it with one click, and a first agent gets it automatically.
 - **Templates.** Chummy assistant, Blank (a Message and a Reply block) and
@@ -211,7 +212,11 @@ listed in [docs/README.md](docs/README.md).
   report it; OpenAI's own API doesn't). Each connection has a context length
   (the reported one, or less if you set it) and a *Make room at* point (80%
   of the context by default), where the Chummy assistant summarises a long
-  conversation. **Use model within app** (off by default) is the only way
+  conversation. Optional **generation settings**: reasoning effort, top
+  P/K, min P, presence/frequency/repeat penalties, seed and stop sequences
+  (only those the kind of server accepts are sent), and every agent can
+  inherit, change or leave out each of them, temperature and answer length
+  included. **Use model within app** (off by default) is the only way
   Chummy calls a model outside your loops: with it on, Chummy also uses that
   model for small jobs of its own, like naming chats from their first reply;
   with it off, chats are named from your first message.

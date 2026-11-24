@@ -5,18 +5,22 @@ use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
 
+use crate::generation::num;
+
 use crate::types::{
     ChatEvent, ChatRequest, Message, Role, StopReason, ToolChoice, Usage, finish_tool_call,
     make_call_id,
 };
 
-pub(crate) fn body(model: &str, req: &ChatRequest, include_usage: bool) -> Value {
+/// `official`: the request goes to OpenAI itself (usage in the stream, and
+/// `max_completion_tokens`, which its reasoning models need).
+pub(crate) fn body(model: &str, req: &ChatRequest, official: bool) -> Value {
     let mut b = json!({
         "model": model,
         "messages": req.messages.iter().map(message).collect::<Vec<_>>(),
         "stream": true,
     });
-    if include_usage {
+    if official {
         b["stream_options"] = json!({ "include_usage": true });
     }
     if !req.tools.is_empty() {
@@ -34,10 +38,40 @@ pub(crate) fn body(model: &str, req: &ChatRequest, include_usage: bool) -> Value
         }
     }
     if let Some(t) = req.temperature {
-        b["temperature"] = json!(t);
+        b["temperature"] = num(t);
     }
     if let Some(m) = req.max_tokens {
-        b["max_tokens"] = json!(m);
+        b[if official {
+            "max_completion_tokens"
+        } else {
+            "max_tokens"
+        }] = json!(m);
+    }
+    let g = &req.generation;
+    if let Some(e) = g.reasoning_effort {
+        b["reasoning_effort"] = json!(e.as_str());
+    }
+    for (key, v) in [
+        ("top_p", g.top_p),
+        ("min_p", g.min_p),
+        ("presence_penalty", g.presence_penalty),
+        ("frequency_penalty", g.frequency_penalty),
+        // llama.cpp and LM Studio say repeat_penalty, vLLM repetition_penalty.
+        ("repeat_penalty", g.repeat_penalty),
+        ("repetition_penalty", g.repeat_penalty),
+    ] {
+        if let Some(x) = v {
+            b[key] = num(x);
+        }
+    }
+    if let Some(k) = g.top_k {
+        b["top_k"] = json!(k);
+    }
+    if let Some(s) = g.seed {
+        b["seed"] = json!(s);
+    }
+    if !g.stop.is_empty() {
+        b["stop"] = json!(g.stop);
     }
     b
 }
@@ -338,6 +372,14 @@ mod tests {
             tool_choice: ToolChoice::Required,
             temperature: Some(0.2),
             max_tokens: Some(10),
+            generation: crate::Generation {
+                reasoning_effort: Some(crate::ReasoningEffort::Low),
+                top_p: Some(0.5),
+                repeat_penalty: Some(1.1),
+                seed: Some(3),
+                stop: vec!["END".into()],
+                ..Default::default()
+            },
         };
         let b = body("m", &req, true);
         assert_eq!(b["tool_choice"], "required");
@@ -348,6 +390,18 @@ mod tests {
         assert_eq!(b["messages"][3]["tool_call_id"], "c1");
         assert_eq!(b["tools"][0]["function"]["name"], "f");
         assert_eq!(b["stream_options"]["include_usage"], true);
-        assert_eq!(b["max_tokens"], 10);
+        // OpenAI itself: max_completion_tokens (its reasoning models need it).
+        assert_eq!(b["max_completion_tokens"], 10);
+        assert!(b.get("max_tokens").is_none());
+        assert_eq!(b["reasoning_effort"], "low");
+        assert_eq!(b["top_p"], 0.5);
+        assert_eq!(b["seed"], 3);
+        assert_eq!(b["stop"][0], "END");
+        assert!(b.get("top_k").is_none());
+        let other = body("m", &req, false);
+        assert_eq!(other["max_tokens"], 10);
+        assert_eq!(other["repeat_penalty"], 1.1);
+        assert_eq!(other["temperature"], 0.2);
+        assert_eq!(other["repetition_penalty"], other["repeat_penalty"]);
     }
 }

@@ -1769,6 +1769,7 @@ impl<'a, H: Host> Runner<'a, H> {
         let prompted_mode = use_tools && p.tool_mode == ToolMode::Prompted;
 
         // The exchange this block continues, and what it sends the model.
+        let continues = matches!(input, Value::Exchange(_));
         let (base, mut messages) = match input {
             Value::Exchange(ex) => {
                 let mut msgs = ex.messages.clone();
@@ -1798,6 +1799,13 @@ impl<'a, H: Host> Runner<'a, H> {
                 (ex, msgs)
             }
         };
+        // A reminder goes last, for this call only: not part of `base`.
+        if continues && !p.reminder.trim().is_empty() {
+            let note = fill_template(&p.reminder, None, &self.memory);
+            if !note.trim().is_empty() {
+                messages.push(ExMessage::new(Role::User, note.trim()));
+            }
+        }
         if prompted_mode {
             messages = prompted::plain_history(&messages);
             let section = prompted::tool_section(&tools);
@@ -2313,6 +2321,53 @@ mod tests {
         assert_eq!(host.prompts.lock().unwrap()[0], "Q: hello");
         assert!(ev.iter().any(|e| matches!(e, Event::LlmText { .. })));
         assert_eq!((o.steps, o.llm_calls), (3, 1));
+    }
+
+    #[tokio::test]
+    async fn a_reminder_is_sent_last_with_an_exchange_only() {
+        let l = |reminder: &str, via_exchange: bool| {
+            let mut blocks = vec![
+                b("in", "input", json!({})),
+                b("goal", "store", json!({ "key": "goal" })),
+                b("start", "exchange", json!({ "system": "S" })),
+                b("ask", "llm", json!({ "reminder": reminder })),
+                b("o", "output", json!({})),
+            ];
+            let mut links = vec![ln("in", "out", "goal", "in"), ln("ask", "out", "o", "in")];
+            if via_exchange {
+                links.push(ln("goal", "out", "start", "in"));
+                links.push(ln("start", "out", "ask", "in"));
+            } else {
+                blocks.remove(2);
+                links.push(ln("goal", "out", "ask", "in"));
+            }
+            lp(blocks, links)
+        };
+        let host = Fake::with(&["ok", "ok", "ok"]);
+        go(&l("Your next step: {{goal}}", true), &host, "tidy up").await;
+        go(&l("{{nothing_saved}}", true), &host, "x").await;
+        go(&l("Your next step: {{goal}}", false), &host, "y").await;
+        let calls = host.calls.lock().unwrap();
+        let sent = |i: usize| -> Vec<(Role, String)> {
+            calls[i]
+                .messages
+                .iter()
+                .map(|m| (m.role, m.text.clone()))
+                .collect()
+        };
+        // Last, as a user message, filled from memory.
+        assert_eq!(
+            sent(0),
+            [
+                (Role::System, "S".into()),
+                (Role::User, "tidy up".into()),
+                (Role::User, "Your next step: tidy up".into()),
+            ]
+        );
+        // Empty once filled: nothing extra.
+        assert_eq!(sent(1).len(), 2);
+        // Text input: not used.
+        assert!(sent(2).iter().all(|(_, t)| !t.contains("next step")));
     }
 
     #[tokio::test]

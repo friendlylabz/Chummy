@@ -56,8 +56,16 @@ pub fn agent_host(
     origin: Option<Origin>,
 ) -> AppHost {
     let state = app.state::<AppState>();
+    // The agent's own model settings, over every connection it may call.
+    let (providers, model) = match agent.map(|a| &a.model_options) {
+        Some(o) if !o.is_empty() => (
+            s.providers.iter().map(|p| o.apply(p)).collect(),
+            model.map(|m| o.apply(&m)),
+        ),
+        _ => (s.providers.clone(), model),
+    };
     let setup = AgentSetup {
-        providers: s.providers.clone(),
+        providers,
         model,
         permissions: Permissions {
             tools: s.permissions.tools,

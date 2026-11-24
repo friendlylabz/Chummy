@@ -11,17 +11,19 @@ The shape (root loop):
 
 Inside the Agent loop (the core cycle):
 
-    request ─▶ Start exchange ─▶ Say what's next ─▶ Work (model + tools) ─ tool call ─▶ Show what it says ─▶ Run tool ─▶ Make room ─┐
-                                      ▲  ▲                                                                                     │
-                                      │  └─────────────────────────────────────────────────────────────────────────────────────┘
-                                      │
-                                      └── carry on ◀── Done? ◀── answer (no tool calls)
-                                                         └ done ─▶ answer out
+    request ─▶ Start exchange ─▶ Decide what's next ─▶ Work (model + tools) ─ tool call ─▶ Show what it says ─▶ Run tool ─▶ Make room ─┐
+                                         ▲  ▲                                                                                     │
+                                         │  └─────────────────────────────────────────────────────────────────────────────────────┘
+                                         │
+                                         └── carry on ◀── Done? ◀── answer (no tool calls)
+                                                            └ done ─▶ answer out
 
-Say what's next runs before every Work call: the model writes one short
-sentence about its next move, shown in the run's pane (a Pane output block)
-and kept as {{next}}, which Work's system message includes so the model
-sees what it meant to do.
+Decide what's next runs before every Work call and steers it: a small,
+tool-less call picks the ONE next step (the first unchecked to-do if there
+is one) as a direct instruction. It's shown in the run's pane (a Pane output
+block) and kept as {{next}}; Work's system message names it as the current
+step, and Work's Reminder sends it as the very last message ("Your step
+now: …"), because small models follow the last thing they read.
 
 What it copies from the original loop, at a basic level:
 - One model does the whole job: it is called again and again with the
@@ -80,8 +82,9 @@ SYSTEM = (
     "your final answer, with no tool calls: short and direct, what you did and what came out. Be honest: if "
     "something failed or you couldn't check it, say so. Use Markdown when it helps; no emojis unless asked.\n\n"
     "# Your to-do list now\n{{todos}}\n\n"
-    "# Your next move\nWhat you last said you'd do next (a note to yourself: follow it, or change course if what "
-    "you've found calls for it):\n{{next}}\n\n"
+    "# Your current step\n{{next}}\n"
+    "Work on this step only. Stay on the user's request: no side tasks. When the step is done, stop; the next "
+    "one is decided for you.\n\n"
     "# The user's folder (top level)\n{{folder}}\n\n"
     "# The user's instructions for this folder (CHUMMY.md)\n{{instructions}}\n\n"
     "# Conversation before this request\n{{conversation}}"
@@ -111,12 +114,20 @@ EMPTY_NUDGE = (
     "Your last reply was empty. If the work is done, give your final answer now. If not, carry on."
 )
 NEXT = (
-    "You are working on the user's request:\n{{request}}\n\n"
-    "Your to-do list:\n{{todos}}\n\n"
-    "The latest part of your work so far (the newest is at the end):\n_INPUT1_\n\n"
-    "In one short sentence of at most 15 words, say what you will do next. Start with a verb, for example: "
-    "\"Reading notes.txt to find this month's totals.\" If the work is done, say what you'll tell the user. "
-    "Write only that sentence."
+    "You are directing the work on the user's request:\n{{request}}\n\n"
+    "The to-do list:\n{{todos}}\n\n"
+    "The step being worked on until now:\n{{next}}\n\n"
+    "The latest part of the work (the newest is at the end):\n_INPUT1_\n\n"
+    "Decide the ONE next step to take now to finish the user's request. If the to-do list has an unchecked item, "
+    "the step is the first one. Stay on the request: no side tasks, nothing the user didn't ask for. "
+    "Write the step as a direct instruction in one sentence of at most 25 words, starting with a verb and naming "
+    "the file, tool or fact it's about, for example: \"Read notes.txt and find this month's total.\" "
+    "If the request is fully done, write: \"Give the user the final answer now.\" Write only that sentence."
+)
+NEXT_FALLBACK = "Carry on with the user's request: do the first unchecked item on the to-do list, or answer if it's done."
+WORK_REMINDER = (
+    "(A note from your own planning, not from the user.) Your step now: {{next}}\n"
+    "Do just this step: call a tool if it needs one. If the whole request is done, give the final answer."
 )
 COMPACTED = "_(The work so far got long, so I summarised it to make room.)_"
 
@@ -247,13 +258,15 @@ def show_fn():
     )
 
 
-def next_step_fn():
+def decide_next_fn():
     return fn(
-        "next_step", "Say what's next",
-        "Before each Work call: the model looks at the request, its to-do list and the newest part of the "
-        "work, and writes one short sentence about what it will do next. The sentence goes to the run's pane "
-        "(Sessions → the run's text button) and is kept as {{next}}, which Work's system message includes. "
-        "If this call fails, the work just goes on. The exchange passes through unchanged.",
+        "decide_next", "Decide what's next",
+        "Before each Work call: a small call without tools looks at the request, the to-do list, the step "
+        "until now and the newest part of the work, and decides the ONE next step, as a direct instruction. "
+        "It's shown in the run's pane (Sessions → the run's text button) and kept as {{next}}: Work's system "
+        "message names it as the current step and Work's Reminder sends it last, so the model stays on task. "
+        "If the call fails, {{next}} says to carry on with the to-do list. The exchange passes through "
+        "unchanged.",
         [("exchange", "Exchange", "ex", "in")],
         [("exchange", "Exchange", "ex", "out")],
         [
@@ -262,28 +275,32 @@ def next_step_fn():
               {"role": "any", "system_in_transcript": False}),
             b("recent", "store", "The newest part", 520, -200, {"key": "recent_work", "max_chars": 2500},
               "Keeps the newest 2,500 characters, so the prompt stays short."),
-            b("ask", "combine", "Ask what's next", 780, -200, {"inputs": 1, "format": NEXT}),
-            b("say", "llm", "Say what's next", 1040, -200, {"temperature": 0.2},
-              "A small extra call: one sentence."),
+            b("ask", "combine", "Ask for the next step", 780, -200, {"inputs": 1, "format": NEXT}),
+            b("decide", "llm", "Decide what's next", 1040, -200, {"temperature": 0},
+              "A small extra call: one instruction."),
             b("first", "regex", "First line", 1300, -200, {"pattern": FIRST_LINE}),
             b("line", "join", "As text", 1560, -200, {"separator": ""}),
-            b("said", "branch", "Said anything?", 1820, -200, {"pattern": HAS_TEXT}),
+            b("said", "branch", "Decided anything?", 1820, -200, {"pattern": HAS_TEXT}),
             b("pane", "pane", "Show in the pane", 2080, -300, {}, "One line in the run's pane."),
-            b("keep", "store", "Remember it", 2080, -100, {"key": "next", "max_chars": 300},
-              "{{next}}: Work's system message shows it."),
-            b("skip", "forward", "If that fails", 1300, 0, {}, "Nothing to show; the work goes on."),
+            b("keep", "store", "The step now", 2080, -100, {"key": "next", "max_chars": 300},
+              "{{next}}: Work's system message and Reminder use it."),
+            b("fallback", "combine", "If that fails", 1560, 0, {"inputs": 1, "format": NEXT_FALLBACK},
+              "No step decided: carry on with the to-do list."),
         ],
         [
             l("ex", "out", "read", "in"), l("read", "all", "recent", "in"),
-            l("recent", "out", "ask", "in1"), l("ask", "out", "say", "in"),
-            l("say", "out", "first", "in"), l("first", "out", "line", "in"),
+            l("recent", "out", "ask", "in1"), l("ask", "out", "decide", "in"),
+            l("decide", "out", "first", "in"), l("first", "out", "line", "in"),
             l("line", "out", "said", "value"), l("line", "out", "said", "test"),
             l("said", "yes", "pane", "in"), l("said", "yes", "keep", "in"),
-            l("say", "error", "skip", "in", "the call failed"),
+            l("said", "no", "fallback", "in1", "nothing decided"),
+            l("decide", "error", "fallback", "in1", "the call failed"),
+            l("fallback", "out", "keep", "in"),
         ],
-        [note("n1", 0, 200, "Says what the agent is about to do, for you (in the pane) and for itself (as "
-                            "{{next}}). The function's Exchange output fires once all of this is done, so Work "
-                            "always sees the newest {{next}}.", 380, 110)],
+        [note("n1", 0, 200, "Steers the agent: one step at a time, decided fresh before each Work call, for you "
+                            "(in the pane) and for the model (as {{next}}, sent last by Work's Reminder). The "
+                            "function's Exchange output fires once all of this is done, so Work always sees the "
+                            "newest {{next}}.", 400, 120)],
     )
 
 
@@ -388,8 +405,8 @@ def done_fn():
 def agent_fn():
     return fn(
         "agent", "Agent loop",
-        "The core loop: before each call the model says in one line what it will do next (shown in the run's "
-        "pane); then it's called with the conversation so far; if it calls tools, what it said is shown, the "
+        "The core loop: before each call, Decide what's next picks the one next step (shown in the run's pane "
+        "and sent to Work as its last message); then Work is called with the conversation so far; if it calls tools, what it said is shown, the "
         "calls run (your approvals apply) and the results go back to it; when it answers without tool calls, "
         "Done? decides whether that's the final answer.",
         [("request", "Request", "req", "in")],
@@ -398,11 +415,11 @@ def agent_fn():
             b("req", "forward", "Request", 0, 0),
             b("start", "exchange", "Start the exchange", 260, 0, {"system": SYSTEM, "roles": ["user"]},
               "The instructions (filled in fresh at every call), then your message."),
-            b("next", "function", "Say what's next", 560, 0, {"function": "next_step"},
-              "One line on what it will do next: to the pane, and to Work as {{next}}."),
-            b("work", "llm", "Work", 860, 0, {"retries": 3, "on_limit": "ask"},
-              "Uses the tools this agent allows. The system message (with {{todos}}) is filled in fresh at "
-              "every call."),
+            b("next", "function", "Decide what's next", 560, 0, {"function": "decide_next"},
+              "The one next step, as {{next}}: to the pane, and to Work."),
+            b("work", "llm", "Work", 860, 0, {"retries": 3, "on_limit": "ask", "reminder": WORK_REMINDER},
+              "Uses the tools this agent allows. The system message (with {{todos}} and {{next}}) is filled "
+              "in fresh at every call, and the Reminder sends the step last."),
             b("show", "function", "Show what it says", 1160, 250, {"function": "show"}),
             b("run", "run_tool", "Run tool", 1460, 250, {"max_result_chars": 12000},
               "Errors and calls you don't allow go back to the model as the result."),
@@ -423,7 +440,7 @@ def agent_fn():
             l("check", "again", "restart", "in", "not done yet"), l("restart", "out", "next", "exchange"),
             l("work", "error", "failed", "in", "the model call failed"),
         ],
-        [note("n1", 0, -500, "The core cycle: Say what's next ⇄ Work ⇄ Show what it says ⇄ Run tool ⇄ Make "
+        [note("n1", 0, -500, "The core cycle: Decide what's next ⇄ Work ⇄ Show what it says ⇄ Run tool ⇄ Make "
                              "room, until the model answers without tool calls. The loop's limits (model calls, tool calls) stop a "
                              "model that never finishes.", 460, 100)],
     )
@@ -456,23 +473,23 @@ def assistant():
             "The default loop. One agent loop, like a coding agent's: the model works with tools, call after call, "
             "until it "
             "answers without one. It says what it's doing as it goes, plans with its own to-do list when the work "
-            "has several steps, says in one line what it'll do next (in the run's pane: Sessions → the run's "
-            "text button), reads CHUMMY.md from the folder for your instructions, and summarises the "
+            "has several steps, decides the one next step before each call and is told to do just that (shown "
+            "in the run's pane: Sessions → the run's text button), reads CHUMMY.md from the folder for your instructions, and summarises the "
             "conversation when it gets long. If it stops with steps unchecked, it's sent back to finish (twice "
             "at most)."
         ),
-        # Every Work call has a small Say what's next call before it, so twice the model calls.
+        # Every Work call has a small Decide what's next call before it, so twice the model calls.
         "limits": {"max_steps": 10000, "max_llm_calls": 400, "max_tool_calls": 150},
         "blocks": blocks, "links": links,
-        "functions": [keep_todos_fn(), get_ready_fn(), show_fn(), next_step_fn(), make_room_fn(), done_fn(),
+        "functions": [keep_todos_fn(), get_ready_fn(), show_fn(), decide_next_fn(), make_room_fn(), done_fn(),
                       agent_fn()],
         "notes": [
             note("n1", 0, 450,
                  "Chummy assistant\n\n"
                  "1. Get ready: your request, the conversation, CHUMMY.md (your instructions for this folder) "
                  "and the folder's top level.\n"
-                 "2. Agent loop: one model does the work. Before each call it says in one line what it'll do next "
-                 "(shown in the run's pane, and kept as {{next}} for itself). Each answer with tool calls: what it "
+                 "2. Agent loop: one model does the work, one step at a time: before each call, Decide what's next "
+                 "picks the next step (shown in the run's pane) and Work is told to do just that. Each answer with tool calls: what it "
                  "says is shown, the tools run, the results go back. Long conversations are summarised.\n"
                  "3. Planning: the model keeps its own checklist (- [ ] / - [x]) as {{todos}}.\n"
                  "4. Done? An answer without tool calls is the final answer, unless it's empty or steps are "

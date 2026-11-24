@@ -420,12 +420,26 @@ Fixed:
   run log like any other step).
 - `run_pane` returns only those lines for a run id and is allowed in the
   main window only.
-- The Chummy assistant's *Say what's next* call is an ordinary model call
-  inside the loop (no tools, counted in the daily budget and the loop's
-  limits), so the "your model, your call" rule holds. Its sentence goes
-  back into the Work prompt as `{{next}}`, which a prompt injection in
-  tool results could steer; that's no more than the model reading those
-  results directly, and tool permissions and approvals still apply.
+- The Chummy assistant's *Decide what's next* call is an ordinary model
+  call inside the loop (no tools, counted in the daily budget and the
+  loop's limits), so the "your model, your call" rule holds. Its step goes
+  back to Work as `{{next}}` (system message and the Reminder sent last),
+  which a prompt injection in tool results could steer; that's no more
+  than the model reading those results directly, and tool permissions and
+  approvals still apply. The Reminder is marked as the agent's own
+  planning, not the user's words.
+
+## Generation settings and per-agent model settings
+
+- New settings on model connections (reasoning effort, sampling,
+  penalties, seed, stop sequences) and an agent's overrides of them only
+  change how the model answers; none touch tools, files, the network or
+  budgets. They're validated in Rust (ranges, at most 4 stop sequences of
+  1–100 characters) and only those a kind of server accepts are sent.
+- The address, key, context length, Make room at, daily limit and Use
+  model within app stay per connection only; an agent can't change them.
+- An agent's changes are logged to the system log ("model settings
+  changed") like its other settings.
 
 ## Known risks and what to do next
 

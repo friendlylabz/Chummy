@@ -45,6 +45,8 @@ const RETIRED: &[&str] = &[
     "d6415d0b4df576cd1c6fa6b6aa4640a59cffc3a6f58c31b1809c6b253be1463b",
     // As shipped up to v0.1.2, before "Say what's next" and the pane.
     "5a3062baee43b61d9de9b533087ae49300f6d3797b898d86fa4b1d74c3b6d2be",
+    // With "Say what's next" (3cb255e), before it became "Decide what's next".
+    "a03f89b17ffaf0f46dca168801246b3eeb7c83a36c567f50d3b9f94b4ef0211c",
 ];
 
 /// A loop's content as a SHA-256 hex string.

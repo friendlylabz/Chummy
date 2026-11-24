@@ -299,8 +299,10 @@ impl<S: Services> Host for AgentHost<S> {
             max_tokens: Some(
                 call.max_tokens
                     .unwrap_or(provider.max_tokens)
-                    .clamp(1, 32_768),
+                    .clamp(1, chummy_llm::MAX_ANSWER_TOKENS),
             ),
+            // The connection's (already with the agent's changes) fill in.
+            generation: Default::default(),
         };
         let mut malformed = Vec::new();
         let sent_chars: usize = req.messages.iter().map(|m| m.content.len()).sum::<usize>()
@@ -863,6 +865,7 @@ mod tests {
             context_tokens: None,
             compact_at: None,
             use_in_app: false,
+            generation: Default::default(),
         };
         let ledger = Arc::new(usage::UsageLedger::in_memory());
         let mut s = setup(None);

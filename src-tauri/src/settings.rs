@@ -54,6 +54,12 @@ pub struct Agent {
     /// Changed block settings, per loop id (Agent Loop Configuration).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub loop_config: BTreeMap<String, chummy_flow::Overrides>,
+    /// This agent's changes to its model's settings (temperature, longest
+    /// answer, reasoning effort, sampling…); anything not set inherits the
+    /// model connection's. Applies to every model call the agent makes; a
+    /// model block's own setting still wins.
+    #[serde(default, skip_serializing_if = "chummy_llm::ModelOverrides::is_empty")]
+    pub model_options: chummy_llm::ModelOverrides,
 }
 
 impl Agent {
@@ -498,6 +504,12 @@ pub fn log_changes(old: &Settings, new: &Settings) {
                             agent.name,
                             on(agent.network)
                         ),
+                    ));
+                }
+                if prev.model_options != agent.model_options {
+                    changes.push((
+                        Level::Info,
+                        format!("Agent {}'s model settings changed", agent.name),
                     ));
                 }
                 if prev.loop_config != agent.loop_config {

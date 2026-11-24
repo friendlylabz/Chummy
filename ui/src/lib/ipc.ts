@@ -9,6 +9,8 @@
  */
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { Generation, ModelOverrides } from "./generation";
+export type { Generation, ModelOverrides } from "./generation";
 
 // ---------------------------------------------------------------- types
 
@@ -22,6 +24,7 @@ export type ProviderKind =
   | "gemini"
   | "local";
 export type Precision = "half" | "int8" | "int4";
+
 
 export interface LocalModel {
   repo: string;
@@ -51,6 +54,8 @@ export interface ProviderConfig {
   compact_at?: number | null;
   /** "Use model within app": Chummy may use it outside loops (chat titles…). Off by default. */
   use_in_app?: boolean;
+  /** Reasoning effort, sampling, penalties, seed and stop sequences (unset: the server's default). */
+  generation?: Generation;
 }
 
 export const DEFAULT_CONTEXT = 8192;
@@ -95,6 +100,8 @@ export interface Agent {
   network?: boolean;
   /** Per-loop block settings that replace the loop file's, by loop id. */
   loop_config?: Record<string, Overrides>;
+  /** Changes to its model's settings; anything missing inherits the model's. */
+  model_options?: ModelOverrides;
 }
 
 /** Block settings by block id (or `function/block`); `null` removes a key. */
@@ -904,6 +911,9 @@ export const commands = {
   agentLoopConfig: (agentId: string) => call<AgentLoopConfig>("agent_loop_config", { agentId }),
   setAgentBlockConfig: (agentId: string, block: string, params: Record<string, unknown> | null) =>
     call<void>("set_agent_block_config", { agentId, block, params }),
+  /** Saves an agent's changes to its model's settings (`{}`: inherit all). */
+  setAgentModelOptions: (agentId: string, options: ModelOverrides) =>
+    call<void>("set_agent_model_options", { agentId, options }),
   exportAgentLoopConfig: (agentId: string) =>
     call<boolean>("export_agent_loop_config", { agentId }, () => false),
   importAgentLoopConfig: (agentId: string) =>

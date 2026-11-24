@@ -8,6 +8,7 @@
   import Icon from "$lib/components/Icon.svelte";
   import AgentAccess from "./AgentAccess.svelte";
   import AgentLoopConfig from "./AgentLoopConfig.svelte";
+  import AgentModelOptions from "./AgentModelOptions.svelte";
 
   let { gotoModels, gotoTools }: { gotoModels: () => void; gotoTools: () => void } = $props();
 
@@ -171,6 +172,7 @@
 
   {#if live}
     <AgentAccess agent={live} {gotoTools} />
+    <AgentModelOptions agent={live} />
     {#if loopId !== live.loop_id}
       <div class="card card-pad">
         <div class="notice"><Icon name="info" size={16} /><span>Save the agent to configure its new loop's blocks.</span></div>

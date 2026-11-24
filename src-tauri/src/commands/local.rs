@@ -185,6 +185,7 @@ fn add_local_provider(
         context_tokens: None,
         compact_at: None,
         use_in_app: false,
+        generation: Default::default(),
     };
     state.update(app, |s| {
         match s.providers.iter_mut().find(|p| p.id == id) {

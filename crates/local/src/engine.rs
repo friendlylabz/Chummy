@@ -365,6 +365,7 @@ mod tests {
             context_tokens: None,
             compact_at: None,
             use_in_app: false,
+            generation: Default::default(),
         };
         let report = probe(&Client::new(&provider, Some(ep.token.clone())).unwrap()).await;
         assert!(report.ok, "{:?}", report.steps);

@@ -226,6 +226,14 @@ mod tests {
         fn system(&self, i: usize) -> String {
             self.work.lock().unwrap()[i].messages[0].text.clone()
         }
+        /// Every message work call `i` sent.
+        fn sent(&self, i: usize) -> Vec<String> {
+            self.work.lock().unwrap()[i]
+                .messages
+                .iter()
+                .map(|m| m.text.clone())
+                .collect()
+        }
         fn calls(&self) -> usize {
             self.work.lock().unwrap().len()
         }
@@ -252,8 +260,8 @@ mod tests {
                 *self.summaries.lock().unwrap() += 1;
                 return Ok(says("SUMMARY of the work"));
             }
-            if last.contains("say what you will do next") {
-                assert!(call.tools.is_empty(), "saying what's next gets no tools");
+            if last.contains("decide the one next step") {
+                assert!(call.tools.is_empty(), "deciding what's next gets no tools");
                 let mut n = self.nexts.lock().unwrap();
                 *n += 1;
                 // A second line, which only the first line of is kept.
@@ -346,7 +354,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn assistant_says_whats_next_before_every_work_call() {
+    async fn assistant_decides_each_step_and_steers_work_with_it() {
         let host = Agentic::with(vec![echo("I'll look it up.", 1), says("It says hi.")]);
         let out = assist(&host, "What does echo say?").await;
         assert_eq!(out.status, RunStatus::Completed, "{out:?}");
@@ -355,30 +363,52 @@ mod tests {
         // One line each in the pane; never in the reply.
         assert_eq!(*host.pane.lock().unwrap(), ["Next move 1.", "Next move 2."]);
         assert_eq!(out.replies, ["I'll look it up.", "It says hi."]);
-        // Work sees its latest one in the system message.
+        // Work's system message names the current step…
         assert!(
-            host.system(0).contains("calls for it):\nNext move 1.\n"),
+            host.system(0)
+                .contains("# Your current step\nNext move 1.\n"),
             "{}",
             host.system(0)
         );
-        assert!(host.system(1).contains("calls for it):\nNext move 2.\n"));
+        assert!(
+            host.system(1)
+                .contains("# Your current step\nNext move 2.\n")
+        );
         assert!(!host.system(1).contains("rambling"));
+        // …and its Reminder sends it last, as a user message.
+        for (i, n) in [(0, 1), (1, 2)] {
+            let sent = host.sent(i);
+            let last = sent.last().unwrap();
+            assert!(
+                last.contains(&format!("Your step now: Next move {n}.")),
+                "{last}"
+            );
+            assert!(last.contains("not from the user"));
+            // Earlier reminders aren't kept in the conversation.
+            assert_eq!(
+                sent.iter().filter(|t| t.contains("Your step now")).count(),
+                1,
+                "{sent:#?}"
+            );
+        }
+        // The tool's result is still there, right before the reminder.
+        let sent = host.sent(1);
+        assert_eq!(sent[sent.len() - 2], host.tool_text, "{sent:#?}");
     }
 
     #[tokio::test]
-    async fn assistant_carries_on_if_saying_whats_next_fails() {
+    async fn assistant_carries_on_with_the_to_do_list_if_deciding_fails() {
         let host = Agentic {
-            fail_on: Some("say what you will do next"),
+            fail_on: Some("decide the one next step"),
             ..Agentic::with(vec![echo("Looking.", 1), says("Done.")])
         };
         let out = assist(&host, "Do it").await;
         assert_eq!(out.status, RunStatus::Completed, "{out:?}");
         assert_eq!(host.calls(), 2);
         assert!(host.pane.lock().unwrap().is_empty());
-        assert!(
-            host.system(1)
-                .contains("calls for it):\n(not decided yet)\n")
-        );
+        let fallback = "Carry on with the user's request: do the first unchecked item";
+        assert!(host.system(1).contains(fallback), "{}", host.system(1));
+        assert!(host.sent(1).last().unwrap().contains(fallback));
     }
 
     #[tokio::test]
@@ -397,10 +427,12 @@ mod tests {
             "{sys}"
         );
         assert!(sys.contains("User: Hello\n\nAssistant: Hi there."), "{sys}");
-        // Only the request goes in the exchange; the rest is the system message.
+        // Only the request goes in the exchange; the rest is the system
+        // message, and the step to take comes last (not kept).
         let first = &host.work.lock().unwrap()[0].messages;
-        assert_eq!(first.len(), 2);
+        assert_eq!(first.len(), 3);
         assert_eq!(first[1].text, "What's the capital of France?");
+        assert!(first[2].text.contains("Your step now"));
     }
 
     #[tokio::test]
@@ -473,7 +505,8 @@ mod tests {
         assert_eq!(out.replies[1], "I've read a.");
         let work = host.work.lock().unwrap();
         let back = &work[2].messages;
-        assert_eq!(back.len(), 2, "{back:?}");
+        // The fresh exchange, then the step reminder.
+        assert_eq!(back.len(), 3, "{back:?}");
         let msg = &back[1].text;
         assert!(msg.contains("The user's request:\nCopy a to b"), "{msg}");
         assert!(msg.contains("You then said:\nI've read a."), "{msg}");
@@ -559,7 +592,7 @@ mod tests {
         // about six of them.
         assert!((5..=7).contains(&i), "summarised at call {i}");
         assert!(work[i].messages[1].text.contains("Read everything"));
-        assert_eq!(work[i].messages.len(), 2);
+        assert_eq!(work[i].messages.len(), 3, "system, summary, step reminder");
         assert!(work[i].messages[0].text.starts_with("You are Chummy"));
     }
 

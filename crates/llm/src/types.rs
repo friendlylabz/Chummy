@@ -96,6 +96,10 @@ pub struct ChatRequest {
     pub temperature: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    /// Reasoning effort, sampling and the rest; unset ones come from the
+    /// connection, and only what its kind of server accepts is sent.
+    #[serde(default)]
+    pub generation: crate::Generation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

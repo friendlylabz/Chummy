@@ -194,6 +194,12 @@ pub struct LlmParams {
     /// Optional system message.
     #[serde(default)]
     pub system: String,
+    /// With an exchange input: a last note to the model, sent after the
+    /// conversation as a user message for this call only (never kept in
+    /// the exchange). `{{name}}` reads memory; empty (after filling) sends
+    /// nothing. Ignored for text input.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reminder: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     /// Longest answer; `None` uses the model connection's setting.
@@ -958,6 +964,15 @@ pub fn catalog() -> Vec<BlockInfo> {
                         "System message",
                         K::Multiline,
                         "Optional instructions sent as the system message.",
+                    )
+                },
+                ParamSpec {
+                    optional: true,
+                    ..p(
+                        "reminder",
+                        "Reminder (exchange only)",
+                        K::Multiline,
+                        "With an exchange input: a short note sent last, after the conversation, for this call only (it isn't kept in the exchange). Small models follow the last thing they read, so use it to keep them on task, e.g. \"Your next step: {{next}}\". {{name}} reads memory.",
                     )
                 },
                 ParamSpec {

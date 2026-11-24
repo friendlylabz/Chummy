@@ -182,6 +182,7 @@ pub async fn probe(client: &Client) -> ProbeReport {
         tool_choice: Default::default(),
         max_tokens: Some(512),
         temperature: Some(0.0),
+        generation: Default::default(),
     };
     match client.chat(&req, |_| {}).await {
         Ok(r) => {

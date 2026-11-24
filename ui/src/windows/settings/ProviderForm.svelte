@@ -5,6 +5,8 @@
   import Button from "$lib/components/Button.svelte";
   import Icon from "$lib/components/Icon.svelte";
   import ProbeResults from "./ProbeResults.svelte";
+  import GenerationFields from "./GenerationFields.svelte";
+  import type { Generation } from "$lib/generation";
 
   let {
     preset = null,
@@ -76,6 +78,8 @@
   const compactNow = $derived(compactThreshold(effective));
   const fmt = (n: number) => n.toLocaleString("en-US");
   let useInApp = $state(start?.use_in_app ?? false);
+  let generation = $state<Generation>(start?.generation ?? {});
+  let generationBad = $state(false);
   let removeKey = $state(false);
   const kind = start?.kind ?? p0?.kind ?? "open_ai_compatible";
   const needsKey = p0?.needs_key ?? (start ? start.has_key : false);
@@ -105,6 +109,7 @@
       context_tokens: contextBad ? null : contextValue,
       compact_at: compactBad ? null : compactValue,
       use_in_app: useInApp,
+      generation,
     };
   }
 
@@ -213,7 +218,8 @@
   <div class="field">
     <label for="pf-temp">Temperature (optional)</label>
     <input id="pf-temp" class="input" style="width: 120px" bind:value={temperature} inputmode="decimal" placeholder="Default" />
-    <span class="hint">Lower is more predictable. Small models often do best around 0.2–0.4.</span>
+    <span class="hint">Lower is more predictable. Small models often do best around 0.2–0.4. Each agent can change this and
+      the settings below for itself (Settings → Agents).</span>
   </div>
 
   <div class="field">
@@ -294,6 +300,8 @@
     </span>
   </div>
 
+  <GenerationFields {kind} bind:value={generation} bind:bad={generationBad} />
+
   {#if report}
     <div class="results"><ProbeResults {report} /></div>
   {/if}
@@ -307,7 +315,7 @@
     </Button>
     <span class="spacer"></span>
     <Button variant="ghost" onclick={oncancel}>Cancel</Button>
-    <Button variant="primary" onclick={save} disabled={saving || !name.trim() || !model.trim() || limitBad || maxBad || contextBad || compactBad}>
+    <Button variant="primary" onclick={save} disabled={saving || !name.trim() || !model.trim() || limitBad || maxBad || contextBad || compactBad || generationBad}>
       {start ? "Save" : "Add model"}
     </Button>
   </div>

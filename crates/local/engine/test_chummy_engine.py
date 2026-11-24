@@ -142,9 +142,16 @@ class SplitterTests(unittest.TestCase):
         self.assertTrue(say("But your to-do list still has unchecked steps:\n- [ ] Tell you").startswith("- [x]"))
         self.assertEqual(say("The user wrote:\nhi\n\nTitle for this conversation:"), "A Friendly Greeting")
         self.assertEqual(
-            say("You are working on the user's request:\nCount the days\n\nYour to-do list:\n(none yet)\n\n"
-                "In one short sentence of at most 15 words, say what you will do next."),
-            "Working on: Count the days")
+            say("You are directing the work on the user's request:\nCount the days\n\nThe to-do list:\n(none yet)\n\n"
+                "Decide the ONE next step to take now to finish the user's request."),
+            "Work on the request: Count the days")
+        # A step reminder sent last doesn't hide a tool result before it.
+        gen = ce.FakeBackend(ce.PARSERS["hermes"]).generate(
+            [{"role": "user", "content": "What time is it"},
+             {"role": "tool", "content": "12:00"},
+             {"role": "user", "content": "(A note from your own planning, not from the user.) Your step now: x"}],
+            tools, 100, None, None)
+        self.assertEqual("".join(gen), "Done: 12:00")
 
 
 def free_port():

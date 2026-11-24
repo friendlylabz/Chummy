@@ -70,10 +70,35 @@ pub(crate) fn body(req: &ChatRequest) -> Value {
     }
     let mut cfg = Map::new();
     if let Some(t) = req.temperature {
-        cfg.insert("temperature".into(), json!(t));
+        cfg.insert("temperature".into(), crate::generation::num(t));
     }
     if let Some(m) = req.max_tokens {
         cfg.insert("maxOutputTokens".into(), json!(m));
+    }
+    let g = &req.generation;
+    for (key, v) in [
+        ("topP", g.top_p),
+        ("presencePenalty", g.presence_penalty),
+        ("frequencyPenalty", g.frequency_penalty),
+    ] {
+        if let Some(x) = v {
+            cfg.insert(key.into(), crate::generation::num(x));
+        }
+    }
+    if let Some(k) = g.top_k {
+        cfg.insert("topK".into(), json!(k));
+    }
+    if let Some(s) = g.seed {
+        cfg.insert("seed".into(), json!(s));
+    }
+    if !g.stop.is_empty() {
+        cfg.insert("stopSequences".into(), json!(g.stop));
+    }
+    if let Some(e) = g.reasoning_effort {
+        cfg.insert(
+            "thinkingConfig".into(),
+            json!({ "thinkingBudget": e.gemini_budget() }),
+        );
     }
     if !cfg.is_empty() {
         b["generationConfig"] = Value::Object(cfg);
@@ -239,6 +264,24 @@ mod tests {
                 })
             }
         ));
+    }
+
+    #[test]
+    fn sends_generation_settings_and_a_thinking_budget() {
+        let req = ChatRequest {
+            messages: vec![Message::user("q")],
+            generation: crate::Generation {
+                reasoning_effort: Some(crate::ReasoningEffort::None),
+                top_k: Some(20),
+                stop: vec!["X".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let c = &body(&req)["generationConfig"];
+        assert_eq!(c["topK"], 20);
+        assert_eq!(c["stopSequences"][0], "X");
+        assert_eq!(c["thinkingConfig"]["thinkingBudget"], 0);
     }
 
     #[test]
