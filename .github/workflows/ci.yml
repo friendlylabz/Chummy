@@ -18,6 +18,8 @@ jobs:
   wasi-python:
     name: Python for WASI
     uses: ./.github/workflows/wasi-python.yml
+    permissions:
+      contents: read
 
   frontend:
     name: Frontend (typecheck + build)

@@ -16,8 +16,11 @@ on:
         type: boolean
         default: false
 
-permissions:
-  contents: read
+# No permissions block here on purpose: a called workflow's own block caps
+# its token, which took away the id-token and attestations permissions the
+# release grants for the attestation ("Unable to get
+# ACTIONS_ID_TOKEN_REQUEST_URL"). Each caller sets what it needs: CI
+# contents: read; the release adds id-token and attestations write.
 
 jobs:
   build:
