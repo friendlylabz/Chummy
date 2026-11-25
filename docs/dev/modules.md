@@ -17,7 +17,7 @@ ui/          Svelte 5 frontend, one Vite page per window
 | `sandbox` | The **folder jail**: validating a workspace choice, the always-refused places (`protected.rs`), and `Jail`, file access through a `cap-std` handle so nothing escapes the folder. |
 | `scheduler` | Jobs and triggers, the run planner, folder watching, run history, and the `AskBroker` that carries every question and approval. |
 | `log` | The system log, run logs (JSON lines, one file per run), log encryption (XChaCha20-Poly1305, key export with Argon2id), search and retention. |
-| `store` | The Chummy folder layout, atomic versioned JSON documents with backups, and secrets in the OS keychain. |
+| `store` | The Chummy folder layout, atomic versioned JSON documents with backups, secrets in the OS keychain, and the **pause vault** (`paused.rs`: paused chat runs sealed with one-time keys held in the keychain). |
 | `local` | The basic built-in engine: Hugging Face checks, downloads, memory estimates, the uv-installed runtime, and `engine/chummy_engine.py` (with a `--fake` model for tests). |
 | `http` | Shared HTTP clients: the operating system checks certificates, and errors say what went wrong. |
 
@@ -28,7 +28,8 @@ ui/          Svelte 5 frontend, one Vite page per window
   window may call which command.
 - `state.rs` (`AppState`), `settings.rs` (versioned settings and
   migrations), `chats.rs` (chats per agent), `library.rs` (saved loops and
-  built-in upgrades), `trust.rs` (the signed list of trusted loops), `host.rs` (wires the app into `runner`), `in_app.rs`
+  built-in upgrades), `trust.rs` (the signed list of trusted loops), `paused.rs`
+  (paused chat runs: keeping, listing, resuming once, discarding), `host.rs` (wires the app into `runner`), `in_app.rs`
   (the only door to model calls outside loops).
 - `commands/`: one file per area (chat, agents, providers, loops, tools,
   jobs, logs, sandbox, review…). `commands/chat.rs` owns the run lifecycle:
@@ -62,3 +63,8 @@ ui/          Svelte 5 frontend, one Vite page per window
    to windows as `run:event`.
 4. When it ends, the replies (with the run's figures: time taken, calls,
    steps, tokens) are saved to the chat, and `run:finished` is sent.
+5. A paused run (`pause_run`, or a model it couldn't reach) ends the same
+   way, with what it said so far, and its `RunState` is sealed for the chat
+   (`paused.rs`; `paused:changed` tells windows). `resume_run` checks the
+   agent, its workspace and model, takes the sealed run (deleting it) and
+   starts a new run with `run_with` and that state.

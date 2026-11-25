@@ -31,6 +31,8 @@ export interface RunView {
   pane: string[];
   /** Its response so far, in order: replies, and questions with your answers. */
   parts: Part[];
+  /** Asked to pause: it will after its current block. */
+  pausing: boolean;
 }
 
 /** One part of a run's response (as chat message roles). */
@@ -123,6 +125,10 @@ class RunsStore {
           break;
       }
     });
+    await events.onRunPausing(({ run_id }) => {
+      const r = this.runs[run_id];
+      if (r) r.pausing = true;
+    });
     await events.onRunSaid(({ run_id, role, text }) => {
       const r = this.runs[run_id];
       if (r) addPart(r.parts, role, text);
@@ -153,7 +159,20 @@ class RunsStore {
       startedMs,
       pane: [],
       parts: [],
+      pausing: false,
     };
+  }
+
+  /** Asks a chat run to pause after its current block. */
+  async pause(runId: string) {
+    const r = this.runs[runId];
+    if (r) r.pausing = true;
+    try {
+      await commands.pauseRun(runId);
+    } catch (e) {
+      if (r) r.pausing = false;
+      throw e;
+    }
   }
 
   private queueStatus(run: string, block: string, label: string | null) {
@@ -192,7 +211,11 @@ class RunsStore {
     const out = new Map<string, string>();
     for (const r of this.active) {
       const id = r.info.run_id;
-      const label = r.waitingForYou ? "Waiting for you" : (best.get(id)?.label ?? this.shown.get(id) ?? "Working");
+      const label = r.pausing
+        ? "Pausing"
+        : r.waitingForYou
+          ? "Waiting for you"
+          : (best.get(id)?.label ?? this.shown.get(id) ?? "Working");
       out.set(id, label);
     }
     this.shown = new Map([...out].filter(([, l]) => l !== "Waiting for you"));

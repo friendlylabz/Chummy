@@ -80,6 +80,8 @@ impl JobRunner for AppJobs {
                 job_id: Some(job.id.clone()),
                 started_at: now(),
                 cancel: req.cancel.clone(),
+                pause: None,
+                pausable: false,
                 pane: Default::default(),
                 said: Default::default(),
             },
@@ -406,13 +408,13 @@ mod tests {
         assert_eq!(new_id("state", &[]), "job", "reserved names aren't used");
         let long = new_id(&"a".repeat(100), &[]);
         assert!(long.len() <= 40 && chummy_scheduler::job::valid_id(&long));
-    }
 
-    #[test]
-    fn causes_read_well() {
-        assert_eq!(
-            chummy_scheduler::Cause::Manual.describe(),
-            "Started by hand"
-        );
+        // (was causes_read_well)
+        {
+            assert_eq!(
+                chummy_scheduler::Cause::Manual.describe(),
+                "Started by hand"
+            );
+        }
     }
 }

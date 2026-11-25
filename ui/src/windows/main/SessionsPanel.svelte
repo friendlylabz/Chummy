@@ -4,6 +4,8 @@
   import { runs } from "$lib/stores/runs.svelte";
   import { settings } from "$lib/stores/settings.svelte";
   import { asks } from "$lib/stores/asks.svelte";
+  import { paused } from "$lib/stores/paused.svelte";
+  import { ago } from "$lib/format";
   import EmptyState from "$lib/components/EmptyState.svelte";
   import Icon from "$lib/components/Icon.svelte";
   import RunPane from "./RunPane.svelte";
@@ -24,6 +26,8 @@
     agent: string | null;
     chatId: string | null;
     step: string;
+    pausable: boolean;
+    pausing: boolean;
   }
   let active = $state<Row[]>([]);
   /** The run whose pane is shown instead of the lists, if any. */
@@ -41,6 +45,8 @@
       agent: r.info.agent_id,
       chatId: r.info.chat_id ?? null,
       step: stepText(status.get(r.info.run_id) ?? "Working"),
+      pausable: r.info.pausable,
+      pausing: r.pausing,
     }));
     if (JSON.stringify(next) !== JSON.stringify(active)) active = next;
     const busy = agents.filter((a) => runs.forAgent(a.id)).map((a) => a.id);
@@ -59,9 +65,94 @@
     const t = setInterval(snapshot, 500);
     return () => clearInterval(t);
   });
+
+  // The panel's width: drag its left edge (or use the arrow keys on it);
+  // double-click puts it back. Remembered in this window's storage.
+  const DEFAULT_W = 280;
+  const MIN_W = 220;
+  const maxWidth = () => Math.max(MIN_W, Math.min(640, Math.round(window.innerWidth * 0.5)));
+  const clampWidth = (w: number) => Math.round(Math.min(maxWidth(), Math.max(MIN_W, w)));
+  function savedWidth(): number {
+    try {
+      const v = Number(localStorage.getItem("chummy.sessionsWidth"));
+      return Number.isFinite(v) && v > 0 ? clampWidth(v) : DEFAULT_W;
+    } catch {
+      return DEFAULT_W;
+    }
+  }
+  let width = $state(savedWidth());
+  let dragging = $state(false);
+  let panel = $state<HTMLElement | null>(null);
+  function keep(w: number) {
+    width = clampWidth(w);
+    try {
+      localStorage.setItem("chummy.sessionsWidth", String(width));
+    } catch {
+      // Not kept: fine.
+    }
+  }
+  function startDrag(e: PointerEvent) {
+    if (e.button !== 0 || !panel) return;
+    e.preventDefault();
+    const right = panel.getBoundingClientRect().right;
+    const handle = e.currentTarget as HTMLElement;
+    handle.setPointerCapture(e.pointerId);
+    dragging = true;
+    const move = (ev: PointerEvent) => (width = clampWidth(right - ev.clientX));
+    const stop = () => {
+      dragging = false;
+      keep(width);
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", stop);
+      handle.removeEventListener("pointercancel", stop);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", stop);
+    handle.addEventListener("pointercancel", stop);
+  }
+  function onKey(e: KeyboardEvent) {
+    const step = e.shiftKey ? 48 : 16;
+    if (e.key === "ArrowLeft") keep(width + step);
+    else if (e.key === "ArrowRight") keep(width - step);
+    else if (e.key === "Home") keep(DEFAULT_W);
+    else return;
+    e.preventDefault();
+  }
+  // A smaller window can't keep a panel wider than half of it.
+  onMount(() => {
+    const fit = () => (width = clampWidth(width));
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  });
 </script>
 
-<aside class="panel" class:open aria-label="Sessions" aria-hidden={!open} inert={!open}>
+<aside
+  class="panel"
+  class:open
+  class:dragging
+  aria-label="Sessions"
+  aria-hidden={!open}
+  inert={!open}
+  bind:this={panel}
+  style:--sessions-w="{width}px"
+>
+  {#if open}
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+    <div
+      class="resize"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize the sessions panel"
+      aria-valuenow={width}
+      aria-valuemin={MIN_W}
+      aria-valuemax={maxWidth()}
+      tabindex="0"
+      title="Drag to resize · double-click to reset"
+      onpointerdown={startDrag}
+      ondblclick={() => keep(DEFAULT_W)}
+      onkeydown={onKey}
+    ></div>
+  {/if}
   {#if paneFor}
     <div class="inner">
       <RunPane runId={paneFor.id} title={paneFor.title} chat={paneFor.chat} onclose={() => (paneFor = null)} />
@@ -115,6 +206,18 @@
           <button class="icon-btn" type="button" aria-label="Show the run's pane" title="Show what it's doing (its pane)" onclick={() => (paneFor = r)}>
             <Icon name="text" size={14} />
           </button>
+          {#if r.pausable}
+            <button
+              class="icon-btn"
+              type="button"
+              aria-label="Pause"
+              title={r.pausing ? "Pausing after this step…" : "Pause"}
+              disabled={r.pausing}
+              onclick={() => runs.pause(r.id).catch(() => {})}
+            >
+              <Icon name="pause" size={14} />
+            </button>
+          {/if}
           <button class="icon-btn" type="button" aria-label="Stop" title="Stop" onclick={() => commands.stopRun(r.id)}>
             <Icon name="stop" size={14} />
           </button>
@@ -125,6 +228,46 @@
         </EmptyState>
       {/each}
     </div>
+
+    {#if paused.list.length}
+      <div class="group">
+        <div class="group-title">Paused</div>
+        {#each paused.list as p (p.chat_id)}
+          {@const agentName = agents.find((a) => a.id === p.agent_id)?.name ?? "Agent"}
+          <div class="run paused">
+            <span class="paused-icon"><Icon name="pause" size={12} /></span>
+            <button class="run-text" type="button" title="Open this chat" onclick={() => openChat(p.agent_id, p.chat_id)}>
+              <div class="run-title">{agentName}</div>
+              {#if p.chat_title}<div class="run-chat"><Icon name="chat" size={12} /><span>{p.chat_title}</span></div>{/if}
+              <div class="run-step" title={p.reason ?? undefined}>
+                {p.reason ? "Couldn't reach the model" : "Paused"} · {ago(p.paused_at)}{p.saved ? "" : " · until Chummy quits"}
+              </div>
+              {#if paused.errors[p.chat_id]}<div class="run-error">{paused.errors[p.chat_id]}</div>{/if}
+            </button>
+            <button
+              class="icon-btn"
+              type="button"
+              aria-label="Resume"
+              title="Resume where it stopped"
+              disabled={paused.busy[p.chat_id]}
+              onclick={() => paused.resume(p)}
+            >
+              <Icon name="play" size={14} />
+            </button>
+            <button
+              class="icon-btn"
+              type="button"
+              aria-label="Discard"
+              title="Discard the paused run"
+              disabled={paused.busy[p.chat_id]}
+              onclick={() => paused.discard(p)}
+            >
+              <Icon name="trash" size={14} />
+            </button>
+          </div>
+        {/each}
+      </div>
+    {/if}
 
     <div class="group">
       <div class="group-title">Agents</div>
@@ -149,6 +292,7 @@
 
 <style>
   .panel {
+    position: relative;
     flex: none;
     width: 0;
     overflow: hidden;
@@ -161,6 +305,26 @@
   .panel.open {
     width: var(--sessions-w);
     border-left-color: var(--border);
+  }
+  .panel.dragging {
+    transition: none;
+    user-select: none;
+  }
+  .resize {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 2;
+    width: 6px;
+    cursor: col-resize;
+    touch-action: none;
+  }
+  .resize:hover,
+  .resize:focus-visible,
+  .dragging .resize {
+    background: color-mix(in srgb, var(--accent) 35%, transparent);
+    outline: none;
   }
   .inner {
     width: var(--sessions-w);
@@ -272,9 +436,25 @@
     color: var(--text-muted);
     cursor: pointer;
   }
-  .icon-btn:hover {
+  .icon-btn:hover:not(:disabled) {
     background: var(--surface-hover);
     color: var(--text);
+  }
+  .icon-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+  .paused-icon {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 7px;
+    color: var(--text-muted);
+  }
+  .run-error {
+    color: var(--danger);
+    font-size: var(--text-xs);
+    white-space: normal;
   }
   .agent {
     display: flex;

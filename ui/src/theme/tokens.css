@@ -36,4 +36,7 @@
   --topbar-h: 48px;
   --drawer-w: 264px;
   --sessions-w: 280px;
+  /* The chat's column: the whole width in small windows, then most of it
+     (it grows with the window rather than stopping at a fixed size). */
+  --chat-w: max(min(760px, 100%), 88%);
 }

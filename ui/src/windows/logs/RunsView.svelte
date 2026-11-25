@@ -404,6 +404,9 @@
   .status.stopped {
     background: var(--warn);
   }
+  .status.paused {
+    background: var(--text-muted);
+  }
   .status.running {
     background: var(--accent);
     animation: pulse 1.2s infinite;

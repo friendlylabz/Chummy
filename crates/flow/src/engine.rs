@@ -20,8 +20,15 @@
 //! - A **function** block runs its own blocks the same way, as a fresh run
 //!   seeded with its inputs, and sends out what reached its outputs. Steps,
 //!   model calls and tool calls inside count toward the loop's limits.
+//! - A run can be **paused** ([`run_with`] with a pause flag): it stops at the
+//!   next block boundary, in whatever function call it is in, and hands back
+//!   its whole state as a [`RunState`]. [`run_with`] given that state carries
+//!   on exactly where it stopped. A block waiting on the person (a question,
+//!   a tool approval, a daily token limit) is interrupted and runs again on
+//!   resuming, unless a tool already ran in it; a model that can't be reached
+//!   pauses the run at the model block, which asks again on resuming.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,6 +44,7 @@ use crate::blocks::{
 use crate::blocks::{Switch, ToolSwitches};
 use crate::exchange::{ExMessage, Exchange, Role, ToolCall, ToolInfo, check_arguments};
 use crate::format::{Block, FunctionDef, Link, LoopFile};
+use crate::generation::GenerationOverrides;
 use crate::log::{LOG_VALUE_CHARS, ModelLog, PortLog, StepLog, StepStatus, logged, now_ms};
 use crate::prompted;
 use crate::text::{
@@ -178,7 +186,8 @@ pub struct ChatTurn {
 }
 
 /// What a run starts with.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RunInputs {
     /// The chat message; every Message block sends it.
     pub message: String,
@@ -199,6 +208,9 @@ pub struct LlmCall {
     pub temperature: Option<f32>,
     /// `None`: the model connection's own setting.
     pub max_tokens: Option<u32>,
+    /// The block's own reasoning effort, sampling and the rest (empty: all
+    /// inherited).
+    pub generation: GenerationOverrides,
     /// Model connection id; `None` means the agent's model.
     pub model: Option<String>,
 }
@@ -220,6 +232,40 @@ pub struct LlmAnswer {
     pub reasoning: String,
     pub calls: Vec<ToolCall>,
     pub malformed: Vec<MalformedCall>,
+}
+
+/// Why a model call failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LlmFailure {
+    pub message: String,
+    /// The model couldn't be reached at all (no connection, timed out, the
+    /// server is down or overloaded), as opposed to refusing the request.
+    /// A run that can pause pauses on this instead of failing.
+    pub unavailable: bool,
+}
+
+impl LlmFailure {
+    pub fn unavailable(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            unavailable: true,
+        }
+    }
+}
+
+impl From<String> for LlmFailure {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            unavailable: false,
+        }
+    }
+}
+
+impl From<&str> for LlmFailure {
+    fn from(message: &str) -> Self {
+        message.to_string().into()
+    }
 }
 
 /// A tool's result.
@@ -296,7 +342,7 @@ pub trait Host: Send + Sync {
         &self,
         call: LlmCall,
         on_text: &mut (dyn FnMut(&str) + Send),
-    ) -> impl Future<Output = Result<LlmAnswer, String>> + Send;
+    ) -> impl Future<Output = Result<LlmAnswer, LlmFailure>> + Send;
     /// A tool that's installed and switched on, if there is one by that name.
     /// A tool the app allows (Permissions and Settings → Tools), or `None`.
     fn tool_info(&self, name: &str) -> Option<ToolInfo>;
@@ -373,7 +419,8 @@ impl Default for ContextLimits {
 }
 
 /// Token figures for one run (one turn of a chat), all estimates.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TurnUsage {
     /// Tokens this turn added to context: the message, every model answer
     /// (with its tool calls) and every tool result.
@@ -527,6 +574,12 @@ pub enum RunStatus {
         block: Option<String>,
         error: String,
     },
+    /// Paused: [`RunOutcome::paused`] holds what it needs to carry on.
+    Paused {
+        /// Why, when the run paused itself (a model it couldn't reach);
+        /// `None` when it was asked to.
+        reason: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -540,6 +593,71 @@ pub struct RunOutcome {
     /// Blocks left with some, but not all, of their inputs.
     pub waiting: Vec<String>,
     pub usage: TurnUsage,
+    /// A paused run's state, to give [`run_with`] to carry on. Never sent to
+    /// windows: it holds everything the run has seen.
+    #[serde(skip)]
+    pub paused: Option<Box<RunState>>,
+}
+
+/// Version of [`RunState`]; a state of any other version isn't resumed.
+pub const RUN_STATE_VERSION: u32 = 1;
+
+/// Everything a paused run needs to carry on: the state of the loop and of
+/// each function call it was inside, and what the run had gathered.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunState {
+    pub version: u32,
+    /// The loop's graph first, then one per function call it was inside,
+    /// innermost last.
+    frames: Vec<FrameState>,
+    replies: Vec<String>,
+    steps: u32,
+    llm_calls: u32,
+    tool_calls: u32,
+    noticed: Vec<String>,
+    memory: BTreeMap<String, String>,
+    outlines: BTreeMap<String, crate::outline::Outline>,
+    usage: TurnUsage,
+}
+
+impl RunState {
+    /// The replies the run made before pausing.
+    pub fn replies(&self) -> &[String] {
+        &self.replies
+    }
+
+    /// Forgets the replies made before pausing (once they're shown), so the
+    /// resumed run reports only its new ones.
+    pub fn clear_replies(&mut self) {
+        self.replies.clear();
+    }
+
+    pub fn steps(&self) -> u32 {
+        self.steps
+    }
+}
+
+/// One graph's state at a block boundary.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FrameState {
+    queues: BTreeMap<String, Vec<VecDeque<Value>>>,
+    ready: VecDeque<String>,
+    scheduled: BTreeMap<String, usize>,
+    remembered: BTreeMap<String, Value>,
+    collected: Vec<(String, Value)>,
+    /// The block that was running and runs (or carries on) first: a
+    /// function block whose call is the next frame, or a block that was
+    /// interrupted and runs again.
+    pending: Option<PendingBlock>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PendingBlock {
+    block: String,
+    args: Vec<Value>,
 }
 
 type Outputs = Vec<(String, Value)>;
@@ -563,6 +681,8 @@ struct Frame<'a> {
     exposed: HashMap<(String, String), Vec<String>>,
     /// What reached the function's outputs.
     collected: Outputs,
+    /// A block to run (or carry on) before anything else, when resuming.
+    pending: Option<PendingBlock>,
 }
 
 impl<'a> Frame<'a> {
@@ -579,6 +699,7 @@ impl<'a> Frame<'a> {
             remembered: HashMap::new(),
             exposed: HashMap::new(),
             collected: vec![],
+            pending: None,
         };
         for b in blocks {
             // Validation passed, so every block parses.
@@ -649,6 +770,86 @@ impl<'a> Frame<'a> {
         added
     }
 
+    /// This graph's state, to pause.
+    fn save(&self, pending: Option<PendingBlock>) -> FrameState {
+        FrameState {
+            queues: self
+                .queues
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            ready: self.ready.clone(),
+            scheduled: self
+                .scheduled
+                .iter()
+                .filter(|(_, n)| **n > 0)
+                .map(|(k, v)| (k.clone(), *v))
+                .collect(),
+            remembered: self
+                .remembered
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            collected: self.collected.clone(),
+            pending,
+        }
+    }
+
+    /// Takes up a paused state of this graph. Everything in it must fit
+    /// this graph's blocks and ports exactly.
+    fn restore(&mut self, s: FrameState) -> Result<(), String> {
+        let bad = |what: &str| Err(format!("the paused run doesn't fit this loop ({what})"));
+        if s.queues.len() != self.queues.len() {
+            return bad("blocks");
+        }
+        for (id, qs) in &s.queues {
+            match self.queues.get(id) {
+                Some(mine) if mine.len() == qs.len() => {}
+                _ => return bad("inputs"),
+            }
+        }
+        let known = |id: &String| self.kinds.contains_key(id);
+        if !s.ready.iter().all(known)
+            || !s.scheduled.keys().all(known)
+            || !s.remembered.keys().all(known)
+        {
+            return bad("blocks to run");
+        }
+        // Each block with inputs is in `ready` exactly as often as
+        // `scheduled` says, and no more often than its queued inputs allow;
+        // a block without inputs (they start the run) at most once.
+        let mut counts: BTreeMap<&String, usize> = BTreeMap::new();
+        for id in &s.ready {
+            *counts.entry(id).or_default() += 1;
+        }
+        let inputs = |id: &String| self.in_ports.get(id).map_or(0, Vec::len);
+        let fits = counts.iter().all(|(id, n)| {
+            if inputs(id) == 0 {
+                *n == 1 && !s.scheduled.contains_key(*id)
+            } else {
+                s.scheduled.get(*id) == Some(n) && s.queues[*id].iter().all(|q| q.len() >= *n)
+            }
+        });
+        if !fits || s.scheduled.keys().any(|id| !counts.contains_key(id)) {
+            return bad("schedule");
+        }
+        if let Some(p) = &s.pending {
+            let Some(ports) = self.in_ports.get(&p.block) else {
+                return bad("the block it was running");
+            };
+            if p.args.len() > ports.len().max(1) {
+                return bad("the block it was running");
+            }
+        }
+        self.queues = s.queues.into_iter().collect();
+        self.ready = s.ready;
+        self.scheduled = s.scheduled.into_iter().collect();
+        self.remembered = s.remembered.into_iter().collect();
+        self.collected = s.collected;
+        self.pending = s.pending;
+        Ok(())
+    }
+
     fn waiting(&self) -> Vec<String> {
         let mut w: Vec<String> = self
             .queues
@@ -678,6 +879,16 @@ struct Runner<'a, H: Host> {
     /// Plan outlines, by memory name.
     outlines: HashMap<String, crate::outline::Outline>,
     usage: TurnUsage,
+    /// Set to pause at the next block boundary; `None`: this run can't pause.
+    pause: Option<&'a AtomicBool>,
+    /// A tool has run in the current block, so it can't be run again from
+    /// its inputs: pausing waits for it to finish.
+    acted: bool,
+    /// The paused function calls still to carry on, outermost first.
+    resume: VecDeque<FrameState>,
+    /// The block about to run is a function block carrying on its paused
+    /// call (the front of `resume`).
+    resuming: bool,
 }
 
 /// Runs `l` to completion (or until stopped or limited).
@@ -686,6 +897,34 @@ pub async fn run<H: Host>(
     host: &H,
     inputs: &RunInputs,
     cancel: &AtomicBool,
+    on_event: impl FnMut(Event) + Send,
+) -> RunOutcome {
+    run_with(l, host, inputs, None, cancel, None, on_event).await
+}
+
+fn ended(status: RunStatus) -> RunOutcome {
+    RunOutcome {
+        status,
+        replies: vec![],
+        steps: 0,
+        llm_calls: 0,
+        tool_calls: 0,
+        waiting: vec![],
+        usage: TurnUsage::default(),
+        paused: None,
+    }
+}
+
+/// Runs `l`, or carries on the paused run `resume` of it, until it ends,
+/// is stopped (`cancel`) or pauses (`pause`, which also lets a run pause
+/// when its model can't be reached). Without `pause` the run can't pause.
+pub async fn run_with<H: Host>(
+    l: &LoopFile,
+    host: &H,
+    inputs: &RunInputs,
+    resume: Option<RunState>,
+    cancel: &AtomicBool,
+    pause: Option<&AtomicBool>,
     mut on_event: impl FnMut(Event) + Send,
 ) -> RunOutcome {
     let analysis = analyze(l);
@@ -694,18 +933,10 @@ pub async fn run<H: Host>(
         .iter()
         .find(|i| i.severity == Severity::Error)
     {
-        return RunOutcome {
-            status: RunStatus::Failed {
-                block: e.block.clone(),
-                error: e.message.clone(),
-            },
-            replies: vec![],
-            steps: 0,
-            llm_calls: 0,
-            tool_calls: 0,
-            waiting: vec![],
-            usage: TurnUsage::default(),
-        };
+        return ended(RunStatus::Failed {
+            block: e.block.clone(),
+            error: e.message.clone(),
+        });
     }
 
     let mut r = Runner {
@@ -725,8 +956,18 @@ pub async fn run<H: Host>(
             tokens_added: 4 + crate::text::estimate_tokens(&inputs.message),
             ..Default::default()
         },
+        pause,
+        acted: false,
+        resume: VecDeque::new(),
+        resuming: false,
     };
     let mut frame = Frame::new(&l.blocks, &l.links, String::new(), &r.analysis);
+    if let Some(state) = resume
+        && let Err(error) = r.take_up(&mut frame, state)
+    {
+        return ended(RunStatus::Failed { block: None, error });
+    }
+    let mut paused = None;
     let status = match r.drive(&mut frame, &mut on_event).await {
         Ok(()) | Err(Stop::Finished) => RunStatus::Completed,
         Err(Stop::Cancelled) => RunStatus::Stopped,
@@ -735,6 +976,11 @@ pub async fn run<H: Host>(
             block: Some(block),
             error,
         },
+        Err(Stop::Paused(p)) => {
+            let reason = p.reason.clone();
+            paused = Some(Box::new(r.state(p.frames)));
+            RunStatus::Paused { reason }
+        }
     };
     RunOutcome {
         status,
@@ -744,6 +990,7 @@ pub async fn run<H: Host>(
         tool_calls: r.tool_calls,
         waiting: frame.waiting(),
         usage: r.usage,
+        paused,
     }
 }
 
@@ -753,8 +1000,29 @@ async fn cancelled(flag: &AtomicBool) {
     }
 }
 
+/// Waits until `flag` is set; forever without one.
+async fn pause_asked(flag: Option<&AtomicBool>) {
+    match flag {
+        Some(flag) => {
+            while !flag.load(Ordering::Relaxed) {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+        None => std::future::pending().await,
+    }
+}
+
+/// Where a run paused: the graphs it was in, outermost first, filled in as
+/// the pause passes out through each function call.
+#[derive(Default)]
+struct Paused {
+    frames: Vec<FrameState>,
+    reason: Option<String>,
+}
+
 enum Stop {
     Cancelled,
+    Paused(Box<Paused>),
     /// A Final chat output ended the run: it completed.
     Finished,
     Limit(String),
@@ -782,31 +1050,117 @@ impl From<Stop> for BlockErr {
 type BoxFut<'s, T> = Pin<Box<dyn Future<Output = T> + Send + 's>>;
 
 impl<'a, H: Host> Runner<'a, H> {
+    /// Takes up a paused run: what it had gathered, and the loop's graph
+    /// (`top`) as it was. The function calls it was inside are taken up as
+    /// their blocks carry on.
+    fn take_up(&mut self, top: &mut Frame<'a>, state: RunState) -> Result<(), String> {
+        if state.version != RUN_STATE_VERSION {
+            return Err("This paused run was saved by another version of Chummy.".into());
+        }
+        // Functions can't call themselves, so calls nest no deeper than
+        // there are functions.
+        if state.frames.is_empty() || state.frames.len() > self.file.functions.len() + 1 {
+            return Err("the paused run doesn't fit this loop (function calls)".into());
+        }
+        let mut frames: VecDeque<FrameState> = state.frames.into();
+        let first = frames.pop_front().expect("checked above");
+        top.restore(first)?;
+        self.resume = frames;
+        self.replies = state.replies;
+        self.steps = state.steps;
+        self.llm_calls = state.llm_calls;
+        self.tool_calls = state.tool_calls;
+        self.noticed = state.noticed.into_iter().collect();
+        self.memory = state.memory.into_iter().collect();
+        self.outlines = state.outlines.into_iter().collect();
+        self.usage = state.usage;
+        Ok(())
+    }
+
+    /// The run's state, to pause, given its graphs' states.
+    fn state(&self, frames: Vec<FrameState>) -> RunState {
+        let mut noticed: Vec<String> = self.noticed.iter().cloned().collect();
+        noticed.sort();
+        RunState {
+            version: RUN_STATE_VERSION,
+            frames,
+            replies: self.replies.clone(),
+            steps: self.steps,
+            llm_calls: self.llm_calls,
+            tool_calls: self.tool_calls,
+            noticed,
+            memory: self
+                .memory
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            outlines: self
+                .outlines
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            usage: self.usage.clone(),
+        }
+    }
+
+    fn pause_asked(&self) -> bool {
+        self.pause.is_some_and(|p| p.load(Ordering::Relaxed))
+    }
+
+    /// Whether a wait in the current block may be cut short to pause (it
+    /// then runs again on resuming): only while nothing it did would happen
+    /// twice.
+    fn interruptible(&self) -> bool {
+        self.pause.is_some() && !self.acted
+    }
+
     fn drive<'s>(
         &'s mut self,
         frame: &'s mut Frame<'a>,
         on_event: &'s mut Emit<'_>,
     ) -> BoxFut<'s, Result<(), Stop>> {
         Box::pin(async move {
-            while let Some(id) = frame.ready.pop_front() {
-                if self.cancel.load(Ordering::Relaxed) {
-                    return Err(Stop::Cancelled);
-                }
-                if let Some(s) = frame.scheduled.get_mut(&id) {
-                    *s = s.saturating_sub(1);
-                }
-                let args: Vec<Value> = frame
-                    .queues
-                    .get_mut(&id)
-                    .map(|qs| qs.iter_mut().filter_map(|q| q.pop_front()).collect())
-                    .unwrap_or_default();
+            // A resumed graph first carries on the block it was running.
+            let mut pending = frame.pending.take();
+            loop {
+                let (id, args, resumed) = match pending.take() {
+                    Some(p) => (p.block, p.args, true),
+                    None => {
+                        let Some(id) = frame.ready.pop_front() else {
+                            break;
+                        };
+                        if self.cancel.load(Ordering::Relaxed) {
+                            return Err(Stop::Cancelled);
+                        }
+                        // Between blocks: the place to pause.
+                        if self.pause_asked() {
+                            frame.ready.push_front(id);
+                            return Err(Stop::Paused(Box::new(Paused {
+                                frames: vec![frame.save(None)],
+                                reason: None,
+                            })));
+                        }
+                        if let Some(s) = frame.scheduled.get_mut(&id) {
+                            *s = s.saturating_sub(1);
+                        }
+                        let args: Vec<Value> = frame
+                            .queues
+                            .get_mut(&id)
+                            .map(|qs| qs.iter_mut().filter_map(|q| q.pop_front()).collect())
+                            .unwrap_or_default();
+                        (id, args, false)
+                    }
+                };
 
-                self.steps += 1;
-                if self.steps > self.file.limits.max_steps {
-                    return Err(Stop::Limit(format!(
-                        "Stopped after {} steps, the loop's limit.",
-                        self.file.limits.max_steps
-                    )));
+                // A block carried on after a pause was counted when it began.
+                if !resumed {
+                    self.steps += 1;
+                    if self.steps > self.file.limits.max_steps {
+                        return Err(Stop::Limit(format!(
+                            "Stopped after {} steps, the loop's limit.",
+                            self.file.limits.max_steps
+                        )));
+                    }
                 }
 
                 let path = frame.path(&id);
@@ -825,8 +1179,26 @@ impl<'a, H: Host> Runner<'a, H> {
                     Some(Value::Exchange(ex)) if fx_wired => Some(ex.clone()),
                     _ => None,
                 };
+                // Kept for blocks that may pause partway (function calls,
+                // and blocks that wait or call a model), to run them again.
+                let kind = &frame.kinds[&id];
+                let is_function = matches!(kind, BlockKind::Function(_));
+                let keep = (self.pause.is_some()
+                    && matches!(
+                        kind,
+                        BlockKind::Function(_)
+                            | BlockKind::Llm(_)
+                            | BlockKind::RunTool(_)
+                            | BlockKind::AskUser(_)
+                    ))
+                .then(|| args.clone());
+                let counts = (self.llm_calls, self.tool_calls, self.usage.clone());
+                self.acted = false;
+                self.resuming = resumed && is_function;
                 let clock = std::time::Instant::now();
-                let result = self.execute(frame, &id, args, on_event).await.and_then(|o| {
+                let result = self.execute(frame, &id, args, on_event).await;
+                self.resuming = false;
+                let result = result.and_then(|o| {
                     match o.iter().find(|(_, v)| v.bytes() > MAX_VALUE_BYTES) {
                         Some((port, _)) => Err(BlockErr::Stop(Stop::Limit(format!(
                             "“{label}” made a value over {} MB (on {port}), so the run stopped. \
@@ -838,6 +1210,41 @@ impl<'a, H: Host> Runner<'a, H> {
                 });
                 let outputs = match result {
                     Ok(o) => o,
+                    Err(BlockErr::Stop(Stop::Paused(mut p))) => {
+                        let Some(args) = keep else {
+                            // Only blocks kept above can pause partway.
+                            return Err(Stop::Failed {
+                                block: path,
+                                error: format!("{label}: it couldn't pause here"),
+                            });
+                        };
+                        if p.frames.is_empty() {
+                            // This block was cut short: it runs again from
+                            // the same inputs, so what it counted is undone.
+                            (self.llm_calls, self.tool_calls, self.usage) = counts;
+                            on_event(Event::Notice {
+                                block: path.clone(),
+                                text: match &p.reason {
+                                    Some(why) => format!(
+                                        "Paused: {} This block runs again when the run is resumed.",
+                                        sentence(why)
+                                    ),
+                                    None => {
+                                        "Paused before this block finished. It runs again when the run is resumed."
+                                            .into()
+                                    }
+                                },
+                            });
+                            on_event(Event::BlockState {
+                                block: path.clone(),
+                                label: label.clone(),
+                                state: BlockState::Waiting,
+                            });
+                        }
+                        p.frames
+                            .insert(0, frame.save(Some(PendingBlock { block: id, args })));
+                        return Err(Stop::Paused(p));
+                    }
                     Err(BlockErr::Stop(Stop::Finished)) => {
                         // The final answer is out: done, and so is the run.
                         step.ms = clock.elapsed().as_millis() as u64;
@@ -852,7 +1259,7 @@ impl<'a, H: Host> Runner<'a, H> {
                     Err(BlockErr::Stop(s)) => {
                         step.status = StepStatus::Stopped;
                         step.error = Some(match &s {
-                            Stop::Finished => String::new(),
+                            Stop::Finished | Stop::Paused(_) => String::new(),
                             Stop::Cancelled => "The run was stopped.".into(),
                             Stop::Limit(m) => m.clone(),
                             Stop::Failed { error, .. } => error.clone(),
@@ -1173,6 +1580,8 @@ impl<'a, H: Host> Runner<'a, H> {
                             is_error: true,
                         })
                     } else {
+                        // From here the block can't simply run again.
+                        self.acted = true;
                         let fut =
                             self.host
                                 .run_tool(&call.name, call.arguments.clone(), call.network);
@@ -1650,9 +2059,11 @@ impl<'a, H: Host> Runner<'a, H> {
                     }
                     // Check again at least every minute (the limit may be raised).
                     let nap = resets_in.clamp(Duration::from_secs(1), Duration::from_secs(60));
+                    let can_pause = self.interruptible();
                     tokio::select! {
                         _ = tokio::time::sleep(nap) => {}
                         _ = cancelled(self.cancel) => return Err(Stop::Cancelled.into()),
+                        _ = pause_asked(self.pause), if can_pause => return Err(paused_here(None)),
                     }
                 }
                 OnLimit::Ask => {
@@ -1700,6 +2111,7 @@ impl<'a, H: Host> Runner<'a, H> {
                 None => std::future::pending().await,
             }
         };
+        let can_pause = self.interruptible();
         let r = tokio::select! {
             // Stopping a run also withdraws its question, which can arrive
             // first; it's still a stop, not a failure.
@@ -1712,6 +2124,9 @@ impl<'a, H: Host> Runner<'a, H> {
             }),
             _ = cancelled(self.cancel) => Err(Stop::Cancelled.into()),
             _ = timeout => Err(BlockErr::TimedOut),
+            // Nothing's been done that can't be done again: pause now, and
+            // ask again on resuming.
+            _ = pause_asked(self.pause), if can_pause => Err(paused_here(None)),
         };
         on_event(Event::Answered { block });
         r
@@ -1740,6 +2155,15 @@ impl<'a, H: Host> Runner<'a, H> {
                 .entry((o.from.block.clone(), o.from.port.clone()))
                 .or_default()
                 .push(o.name.clone());
+        }
+        // Carrying on a call that paused: its graph as it was.
+        if std::mem::take(&mut self.resuming) {
+            let state = self.resume.pop_front().ok_or_else(|| {
+                BlockErr::Failed("the paused run doesn't fit this loop (function calls)".into())
+            })?;
+            sub.restore(state).map_err(BlockErr::Failed)?;
+            self.drive(&mut sub, on_event).await?;
+            return Ok(sub.collected);
         }
         let in_names: Vec<String> = self
             .analysis
@@ -1905,6 +2329,7 @@ impl<'a, H: Host> Runner<'a, H> {
                 tool_choice: p.tool_choice,
                 temperature: p.temperature,
                 max_tokens: p.max_tokens,
+                generation: p.generation.clone(),
                 model: model.clone(),
             };
             let sent = Value::Exchange(Exchange {
@@ -2166,8 +2591,35 @@ impl<'a, H: Host> Runner<'a, H> {
                 text: t,
             });
         }
-        answer.map_err(BlockErr::Failed)
+        answer.map_err(|f| {
+            // A model that can't be reached pauses a run that can pause (it
+            // asks again on resuming) instead of ending it.
+            if f.unavailable && self.pause.is_some() {
+                paused_here(Some(f.message))
+            } else {
+                BlockErr::Failed(f.message)
+            }
+        })
     }
+}
+
+/// `text` as a sentence: trimmed, with a full stop unless it already ends
+/// with one (or a question or exclamation mark).
+pub fn sentence(text: &str) -> String {
+    let t = text.trim();
+    if t.is_empty() || t.ends_with(['.', '?', '!']) {
+        t.to_string()
+    } else {
+        format!("{t}.")
+    }
+}
+
+/// Pausing partway through the current block, which runs again on resuming.
+fn paused_here(reason: Option<String>) -> BlockErr {
+    BlockErr::Stop(Stop::Paused(Box::new(Paused {
+        frames: vec![],
+        reason,
+    })))
 }
 
 #[cfg(test)]
@@ -2199,7 +2651,16 @@ mod tests {
         granted: Mutex<Vec<u64>>,
         /// The next this-many model calls fail, like a server that's down.
         fail_next: Mutex<u32>,
+        /// The next this-many model calls can't reach the model at all.
+        unreachable_next: Mutex<u32>,
         online_runs: Mutex<Vec<Switch>>,
+        /// Set after this many model calls (0: never), like a person
+        /// pressing Pause while the run works.
+        pause_after_call: usize,
+        /// Set when the this-many'th question or approval is asked (0:
+        /// never), which is then answered only after a moment.
+        pause_at_ask: usize,
+        pause: std::sync::Arc<AtomicBool>,
     }
 
     fn text(s: &str) -> LlmAnswer {
@@ -2237,7 +2698,7 @@ mod tests {
             &self,
             call: LlmCall,
             on_text: &mut (dyn FnMut(&str) + Send),
-        ) -> Result<LlmAnswer, String> {
+        ) -> Result<LlmAnswer, LlmFailure> {
             let prompt = call
                 .messages
                 .last()
@@ -2251,6 +2712,14 @@ mod tests {
                     *f -= 1;
                     return Err("the model server is down".into());
                 }
+                let mut u = self.unreachable_next.lock().unwrap();
+                if *u > 0 {
+                    *u -= 1;
+                    return Err(LlmFailure::unavailable("couldn't reach the model server"));
+                }
+            }
+            if self.pause_after_call == self.calls.lock().unwrap().len() {
+                self.pause.store(true, Ordering::Relaxed);
             }
             let a = self
                 .answers
@@ -2314,6 +2783,13 @@ mod tests {
         }
         async fn ask(&self, ask: Ask) -> Result<Answer, String> {
             self.asks.lock().unwrap().push(ask);
+            if self.pause_at_ask > 0 {
+                if self.asks.lock().unwrap().len() == self.pause_at_ask {
+                    self.pause.store(true, Ordering::Relaxed);
+                }
+                // The person takes a moment to answer.
+                tokio::time::sleep(Duration::from_millis(400)).await;
+            }
             if let Some(stop) = &self.stop_on_ask {
                 stop.store(true, Ordering::Relaxed);
                 return Err("The question was withdrawn.".into());
@@ -2395,6 +2871,39 @@ mod tests {
         assert_eq!(host.prompts.lock().unwrap()[0], "Q: hello");
         assert!(ev.iter().any(|e| matches!(e, Event::LlmText { .. })));
         assert_eq!((o.steps, o.llm_calls), (3, 1));
+    }
+
+    #[tokio::test]
+    async fn each_model_block_sends_its_own_generation_settings() {
+        let l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b(
+                    "think",
+                    "llm",
+                    json!({ "prompt": "_INPUT_", "generation": { "reasoning_effort": "high" } }),
+                ),
+                b("plain", "llm", json!({ "prompt": "_INPUT_" })),
+                b("out", "output", json!({})),
+            ],
+            vec![
+                ln("in", "out", "think", "in"),
+                ln("think", "out", "plain", "in"),
+                ln("plain", "out", "out", "in"),
+            ],
+        );
+        let host = Fake::with(&["a", "b"]);
+        let (o, _) = go(&l, &host, "hi").await;
+        assert_eq!(o.status, RunStatus::Completed);
+        let calls = host.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].generation.reasoning_effort,
+            Some(Some(crate::Effort::High))
+        );
+        assert!(
+            calls[1].generation.is_empty(),
+            "the other block inherits everything"
+        );
     }
 
     #[tokio::test]
@@ -2716,6 +3225,23 @@ mod tests {
         };
         let (o, _) = go(&l, &Fake::default(), "x").await;
         assert!(matches!(o.status, RunStatus::LimitReached { .. }));
+
+        // (was tool_call_limit)
+        {
+            let mut l = tool_loop();
+            l.limits.max_tool_calls = 2;
+            let host = Fake::script(
+                (0..5)
+                    .map(|_| calls("echo", json!({ "text": "a" })))
+                    .collect(),
+            );
+            let (o, _) = go(&l, &host, "x").await;
+            assert!(
+                matches!(o.status, RunStatus::LimitReached { ref message } if message.contains("tool calls")),
+                "{o:?}"
+            );
+            assert_eq!(o.tool_calls, 2);
+        }
     }
 
     #[tokio::test]
@@ -2849,6 +3375,30 @@ mod tests {
         )
         .await;
         assert_eq!(out.status, RunStatus::Stopped);
+
+        // (was waiting_runs_can_be_stopped)
+        {
+            let l = lp(
+                vec![
+                    b("in", "input", json!({})),
+                    b("ask", "ask_user", json!({ "prompt": "Which one?" })),
+                    b("out", "output", json!({})),
+                ],
+                vec![ln("in", "out", "ask", "in"), ln("ask", "out", "out", "in")],
+            );
+            let host = Fake {
+                never_answer: true,
+                ..Default::default()
+            };
+            let cancel = AtomicBool::new(false);
+            let stopper = async {
+                tokio::time::sleep(Duration::from_millis(150)).await;
+                cancel.store(true, Ordering::Relaxed);
+            };
+            let inputs = RunInputs::default();
+            let (o, _) = tokio::join!(run(&l, &host, &inputs, &cancel, |_| {}), stopper);
+            assert_eq!(o.status, RunStatus::Stopped);
+        }
     }
 
     fn tool_loop() -> LoopFile {
@@ -2981,23 +3531,6 @@ mod tests {
                 |e| matches!(e, Event::Notice { text, .. } if text.contains("is off in Chummy"))
             )
         );
-    }
-
-    #[tokio::test]
-    async fn tool_call_limit() {
-        let mut l = tool_loop();
-        l.limits.max_tool_calls = 2;
-        let host = Fake::script(
-            (0..5)
-                .map(|_| calls("echo", json!({ "text": "a" })))
-                .collect(),
-        );
-        let (o, _) = go(&l, &host, "x").await;
-        assert!(
-            matches!(o.status, RunStatus::LimitReached { ref message } if message.contains("tool calls")),
-            "{o:?}"
-        );
-        assert_eq!(o.tool_calls, 2);
     }
 
     #[tokio::test]
@@ -3419,7 +3952,7 @@ mod tests {
                 &self,
                 call: LlmCall,
                 t: &mut (dyn FnMut(&str) + Send),
-            ) -> Result<LlmAnswer, String> {
+            ) -> Result<LlmAnswer, LlmFailure> {
                 self.fake.llm(call, t).await
             }
             fn tool_names(&self) -> Vec<String> {
@@ -3802,30 +4335,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn waiting_runs_can_be_stopped() {
-        let l = lp(
-            vec![
-                b("in", "input", json!({})),
-                b("ask", "ask_user", json!({ "prompt": "Which one?" })),
-                b("out", "output", json!({})),
-            ],
-            vec![ln("in", "out", "ask", "in"), ln("ask", "out", "out", "in")],
-        );
-        let host = Fake {
-            never_answer: true,
-            ..Default::default()
-        };
-        let cancel = AtomicBool::new(false);
-        let stopper = async {
-            tokio::time::sleep(Duration::from_millis(150)).await;
-            cancel.store(true, Ordering::Relaxed);
-        };
-        let inputs = RunInputs::default();
-        let (o, _) = tokio::join!(run(&l, &host, &inputs, &cancel, |_| {}), stopper);
-        assert_eq!(o.status, RunStatus::Stopped);
-    }
-
-    #[tokio::test]
     async fn tool_calls_can_need_the_users_ok() {
         // The block asks: allowed, then refused with a reason.
         let mut l = tool_loop();
@@ -4181,5 +4690,258 @@ mod tests {
             (o.replies.as_slice(), host.tool_runs.lock().unwrap().len()),
             (&["done".to_string()][..], 1)
         );
+    }
+
+    /// Runs `l` able to pause, by `host.pause`, or carries on `resume`.
+    async fn go_pausable(
+        l: &LoopFile,
+        host: &Fake,
+        msg: &str,
+        resume: Option<RunState>,
+    ) -> (RunOutcome, Vec<Event>) {
+        let mut ev = vec![];
+        let inputs = RunInputs {
+            message: msg.into(),
+            ..Default::default()
+        };
+        let cancel = AtomicBool::new(false);
+        let out = run_with(l, host, &inputs, resume, &cancel, Some(&host.pause), |e| {
+            ev.push(e)
+        })
+        .await;
+        (out, ev)
+    }
+
+    /// A paused run's state as it would be saved and read back.
+    fn saved(o: &RunOutcome) -> RunState {
+        let state = o.paused.as_ref().expect("the run paused");
+        serde_json::from_str(&serde_json::to_string(state).unwrap()).unwrap()
+    }
+
+    /// One reply, then a function with two model calls and memory between
+    /// them, then the function's answer.
+    fn two_step_loop() -> LoopFile {
+        let work = func(
+            "work",
+            vec![
+                b("m1", "llm", json!({ "prompt": "one: _INPUT_" })),
+                b("st", "store", json!({ "key": "note" })),
+                b("m2", "llm", json!({ "prompt": "two: _INPUT_ ({{note}})" })),
+            ],
+            vec![ln("m1", "out", "st", "in"), ln("st", "out", "m2", "in")],
+            &[("x", "m1", "in")],
+            &[("y", "m2", "out")],
+        );
+        let mut l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b("r0", "llm", json!({ "prompt": "zero: _INPUT_" })),
+                b("o0", "output", json!({})),
+                b("f", "function", json!({ "function": "work" })),
+                b("o", "output", json!({})),
+            ],
+            vec![
+                ln("in", "out", "r0", "in"),
+                ln("r0", "out", "o0", "in"),
+                ln("in", "out", "f", "x"),
+                ln("f", "y", "o", "in"),
+            ],
+        );
+        l.functions = vec![work];
+        l
+    }
+
+    #[tokio::test]
+    async fn a_paused_run_carries_on_where_it_stopped() {
+        let l = two_step_loop();
+        let whole = Fake::default();
+        let (all, _) = go(&l, &whole, "hi").await;
+        assert_eq!(all.status, RunStatus::Completed);
+
+        // Pause after the second model call: inside the function, between
+        // its first model block and Save to memory.
+        let first = Fake {
+            pause_after_call: 2,
+            ..Default::default()
+        };
+        let (o, _) = go_pausable(&l, &first, "hi", None).await;
+        assert_eq!(o.status, RunStatus::Paused { reason: None }, "{o:?}");
+        let state = saved(&o);
+        assert_eq!(state.frames.len(), 2, "the loop and the function call");
+
+        let second = Fake::default();
+        let (rest, _) = go_pausable(&l, &second, "hi", Some(state)).await;
+        assert_eq!(rest.status, RunStatus::Completed, "{rest:?}");
+        // Exactly the same run: nothing asked twice, memory kept, the same
+        // replies and counts.
+        let mut prompts = first.prompts.lock().unwrap().clone();
+        prompts.extend(second.prompts.lock().unwrap().iter().cloned());
+        assert_eq!(prompts, *whole.prompts.lock().unwrap());
+        assert_eq!(rest.replies, all.replies);
+        assert_eq!((rest.steps, rest.llm_calls), (all.steps, all.llm_calls));
+    }
+
+    #[tokio::test]
+    async fn a_run_that_cannot_pause_never_does() {
+        let l = two_step_loop();
+        let host = Fake {
+            pause_after_call: 1,
+            ..Default::default()
+        };
+        let (o, _) = go(&l, &host, "hi").await;
+        assert_eq!(o.status, RunStatus::Completed);
+        assert!(o.paused.is_none());
+    }
+
+    #[tokio::test]
+    async fn waiting_on_the_person_is_cut_short_to_pause() {
+        let l = lp(
+            vec![
+                b("in", "input", json!({})),
+                b(
+                    "ask",
+                    "ask_user",
+                    json!({ "prompt": "Which file for _INPUT_?" }),
+                ),
+                b("out", "output", json!({})),
+            ],
+            vec![ln("in", "out", "ask", "in"), ln("ask", "out", "out", "in")],
+        );
+        let host = Fake {
+            pause_at_ask: 1,
+            never_answer: true,
+            ..Default::default()
+        };
+        let (o, ev) = go_pausable(&l, &host, "the summary", None).await;
+        assert_eq!(o.status, RunStatus::Paused { reason: None }, "{o:?}");
+        assert!(ev.iter().any(|e| matches!(e, Event::Answered { .. })));
+        // Asked again on resuming.
+        let host = Fake::default();
+        host.answers_for_user
+            .lock()
+            .unwrap()
+            .push_back(Answer::Text("notes.md".into()));
+        let (o, _) = go_pausable(&l, &host, "the summary", Some(saved(&o))).await;
+        assert_eq!(o.replies, ["notes.md"]);
+        assert_eq!(
+            host.asks.lock().unwrap()[0].text,
+            "Which file for the summary?"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_block_that_ran_a_tool_finishes_before_pausing() {
+        let two_calls = LlmAnswer {
+            calls: vec![
+                ToolCall {
+                    id: "a".into(),
+                    name: "echo".into(),
+                    arguments: json!({ "text": "one" }),
+                    network: Switch::Off,
+                },
+                ToolCall {
+                    id: "b".into(),
+                    name: "echo".into(),
+                    arguments: json!({ "text": "two" }),
+                    network: Switch::Off,
+                },
+            ],
+            ..Default::default()
+        };
+        let host = Fake {
+            confirm_tools: vec!["echo".into()],
+            // Pause while the second call waits for its approval: the
+            // first already ran, so the block can't run again.
+            pause_at_ask: 2,
+            ..Fake::script(vec![two_calls, text("done")])
+        };
+        host.answers_for_user
+            .lock()
+            .unwrap()
+            .extend([Answer::Allow, Answer::Allow]);
+        let (o, _) = go_pausable(&tool_loop(), &host, "go", None).await;
+        assert!(matches!(o.status, RunStatus::Paused { .. }), "{o:?}");
+        assert_eq!(host.tool_runs.lock().unwrap().len(), 2);
+
+        // Resuming doesn't run either tool again.
+        let next = Fake::with(&["done"]);
+        let (o, _) = go_pausable(&tool_loop(), &next, "go", Some(saved(&o))).await;
+        assert_eq!(o.status, RunStatus::Completed, "{o:?}");
+        assert!(next.tool_runs.lock().unwrap().is_empty());
+        assert_eq!(o.tool_calls, 2);
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_model_pauses_and_is_asked_again() {
+        let l = two_step_loop();
+        let host = Fake {
+            unreachable_next: Mutex::new(1),
+            ..Default::default()
+        };
+        let (o, ev) = go_pausable(&l, &host, "hi", None).await;
+        assert!(
+            matches!(o.status, RunStatus::Paused { reason: Some(ref r) } if r.contains("couldn't reach")),
+            "{o:?}"
+        );
+        assert_eq!(o.llm_calls, 0, "the call that failed isn't counted");
+        assert!(
+            ev.iter()
+                .any(|e| matches!(e, Event::Notice { text, .. } if text.starts_with("Paused")))
+        );
+
+        let next = Fake::default();
+        let (o, _) = go_pausable(&l, &next, "hi", Some(saved(&o))).await;
+        assert_eq!(o.status, RunStatus::Completed, "{o:?}");
+        assert_eq!(next.prompts.lock().unwrap()[0], "zero: hi");
+        assert_eq!(o.llm_calls, 3);
+
+        // A run that can't pause fails, as before.
+        let host = Fake {
+            unreachable_next: Mutex::new(1),
+            ..Default::default()
+        };
+        let (o, _) = go(&l, &host, "hi").await;
+        assert!(matches!(o.status, RunStatus::Failed { .. }), "{o:?}");
+    }
+
+    #[tokio::test]
+    async fn a_paused_state_must_fit_its_loop() {
+        let l = two_step_loop();
+        let host = Fake {
+            pause_after_call: 2,
+            ..Default::default()
+        };
+        let (o, _) = go_pausable(&l, &host, "hi", None).await;
+        let state = saved(&o);
+
+        // Another loop: refused, nothing runs.
+        let mut other = l.clone();
+        other
+            .blocks
+            .push(b("extra", "fixed", json!({ "text": "x" })));
+        let next = Fake::default();
+        let (r, _) = go_pausable(&other, &next, "hi", Some(state.clone())).await;
+        assert!(
+            matches!(r.status, RunStatus::Failed { ref error, .. } if error.contains("doesn't fit")),
+            "{r:?}"
+        );
+        assert!(next.prompts.lock().unwrap().is_empty());
+
+        // Another version of the state, or one that's been tampered with.
+        let mut v = serde_json::to_value(&state).unwrap();
+        v["version"] = json!(99);
+        let old: RunState = serde_json::from_value(v).unwrap();
+        let (r, _) = go_pausable(&l, &Fake::default(), "hi", Some(old)).await;
+        assert!(matches!(r.status, RunStatus::Failed { .. }));
+        let mut v = serde_json::to_value(&state).unwrap();
+        v["frames"][0]["ready"] = json!(["nope"]);
+        let bad: RunState = serde_json::from_value(v).unwrap();
+        let (r, _) = go_pausable(&l, &Fake::default(), "hi", Some(bad)).await;
+        assert!(matches!(r.status, RunStatus::Failed { .. }));
+        let mut v = serde_json::to_value(&state).unwrap();
+        v["frames"][0]["ready"] = json!(["o", "o", "o"]);
+        let bad: RunState = serde_json::from_value(v).unwrap();
+        let (r, _) = go_pausable(&l, &Fake::default(), "hi", Some(bad)).await;
+        assert!(matches!(r.status, RunStatus::Failed { .. }));
     }
 }

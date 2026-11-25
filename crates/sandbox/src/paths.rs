@@ -141,25 +141,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn windows_names() {
-        for bad in [
-            "CON",
-            "nul",
-            "nul.txt",
-            "COM1",
-            "lpt9.log",
-            "a:b",
-            "trailing.",
-            "space ",
-        ] {
-            assert!(!windows_safe_name(bad), "{bad}");
-        }
-        for ok in ["console", "com10", "notes.txt", "nul-ish", "COM", ".hidden"] {
-            assert!(windows_safe_name(ok), "{ok}");
-        }
-    }
-
-    #[test]
     fn accepts_plain_relative_paths() {
         assert_eq!(
             RelPath::parse("a/b.txt").unwrap().as_path(),
@@ -175,6 +156,25 @@ mod tests {
             RelPath::parse("notes/today.md").unwrap().to_string(),
             "notes/today.md"
         );
+
+        // (was windows_names)
+        {
+            for bad in [
+                "CON",
+                "nul",
+                "nul.txt",
+                "COM1",
+                "lpt9.log",
+                "a:b",
+                "trailing.",
+                "space ",
+            ] {
+                assert!(!windows_safe_name(bad), "{bad}");
+            }
+            for ok in ["console", "com10", "notes.txt", "nul-ish", "COM", ".hidden"] {
+                assert!(windows_safe_name(ok), "{ok}");
+            }
+        }
     }
 
     #[test]
@@ -203,11 +203,11 @@ mod tests {
         assert!(is_within(Path::new("/a/b"), Path::new("/a/b")));
         assert!(!is_within(Path::new("/a/bc"), Path::new("/a/b")));
         assert!(!is_within(Path::new("/a"), Path::new("/a/b")));
-    }
 
-    #[test]
-    fn depth_counts_names() {
-        assert_eq!(depth(Path::new("/")), 0);
-        assert_eq!(depth(Path::new("/home/me")), 2);
+        // (was depth_counts_names)
+        {
+            assert_eq!(depth(Path::new("/")), 0);
+            assert_eq!(depth(Path::new("/home/me")), 2);
+        }
     }
 }

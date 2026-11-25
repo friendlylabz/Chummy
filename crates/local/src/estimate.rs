@@ -218,6 +218,15 @@ mod tests {
         assert_eq!(s.kv_bytes_per_token(), 57_344);
         let total_32k = s.total_bytes(Precision::Half, 32_768) as f64 / GB;
         assert!((17.0..19.0).contains(&total_32k), "{total_32k}");
+
+        // (was short_context_models_still_get_a_row)
+        {
+            let s = ModelShape {
+                max_context: 2048,
+                ..seven_b()
+            };
+            assert_eq!(s.contexts(), vec![2048]);
+        }
     }
 
     #[test]
@@ -253,14 +262,5 @@ mod tests {
         assert!(mac16.best.is_none());
         assert!(e.fits[0].this_computer);
         assert_eq!(e.table.len(), 9);
-    }
-
-    #[test]
-    fn short_context_models_still_get_a_row() {
-        let s = ModelShape {
-            max_context: 2048,
-            ..seven_b()
-        };
-        assert_eq!(s.contexts(), vec![2048]);
     }
 }

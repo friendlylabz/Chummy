@@ -379,37 +379,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn provider_config_round_trips_as_json() {
-        let cfg = ProviderConfig {
-            id: "local".into(),
-            name: "Local Ollama".into(),
-            kind: ProviderKind::Ollama,
-            base_url: ProviderKind::Ollama.default_base_url().unwrap().into(),
-            model: "llama3.2:3b".into(),
-            local: None,
-            temperature: None,
-            daily_tokens: Some(crate::DEFAULT_DAILY_TOKENS),
-            max_tokens: crate::DEFAULT_MAX_TOKENS,
-            context_max: None,
-            context_tokens: None,
-            compact_at: None,
-            use_in_app: false,
-            generation: Default::default(),
-        };
-        let json = serde_json::to_string(&cfg).unwrap();
-        assert!(json.contains("\"kind\":\"ollama\""));
-        let back: ProviderConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(cfg, back);
-        assert_eq!(cfg.secret_key(), "provider:local");
-    }
-
-    #[test]
-    fn presets_have_unique_ids() {
+    fn presets_and_saved_connections() {
         let ps = presets();
         let mut ids: Vec<_> = ps.iter().map(|p| p.id).collect();
         ids.sort();
         ids.dedup();
         assert_eq!(ids.len(), ps.len());
+
+        // (was provider_config_round_trips_as_json)
+        {
+            let cfg = ProviderConfig {
+                id: "local".into(),
+                name: "Local Ollama".into(),
+                kind: ProviderKind::Ollama,
+                base_url: ProviderKind::Ollama.default_base_url().unwrap().into(),
+                model: "llama3.2:3b".into(),
+                local: None,
+                temperature: None,
+                daily_tokens: Some(crate::DEFAULT_DAILY_TOKENS),
+                max_tokens: crate::DEFAULT_MAX_TOKENS,
+                context_max: None,
+                context_tokens: None,
+                compact_at: None,
+                use_in_app: false,
+                generation: Default::default(),
+            };
+            let json = serde_json::to_string(&cfg).unwrap();
+            assert!(json.contains("\"kind\":\"ollama\""));
+            let back: ProviderConfig = serde_json::from_str(&json).unwrap();
+            assert_eq!(cfg, back);
+            assert_eq!(cfg.secret_key(), "provider:local");
+        }
     }
 }
 

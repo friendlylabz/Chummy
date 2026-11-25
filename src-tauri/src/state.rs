@@ -52,6 +52,12 @@ pub struct RunInfo {
     pub started_at: u64,
     #[serde(skip)]
     pub cancel: Arc<AtomicBool>,
+    /// Set to pause the run after its current block; only chat runs can
+    /// pause.
+    #[serde(skip)]
+    pub pause: Option<Arc<AtomicBool>>,
+    /// Whether it can pause (chat runs).
+    pub pausable: bool,
     /// What the run's Pane output blocks have shown, oldest first (at most
     /// [`PANE_LINES`]); read with `run_pane`.
     #[serde(skip)]
@@ -114,6 +120,10 @@ pub struct AppState {
     pub picked_workspaces: Mutex<HashMap<String, PathBuf>>,
     /// Runs in progress, by run id.
     pub runs: Mutex<HashMap<String, RunInfo>>,
+    /// Paused chat runs, sealed in `paused/` (see [`crate::paused`]).
+    pub vault: chummy_store::paused::PauseVault,
+    /// Every paused chat run, by (agent, chat).
+    pub paused: Mutex<crate::paused::Paused>,
     pub tool_paths: ToolPaths,
     /// The tool sandbox, created (Python compiled) on first use.
     tool_host: tokio::sync::Mutex<Option<Arc<ToolHost>>>,
@@ -229,6 +239,8 @@ impl AppState {
             runtime_install: Mutex::new(None),
             picked_workspaces: Mutex::new(HashMap::new()),
             runs: Mutex::new(HashMap::new()),
+            vault: chummy_store::paused::PauseVault::new(&dirs.paused),
+            paused: Mutex::new(HashMap::new()),
             tool_paths: ToolPaths::new(&dirs.tools),
             tool_host: tokio::sync::Mutex::new(None),
             tools_installing: Mutex::new(false),

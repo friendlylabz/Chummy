@@ -298,20 +298,6 @@ mod tests {
     }
 
     #[test]
-    fn once_and_folder() {
-        let t = Trigger::Once {
-            at: "2026-12-01T09:00".into(),
-        };
-        let a = at("2026-01-01T00:00");
-        assert!(t.next_after(at("2026-11-22T00:00"), a, &ny()).is_some());
-        assert!(t.next_after(at("2026-12-01T09:00"), a, &ny()).is_none());
-        let f = Trigger::Folder {
-            path: "inbox".into(),
-        };
-        assert!(f.next_after(a, a, &ny()).is_none() && !f.is_timed());
-    }
-
-    #[test]
     fn describes_and_checks() {
         let d = |days: Vec<Day>| {
             Trigger::Daily {
@@ -362,5 +348,19 @@ mod tests {
         let typo: Result<Trigger, _> =
             serde_json::from_str(r#"{ "kind": "every", "minutes": 10, "minuts": 5 }"#);
         assert!(typo.is_err());
+
+        // (was once_and_folder)
+        {
+            let t = Trigger::Once {
+                at: "2026-12-01T09:00".into(),
+            };
+            let a = at("2026-01-01T00:00");
+            assert!(t.next_after(at("2026-11-22T00:00"), a, &ny()).is_some());
+            assert!(t.next_after(at("2026-12-01T09:00"), a, &ny()).is_none());
+            let f = Trigger::Folder {
+                path: "inbox".into(),
+            };
+            assert!(f.next_after(a, a, &ny()).is_none() && !f.is_timed());
+        }
     }
 }

@@ -430,19 +430,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn run_time_is_kept_and_optional() {
-        // Replies saved before run times were recorded still load.
-        let old: RunSummary =
-            serde_json::from_str(r#"{"status":"completed","steps":3,"llm_calls":1}"#).unwrap();
-        assert_eq!(old.ms, 0);
-        assert!(serde_json::to_value(&old).unwrap().get("ms").is_none());
-        let new = RunSummary { ms: 65_300, ..old };
-        let v = serde_json::to_value(&new).unwrap();
-        assert_eq!(v["ms"], 65_300);
-        assert_eq!(serde_json::from_value::<RunSummary>(v).unwrap(), new);
-    }
-
     fn tmp() -> PathBuf {
         let d = std::env::temp_dir().join(format!("chummy-chats-{}", new_id()));
         std::fs::create_dir_all(&d).unwrap();
@@ -497,39 +484,19 @@ mod tests {
         assert!(load(&root, "../a", &first).is_err());
         assert!(append(&root, "a1", "c-gone", &msg("user", "x")).is_err());
         std::fs::remove_dir_all(root).unwrap();
-    }
 
-    #[test]
-    fn deleting_one_message() {
-        let root = tmp();
-        let c = index(&root, "a1").unwrap().chats[0].id.clone();
-        let (a, b) = (msg("user", "keep me"), msg("assistant", "drop me"));
-        append(&root, "a1", &c, &a).unwrap();
-        append(&root, "a1", &c, &b).unwrap();
-        let (ix, gone, pos) = delete_message(&root, "a1", &c, &a.id).unwrap();
-        assert_eq!((ix.chats[0].messages, pos), (1, 0));
-        assert_eq!(gone, a);
-        assert_eq!(load(&root, "a1", &c).unwrap(), vec![b.clone()]);
-        assert!(
-            delete_message(&root, "a1", &c, &a.id).is_err(),
-            "already gone"
-        );
-        assert!(delete_message(&root, "a1", "c-gone", &b.id).is_err());
-        assert!(delete_message(&root, "a1", "../x", &b.id).is_err());
-        // Undo puts it back where it was, once.
-        let (ix, pos) = restore_message(&root, "a1", &c, gone.clone(), 0).unwrap();
-        assert_eq!((ix.chats[0].messages, pos), (2, 0));
-        assert_eq!(load(&root, "a1", &c).unwrap(), vec![a.clone(), b.clone()]);
-        assert!(
-            restore_message(&root, "a1", &c, gone, 0).is_err(),
-            "already back"
-        );
-        // A position past the end is clamped.
-        let (_, gone, _) = delete_message(&root, "a1", &c, &b.id).unwrap();
-        let (_, pos) = restore_message(&root, "a1", &c, gone, 99).unwrap();
-        assert_eq!(pos, 1);
-        assert_eq!(load(&root, "a1", &c).unwrap(), vec![a, b]);
-        std::fs::remove_dir_all(root).unwrap();
+        // (was run_time_is_kept_and_optional)
+        {
+            // Replies saved before run times were recorded still load.
+            let old: RunSummary =
+                serde_json::from_str(r#"{"status":"completed","steps":3,"llm_calls":1}"#).unwrap();
+            assert_eq!(old.ms, 0);
+            assert!(serde_json::to_value(&old).unwrap().get("ms").is_none());
+            let new = RunSummary { ms: 65_300, ..old };
+            let v = serde_json::to_value(&new).unwrap();
+            assert_eq!(v["ms"], 65_300);
+            assert_eq!(serde_json::from_value::<RunSummary>(v).unwrap(), new);
+        }
     }
 
     #[test]
@@ -544,6 +511,39 @@ mod tests {
         delete_agent(&root, "a1").unwrap();
         assert!(!root.join("a1").exists());
         std::fs::remove_dir_all(root).unwrap();
+
+        // (was deleting_one_message)
+        {
+            let root = tmp();
+            let c = index(&root, "a1").unwrap().chats[0].id.clone();
+            let (a, b) = (msg("user", "keep me"), msg("assistant", "drop me"));
+            append(&root, "a1", &c, &a).unwrap();
+            append(&root, "a1", &c, &b).unwrap();
+            let (ix, gone, pos) = delete_message(&root, "a1", &c, &a.id).unwrap();
+            assert_eq!((ix.chats[0].messages, pos), (1, 0));
+            assert_eq!(gone, a);
+            assert_eq!(load(&root, "a1", &c).unwrap(), vec![b.clone()]);
+            assert!(
+                delete_message(&root, "a1", &c, &a.id).is_err(),
+                "already gone"
+            );
+            assert!(delete_message(&root, "a1", "c-gone", &b.id).is_err());
+            assert!(delete_message(&root, "a1", "../x", &b.id).is_err());
+            // Undo puts it back where it was, once.
+            let (ix, pos) = restore_message(&root, "a1", &c, gone.clone(), 0).unwrap();
+            assert_eq!((ix.chats[0].messages, pos), (2, 0));
+            assert_eq!(load(&root, "a1", &c).unwrap(), vec![a.clone(), b.clone()]);
+            assert!(
+                restore_message(&root, "a1", &c, gone, 0).is_err(),
+                "already back"
+            );
+            // A position past the end is clamped.
+            let (_, gone, _) = delete_message(&root, "a1", &c, &b.id).unwrap();
+            let (_, pos) = restore_message(&root, "a1", &c, gone, 99).unwrap();
+            assert_eq!(pos, 1);
+            assert_eq!(load(&root, "a1", &c).unwrap(), vec![a, b]);
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[test]

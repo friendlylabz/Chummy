@@ -66,6 +66,7 @@ A short map of the protections and where they live in the code.
 | **Per-window permissions** | Each window may call only the commands it needs. | `src-tauri/capabilities/*.json` |
 | **Private data folder** | The Chummy folder is made private to the user (700/600 on macOS and Linux) at every start. | `crates/store` |
 | **Strict files** | Loop, job and config files are strict (`deny_unknown_fields`), versioned and size-limited; imported jobs arrive switched off. | `crates/flow/src/format.rs`, `validate.rs`, `crates/scheduler` |
+| **Paused runs only from Chummy** | A paused chat run is sealed (XChaCha20-Poly1305) with a fresh key per pause that only the keychain holds, bound to its agent and chat, and taken (key deleted) when resumed. No file Chummy didn't seal, no older copy and no other chat's file can be resumed; files that don't open are deleted. | `crates/store/src/paused.rs`, `src-tauri/src/paused.rs` |
 | **Loop review and trusted loops** | Only loops on the trusted list run or open in the editor: built-in templates (hashed at build time), loops saved from trusted ones, and loops the user reviewed and trusted. Anything else (an import, a file copied into the folder, imported loop settings) gets a scan and the Review window first. The list carries an HMAC keyed in the keychain. | `crates/flow/src/review.rs`, `crates/flow/build.rs`, `src-tauri/src/trust.rs`, `commands/review.rs`, `ui/src/windows/review/` |
 
 When a change touches permissions, secrets or untrusted content, think
@@ -692,6 +693,60 @@ the loop without running it:
   model within app stay per connection only; an agent can't change them.
 - An agent's changes are logged to the system log ("model settings
   changed") like its other settings.
+
+## Paused runs
+
+Pausing a chat run (or a model it can't reach) keeps the run's whole state
+until the chat resumes it: everything the run has seen (the conversation,
+tool results, memory) and the loop it runs, with the agent's block settings
+applied. Resuming carries on running that loop with the agent's access, so
+a paused run is as powerful as a trusted loop plus its conversation. It
+must never come from anywhere but Chummy itself.
+
+**How a paused run is kept** (`crates/store/src/paused.rs`):
+
+- One file per chat in `paused/<agent>/<chat>.run` (private to the user,
+  written atomically), sealed with XChaCha20-Poly1305. Nothing in it can
+  be read on disk.
+- **A new random 256-bit key for every pause**, stored only in the OS
+  keychain (`paused-run:<agent>:<chat>`), never on disk. Pausing the same
+  chat again replaces the key, so earlier copies of its file stop opening.
+- The agent and chat ids are the seal's associated data, and repeated
+  inside: a file renamed to another chat, or another chat's file with its
+  key copied over, doesn't open.
+- **Resuming takes the run.** The key is deleted before the run starts (if
+  it can't be deleted, nothing resumes), then the file. The same state
+  can't be resumed twice, and copies of the file never open again.
+- A file that doesn't open (no key, a different key, a changed byte, not a
+  plain file, too large) is deleted with its key, logged to the system log,
+  and noted in its chat. A keychain that can't be read right now leaves
+  the file alone for later.
+- There is no import or export of paused runs, and windows never see the
+  state: they get a list (agent, chat, title, when, why), and `resume_run`
+  / `discard_paused` take only ids.
+
+**What resuming checks** (`commands/chat.rs::resume_run`): the agent still
+exists and isn't busy with a job or test; its workspace is the same folder
+the run started in (otherwise it can't carry on); the folder still opens as
+a jail; a model is connected. Tools, internet access and approvals come
+from the settings **at the time it resumes**: a paused run never brings
+back access that was taken away since. The engine checks the state fits
+the loop exactly (every block, port, queued value, schedule and function
+call) before running anything.
+
+**Without a keychain** (some Linux setups) a paused run is held in memory
+only and the chat says it'll be gone when Chummy quits; nothing is written
+unsealed.
+
+**Pausing mid-block** is limited to what can safely happen twice: a block
+waiting on the person is cut short only if no tool has run in it yet;
+otherwise the pause waits for it to finish. A model block that couldn't
+reach its model runs again from its inputs. Runs only pause between blocks
+otherwise, so no tool call is ever repeated by resuming.
+
+**Model errors that pause** (`crates/runner::unreachable`): connection
+failures, a stream that broke off, and HTTP 408, 429, 502, 503 and 504.
+A rejected key, a bad request or an unreadable answer still ends the run.
 
 ## Known risks and what to do next
 

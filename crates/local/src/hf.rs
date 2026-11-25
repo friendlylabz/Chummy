@@ -609,18 +609,12 @@ mod tests {
                 .as_deref(),
             Some("deadbeef")
         );
-    }
 
-    #[test]
-    fn file_names_that_could_leave_the_model_folder_are_skipped() {
-        let mut f = qwen_like();
-        f.tree.as_array_mut().unwrap().extend([
-            json!({ "type": "file", "path": "model\\..\\..\\evil.safetensors", "size": 1 }),
-            json!({ "type": "file", "path": "model..x.safetensors", "size": 1 }),
-            json!({ "type": "file", "path": "model:x.safetensors", "size": 1 }),
-        ]);
-        let i = analyze(f, &hw());
-        assert_eq!(i.files.len(), 4, "{:?}", i.files);
+        // (was picks_tool_use_template)
+        {
+            let tc = json!({ "chat_template": [ { "name": "default", "template": "a" }, { "name": "tool_use", "template": "b" } ] });
+            assert_eq!(template_from_tokenizer_config(&tc).as_deref(), Some("b"));
+        }
     }
 
     #[test]
@@ -663,7 +657,7 @@ mod tests {
     }
 
     #[test]
-    fn repo_ids_are_validated() {
+    fn repo_ids_and_file_names_are_validated() {
         assert_eq!(
             normalize_repo_id(" Qwen/Qwen2.5-1.5B-Instruct ").unwrap(),
             "Qwen/Qwen2.5-1.5B-Instruct"
@@ -685,6 +679,18 @@ mod tests {
             assert!(normalize_repo_id(bad).is_err(), "{bad}");
         }
         assert_eq!(dir_name("a/b"), "a--b");
+
+        // (was file_names_that_could_leave_the_model_folder_are_skipped)
+        {
+            let mut f = qwen_like();
+            f.tree.as_array_mut().unwrap().extend([
+                json!({ "type": "file", "path": "model\\..\\..\\evil.safetensors", "size": 1 }),
+                json!({ "type": "file", "path": "model..x.safetensors", "size": 1 }),
+                json!({ "type": "file", "path": "model:x.safetensors", "size": 1 }),
+            ]);
+            let i = analyze(f, &hw());
+            assert_eq!(i.files.len(), 4, "{:?}", i.files);
+        }
     }
 
     #[test]
@@ -693,11 +699,5 @@ mod tests {
         assert_eq!(detect_parser("<|python_tag|>").unwrap().0, "llama3_json");
         assert_eq!(detect_parser("<|tool_call|>").unwrap().0, "granite");
         assert!(detect_parser("plain").is_none());
-    }
-
-    #[test]
-    fn picks_tool_use_template() {
-        let tc = json!({ "chat_template": [ { "name": "default", "template": "a" }, { "name": "tool_use", "template": "b" } ] });
-        assert_eq!(template_from_tokenizer_config(&tc).as_deref(), Some("b"));
     }
 }

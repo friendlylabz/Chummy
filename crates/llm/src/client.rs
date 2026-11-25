@@ -224,7 +224,11 @@ impl Client {
         if req.temperature.is_none() {
             req.temperature = self.default_temperature;
         }
-        req.generation = req.generation.or(&self.generation).for_kind(self.kind);
+        req.generation = if req.exact_generation {
+            req.generation.for_kind(self.kind)
+        } else {
+            req.generation.or(&self.generation).for_kind(self.kind)
+        };
         let (body, mut decoder) = match self.kind {
             k if k.speaks_openai() => (
                 openai::body(&self.model, &req, k == ProviderKind::OpenAi),
@@ -478,34 +482,63 @@ mod tests {
         assert!(!raw.contains("min_p"), "{raw}");
     }
 
+    #[tokio::test]
+    async fn exact_settings_leave_out_what_the_block_turned_off() {
+        let body = r#"{"choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}"#;
+        let (base, server) = serve_once("application/json", body.into()).await;
+        let mut c = cfg(base, ProviderKind::OpenAiCompatible);
+        c.generation = crate::Generation {
+            top_p: Some(0.5),
+            seed: Some(1),
+            ..Default::default()
+        };
+        let client = Client::new(&c, None).unwrap();
+        // A block that turned top_p off and set its own effort.
+        let req = ChatRequest {
+            messages: vec![Message::user("x")],
+            generation: crate::Generation {
+                seed: Some(1),
+                reasoning_effort: Some(crate::ReasoningEffort::Low),
+                ..Default::default()
+            },
+            exact_generation: true,
+            ..Default::default()
+        };
+        client.chat(&req, |_| {}).await.unwrap();
+        let raw = server.await.unwrap();
+        assert!(!raw.contains("top_p"), "{raw}");
+        assert!(raw.contains(r#""seed":1"#), "{raw}");
+        assert!(raw.contains(r#""reasoning_effort":"low""#), "{raw}");
+    }
+
     #[test]
     fn rejects_bad_config() {
         assert!(Client::new(&cfg("".into(), ProviderKind::OpenAiCompatible), None).is_err());
         assert!(Client::new(&cfg("ftp://x".into(), ProviderKind::OpenAiCompatible), None).is_err());
-    }
 
-    #[test]
-    fn urls_tolerate_pasted_suffixes() {
-        let c = Client::new(
-            &cfg(
-                "https://api.anthropic.com/v1/".into(),
-                ProviderKind::Anthropic,
-            ),
-            None,
-        )
-        .unwrap();
-        assert_eq!(c.chat_url(), "https://api.anthropic.com/v1/messages");
-        let g = Client::new(
-            &cfg(
-                "https://generativelanguage.googleapis.com/v1beta".into(),
-                ProviderKind::Gemini,
-            ),
-            None,
-        )
-        .unwrap();
-        assert_eq!(
-            g.chat_url(),
-            "https://generativelanguage.googleapis.com/v1beta/models/m:streamGenerateContent?alt=sse"
-        );
+        // (was urls_tolerate_pasted_suffixes)
+        {
+            let c = Client::new(
+                &cfg(
+                    "https://api.anthropic.com/v1/".into(),
+                    ProviderKind::Anthropic,
+                ),
+                None,
+            )
+            .unwrap();
+            assert_eq!(c.chat_url(), "https://api.anthropic.com/v1/messages");
+            let g = Client::new(
+                &cfg(
+                    "https://generativelanguage.googleapis.com/v1beta".into(),
+                    ProviderKind::Gemini,
+                ),
+                None,
+            )
+            .unwrap();
+            assert_eq!(
+                g.chat_url(),
+                "https://generativelanguage.googleapis.com/v1beta/models/m:streamGenerateContent?alt=sse"
+            );
+        }
     }
 }

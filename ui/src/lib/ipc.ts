@@ -416,7 +416,8 @@ export type ParamKind =
   | { kind: "model" }
   | { kind: "choice"; options: { value: string; label: string }[] }
   | { kind: "roles" }
-  | { kind: "tools" };
+  | { kind: "tools" }
+  | { kind: "generation" };
 export type ParamSpec = ParamKind & { key: string; label: string; help: string; optional: boolean };
 export type Category = "start" | "think" | "you" | "exchange" | "text" | "flow" | "workspace" | "memory" | "finish";
 export interface BlockInfo {
@@ -559,6 +560,21 @@ export interface RunInfo {
   source: "chat" | "test" | "job";
   job_id?: string;
   started_at: number;
+  /** Whether it can be paused (chat runs). */
+  pausable: boolean;
+}
+
+/** A paused chat run, kept until its chat resumes or discards it. */
+export interface PausedInfo {
+  agent_id: string;
+  chat_id: string;
+  chat_title: string;
+  /** Unix seconds. */
+  paused_at: number;
+  /** Why it paused itself (a model it couldn't reach); null: you paused it. */
+  reason: string | null;
+  /** Kept in the Chummy folder; false: in memory only (no system keychain). */
+  saved: boolean;
 }
 export type BlockState = "waiting" | "running" | "done" | "failed";
 export type FlowEvent =
@@ -704,7 +720,7 @@ export interface RunListItem {
   encrypted: boolean;
   /** Why it can't be read here, if it can't. */
   locked: string | null;
-  /** "completed", "stopped", "failed", "limit", "interrupted" or "running". */
+  /** "completed", "stopped", "failed", "limit", "paused", "interrupted" or "running". */
   status: string;
 }
 export interface RunQuery {
@@ -729,7 +745,8 @@ export type RunStatus =
   | { status: "completed" }
   | { status: "stopped" }
   | { status: "limit_reached"; message: string }
-  | { status: "failed"; block: string | null; error: string };
+  | { status: "failed"; block: string | null; error: string }
+  | { status: "paused"; reason: string | null };
 export interface RunOutcome {
   status: RunStatus;
   replies: string[];
@@ -1053,6 +1070,13 @@ export const commands = {
   testRun: (file: LoopFile, agentId: string | null, message: string, overrides: Record<string, string>) =>
     call<string>("test_run", { file, agentId, message, overrides }),
   stopRun: (runId: string) => call<void>("stop_run", { runId }),
+  /** Pauses a chat run after its current block. */
+  pauseRun: (runId: string) => call<void>("pause_run", { runId }),
+  /** Carries on a chat's paused run; returns the new run's id. */
+  resumeRun: (agentId: string, chatId: string) => call<string>("resume_run", { agentId, chatId }),
+  /** Throws away a chat's paused run, after asking; returns whether it did. */
+  discardPaused: (agentId: string, chatId: string) => call<boolean>("discard_paused", { agentId, chatId }),
+  listPaused: () => call<PausedInfo[]>("list_paused", undefined, () => []),
   searchRuns: (query: RunQuery) => call<RunListItem[]>("search_runs", { query }, () => []),
   readRunLog: (runId: string) => call<LogEntry[]>("read_run_log", { runId }, () => []),
   systemLogDays: () => call<string[]>("system_log_days", undefined, () => []),
@@ -1174,6 +1198,9 @@ export const events = {
   onRunEvent: (cb: (e: { run_id: string; event: FlowEvent }) => void) => on("run:event", cb),
   onRunFinished: (cb: (e: { run_id: string; agent_id: string | null; outcome: RunOutcome }) => void) =>
     on("run:finished", cb),
+  /** A chat run will pause after its current block. */
+  onRunPausing: (cb: (e: { run_id: string }) => void) => on("run:pausing", cb),
+  onPausedChanged: (cb: (p: PausedInfo[]) => void) => on("paused:changed", cb),
   /** A question and your answer, added to a running chat run's response. */
   onRunSaid: (cb: (e: { run_id: string; role: "question" | "answer"; text: string }) => void) => on("run:said", cb),
   onChatMessage: (cb: (e: { agent_id: string; chat_id: string; message: ChatMessage }) => void) =>

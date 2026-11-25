@@ -12,7 +12,9 @@ Download the latest build from the
   it: go to **System Settings → Privacy & Security** and click **Open
   Anyway**.
 - **Linux:** make the `.AppImage` runnable (`chmod +x`) and open it, or
-  install the `.deb` or `.rpm`. Some systems need `libfuse2` for AppImages.
+  install the `.deb` or `.rpm` (on Debian and Ubuntu, the `.deb` is the
+  better fit). Some systems need `libfuse2` for AppImages. Chummy needs
+  Ubuntu 24.04, Debian 13, Fedora 40 or newer.
 
 ## First run
 
@@ -51,7 +53,17 @@ unsafe* ask before each use unless you change that.
 
 - Type in the message box and press Enter. The agent's loop runs inside
   its folder; while it works you see the current step and a **timer**
-  (minutes, seconds and tenths), and you can **Stop** it.
+  (minutes, seconds and tenths), and you can **Pause** or **Stop** it.
+- **Pause** (next to Stop, in the message box and in the Sessions panel)
+  lets the run finish the step it's on, then keeps everything it has
+  done so far. Resume it whenever you like, even after quitting Chummy or
+  restarting your computer: the message box and the Sessions panel's
+  **Paused** list show **Resume** (and **Discard**, to throw it away). If
+  it was waiting for an answer from you, it pauses straight away and asks
+  again when resumed. While one chat is paused you can use others, with
+  any agent. If the model can't be reached (the server is off, the
+  connection dropped, it's overloaded), a chat **pauses on its own**
+  instead of ending, so nothing is lost: resume once the model is back.
 - Each message you send gets **one response**, built as the run goes: what
   the agent says along the way, any question it asked with your answer,
   and how it ended. Under it: how long the run took, then model calls, tool
@@ -67,7 +79,9 @@ unsafe* ask before each use unless you change that.
 - In the **Sessions** panel, each running chat has a text button: click it
   to see the run's **pane**, a live list of what its loop has reported
   (the Chummy assistant says what it's doing next before each step),
-  newest at the top. The × closes it.
+  newest at the top. The × closes it. Drag the panel's left edge to make
+  it wider or narrower (double-click the edge to reset); the chat grows
+  with the window.
 - The chat picker (next to the agent picker) starts a **New chat** or opens
   an earlier one. An agent's chats can run side by side.
 - The trash can under a message, or under a whole response, deletes it

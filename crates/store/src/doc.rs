@@ -226,6 +226,19 @@ mod tests {
         let loaded = doc.load(no_migration).unwrap();
         assert_eq!(loaded.value, Doc::default());
         assert!(loaded.recovery.is_none());
+
+        // (was corrupt_without_backup_falls_back_to_defaults)
+        {
+            let tmp = tempfile::tempdir().unwrap();
+            let doc = JsonDoc::<Doc>::new(tmp.path().join("s.json"));
+            fs::write(doc.path(), b"garbage").unwrap();
+            let loaded = doc.load(no_migration).unwrap();
+            assert_eq!(loaded.value, Doc::default());
+            assert!(matches!(
+                loaded.recovery,
+                Some(Recovery::UsedDefaults { .. })
+            ));
+        }
     }
 
     #[test]
@@ -269,19 +282,6 @@ mod tests {
         assert_eq!(loaded.value.name, "good");
         assert!(matches!(loaded.recovery, Some(Recovery::UsedBackup { .. })));
         assert!(loaded.quarantined.unwrap().exists());
-    }
-
-    #[test]
-    fn corrupt_without_backup_falls_back_to_defaults() {
-        let tmp = tempfile::tempdir().unwrap();
-        let doc = JsonDoc::<Doc>::new(tmp.path().join("s.json"));
-        fs::write(doc.path(), b"garbage").unwrap();
-        let loaded = doc.load(no_migration).unwrap();
-        assert_eq!(loaded.value, Doc::default());
-        assert!(matches!(
-            loaded.recovery,
-            Some(Recovery::UsedDefaults { .. })
-        ));
     }
 
     #[test]

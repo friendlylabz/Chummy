@@ -49,6 +49,15 @@ export function stopwatch(ms: number): string {
   return h ? `${h}:${String(m).padStart(2, "0")}:${ss}.${t}` : `${m}:${ss}.${t}`;
 }
 
+/** How long ago a Unix time (seconds) was, roughly: "just now", "5 min ago", "3 h ago", or the date. */
+export function ago(unix: number, nowMs = Date.now()): string {
+  const s = Math.max(0, Math.floor(nowMs / 1000) - unix);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  return date(unix);
+}
+
 export function date(unix: number): string {
   return new Date(unix * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }

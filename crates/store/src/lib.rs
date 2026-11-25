@@ -18,12 +18,14 @@
 //! atomically with a backup ([`JsonDoc`]). API keys and tokens are not stored in
 //! the folder at all; they go to the OS keychain ([`secrets`]).
 
+pub mod paused;
 pub mod secrets;
 
 mod doc;
 mod layout;
 
 pub use doc::{JsonDoc, Loaded, Recovery, StoreError, write_atomic};
+pub(crate) use layout::restrict_to_owner;
 pub use layout::{ChummyDirs, is_locked, lock_to_owner};
 
 /// `n` random bytes as hex, for ids (chats, messages, runs). If the system's

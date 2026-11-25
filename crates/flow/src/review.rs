@@ -2591,17 +2591,17 @@ mod tests {
             .find(|t| t.what == "Loop description")
             .unwrap();
         assert!(desc.text.contains("[U+200B]"));
-    }
 
-    #[test]
-    fn emoji_are_not_hidden_text_but_smuggled_selectors_are() {
-        assert!(find_hidden("Done ✔️ 👍🏽 👨‍👩‍👧").1.is_empty());
-        assert_eq!(find_hidden("a\u{FE0F}\u{FE01}").1.len(), 2);
-        assert_eq!(
-            find_hidden("x\u{E0041}y").1[0].name,
-            "invisible tag character"
-        );
-        assert_eq!(find_hidden("\u{202E}abc").1[0].name, "direction control");
+        // (was emoji_are_not_hidden_text_but_smuggled_selectors_are)
+        {
+            assert!(find_hidden("Done ✔️ 👍🏽 👨‍👩‍👧").1.is_empty());
+            assert_eq!(find_hidden("a\u{FE0F}\u{FE01}").1.len(), 2);
+            assert_eq!(
+                find_hidden("x\u{E0041}y").1[0].name,
+                "invisible tag character"
+            );
+            assert_eq!(find_hidden("\u{202E}abc").1[0].name, "direction control");
+        }
     }
 
     #[test]

@@ -121,6 +121,21 @@ optional. Notes, comments and labels never change what a loop does.
 - The agent's reply is everything the *Reply* blocks produced, in order.
 - At the end, blocks still holding some but not all of their inputs are
   reported as *waiting*, which usually means a link is missing.
+- A chat run can **pause** between blocks (`run_with` with a pause flag):
+  it stops before taking the next ready block, in whatever function call it
+  is in, and hands back a `RunState` (version 1): each graph's input
+  queues, ready queue and *Remember* values, from the loop down to the
+  innermost function call, with the function block each one was running;
+  plus memory, plan outlines, replies, counts and token figures. Given that
+  state, the same loop carries on exactly where it stopped. A block waiting
+  on the person (*Ask me*, a tool approval, a daily limit) is cut short and
+  runs again from the same inputs on resuming, unless a tool already ran in
+  it (then the pause waits for it to finish). A model that can't be
+  reached (`LlmFailure::unavailable`: no connection, a broken stream, HTTP
+  408, 429, 502, 503 or 504) pauses a run that can pause, at that model
+  block, which asks again on resuming; the call isn't counted. Runs that
+  can't pause (jobs, editor test runs) fail as before. A state that doesn't
+  fit the loop exactly (blocks, ports, schedule, function calls) is refused.
 
 ### Exchanges and tools
 
@@ -187,8 +202,18 @@ still load: `"on"` (from before blocks became disable-only) reads as
 off, and `true` / `false` mean `inherit` / `off`.
 
 Model settings inherit the same way: `max_tokens` and `temperature` left out
-use the model connection's own settings (Settings → Models), and `model` left
-out uses the agent's model.
+use the model connection's own settings (Settings → Models, with the agent's
+changes), and `model` left out uses the agent's model. The block's
+`generation` object holds the rest, each key working like an agent's model
+settings: left out inherits, `null` isn't sent (the server's default), and a
+value is used. For example `"generation": { "reasoning_effort": "high",
+"top_p": null }` thinks harder in this block only and sends no top P. Keys:
+`reasoning_effort` ("none", "minimal", "low", "medium", "high"), `top_p`
+(0–1), `top_k` (1–1000), `min_p` (0–1), `presence_penalty` and
+`frequency_penalty` (−2–2), `repeat_penalty` (0–10), `seed`, `stop` (up to 4
+strings; `[]` sends none). Settings the model's kind of server doesn't take
+are never sent. The editor shows `temperature`, `max_tokens` and
+`generation` together as the block's **Generation settings**.
 
 A **Run tool** block runs the calls at the end of an exchange in the agent's
 sandbox, adds their results as tool messages, and sends the exchange on.
@@ -312,7 +337,7 @@ Ports are written `name: kind`.
 | `input` | Message | none | `out: text` | none. Sends the chat message. |
 | `history` | Conversation | none | `out: text` | `max_messages` (10): recent messages, formatted `User: …` / `Assistant: …`. |
 | `fixed` | Fixed text | none | `out: text` | `text` (""). |
-| `llm` | Ask the model | `in: any` | `out: text` (Answer), `tool: exchange` (Tool call, only with tools and `tool_mode` not `off`), `reasoning: text`, `error: text`, `failed_exchange: exchange` | `prompt` ("_INPUT_"), `system` (""), `model` (unset = the agent's model; otherwise a model connection id), `temperature` (unset = the model connection's setting; 0–2), `max_tokens` (unset = the model connection's longest answer, 1,024 unless changed in Settings → Models; 1–32,768), `tools` ("inherit"; see Tool switches), `tool_mode` ("native", "prompted" or "off"), `network` ("inherit"), `on_limit` ("ask", "wait" or "stop"), `tool_choice` ("auto" or "required"), `on_bad_call` ("retry", "fail" or "answer"), `retries` (2; 0–5), `reminder` (""; exchange input only: a note sent last, as a user message, for this call only and never kept in the exchange; `{{name}}` reads memory; empty after filling sends nothing). `_TOOLS_` in the prompt or system message lists the block's tools; `{{name}}` includes memory. Text input: `_INPUT_` in the prompt is replaced by it (or it's added after the prompt). Exchange input: the exchange is continued; a non-empty `system` replaces its system message for this call. `<think>…</think>` sections are moved from the answer to Reasoning. |
+| `llm` | Ask the model | `in: any` | `out: text` (Answer), `tool: exchange` (Tool call, only with tools and `tool_mode` not `off`), `reasoning: text`, `error: text`, `failed_exchange: exchange` | `prompt` ("_INPUT_"), `system` (""), `model` (unset = the agent's model; otherwise a model connection id), `temperature` (unset = the model connection's setting; 0–2), `max_tokens` (unset = the model connection's longest answer, 1,024 unless changed in Settings → Models; 1–32,768), `generation` (unset = all inherited; reasoning effort, sampling, penalties, seed and stop sequences; see the note on model settings under Tool switches), `tools` ("inherit"; see Tool switches), `tool_mode` ("native", "prompted" or "off"), `network` ("inherit"), `on_limit` ("ask", "wait" or "stop"), `tool_choice` ("auto" or "required"), `on_bad_call` ("retry", "fail" or "answer"), `retries` (2; 0–5), `reminder` (""; exchange input only: a note sent last, as a user message, for this call only and never kept in the exchange; `{{name}}` reads memory; empty after filling sends nothing). `_TOOLS_` in the prompt or system message lists the block's tools; `{{name}}` includes memory. Text input: `_INPUT_` in the prompt is replaced by it (or it's added after the prompt). Exchange input: the exchange is continued; a non-empty `system` replaces its system message for this call. `<think>…</think>` sections are moved from the answer to Reasoning. |
 | `run_tool` | Run tool | `in: exchange` | `out: exchange`, `error: text`, `failed_exchange: exchange` | `max_result_chars` (50000), `on_error` ("tell_model" or "fail"), `confirm` (false). Runs the pending tool calls at the end of the exchange and adds their results. Longer results are cut, and so are results over about half the model's context (at least 12,000 characters). With `confirm`, each call waits for the user to allow it (see *Asking the user*). |
 | `ask_user` | Ask me | `in: any` | `out: text`, `error: text` | `prompt` ("_INPUT_"; `_INPUT_` is replaced by the input, or the input is added after it), `timeout_minutes` (0 = wait as long as it takes; at most 10080), `default_answer` (""). Asks the user and sends the answer on. If the wait times out, `default_answer` is used, or the run stops if it's empty. |
 | `exchange` | Start exchange | `in: any` | `out: exchange` | `system` (""), `roles` (["user"]). Text becomes one message with the first role; a list becomes one message per item, with the roles in turn. |
@@ -441,6 +466,19 @@ block's default applies. Settings for blocks the loop doesn't have are
 skipped. Every change is checked against the block catalog and the whole
 loop is checked again before it's saved, so a configuration can't break a
 loop, add blocks, or turn on anything the app or the agent doesn't allow.
+
+### Paused chat runs (`paused/<agent>/<chat>.run`)
+
+Not a file anyone writes or shares: Chummy seals it, and only Chummy opens
+it. It's `CHUMMY-PAUSED-RUN\x01`, a 24-byte nonce, then XChaCha20-Poly1305
+ciphertext of a `chummy.paused-run` v1 JSON document (agent and chat ids,
+the chat title, the agent's workspace path, the loop as it ran with the
+agent's block settings applied, the run's inputs, its `RunState`, when and
+why it paused). The associated data binds it to its agent and chat. Each
+pause has its own random key, kept only in the OS keychain as
+`paused-run:<agent>:<chat>`; resuming deletes the key, then the file. There's
+no import or export, and a file that doesn't open is deleted. See
+[Security: paused runs](security.md#paused-runs).
 
 ### Size limits
 

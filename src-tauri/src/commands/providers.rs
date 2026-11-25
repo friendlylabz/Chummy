@@ -458,12 +458,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn slugs_are_safe() {
-        assert_eq!(slug("My Local Ollama!"), "my-local-ollama");
-        assert_eq!(slug("??"), "model");
-    }
-
-    #[test]
     fn validation_catches_common_mistakes() {
         let mut c = ProviderConfig {
             id: String::new(),
@@ -493,5 +487,11 @@ mod tests {
         c.base_url = "http://localhost:8080/v1".into();
         c.temperature = Some(5.0);
         assert!(validate(&c).is_err());
+
+        // (was slugs_are_safe)
+        {
+            assert_eq!(slug("My Local Ollama!"), "my-local-ollama");
+            assert_eq!(slug("??"), "model");
+        }
     }
 }

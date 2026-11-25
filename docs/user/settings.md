@@ -14,7 +14,8 @@ folder it can see). Per agent you can also set:
   longest answer, reasoning effort and the rest below) starts as
   **Inherit**. Choose **Set** to give this agent its own value, or **Don't
   send** to leave it to the server. These apply to every model call the
-  agent makes; a model block's own setting in the loop still wins.
+  agent makes; a model block's own setting in the loop (its **Generation
+  settings**) still wins.
 - **Agent Loop Configuration**: change any block's settings for this agent
   only, without changing the loop. Export and import these as
   `chummy.loopconfig` files.
@@ -26,18 +27,19 @@ other.
 
 Your model connections. For each one:
 
-- Server address, API key (stored in the system keychain), model name, and
-  temperature.
-- **Longest answer**: used by every model block that doesn't set its own.
-- **More generation settings** (all empty by default, meaning the server's
-  own default): **reasoning effort** (none to high, for reasoning models),
-  **top P**, **top K**, **min P**, **presence** and **frequency penalty**,
-  **repeat penalty**, **seed** and up to four **stop sequences**. Settings a
-  kind of server doesn't accept are greyed out with the reason and never
-  sent (for example, OpenAI takes no top K, and Anthropic's reasoning isn't
-  supported yet). OpenAI-compatible servers get everything you set; they
-  ignore what they don't know.
-- **Context length** (read from the server when it says) and **Make room
+- Server address, API key (stored in the system keychain) and model name.
+- **Generation settings**, all in one group under the model name:
+  **temperature**, **longest answer** (always sent; used by every model
+  block that doesn't set its own), **reasoning effort** (none to high, for
+  reasoning models), **top P**, **top K**, **min P**, **presence** and
+  **frequency penalty**, **repeat penalty**, **seed** and up to four **stop
+  sequences**. Empty means not sent, so the server's own default applies.
+  Settings a kind of server doesn't accept are greyed out with the reason
+  and never sent (for example, OpenAI takes no top K, and Anthropic's
+  reasoning isn't supported yet). OpenAI-compatible servers get everything
+  you set; they ignore what they don't know. Each agent (below) and each
+  model block in a loop can change any of them for itself.
+- Under **Context and limits**: **context length** (read from the server when it says) and **Make room
   at** (80% of it by default), where the Chummy assistant summarises a long
   conversation.
 - **Daily token limit** (1,000,000 by default, or off). When it runs out a

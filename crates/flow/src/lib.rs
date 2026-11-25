@@ -17,10 +17,12 @@ mod config;
 mod engine;
 mod exchange;
 mod format;
+mod generation;
 pub mod log;
 pub mod outline;
 pub mod prompted;
 mod review;
+pub use generation::{Effort, GenerationOverrides};
 pub use review::{
     AuthorText, BlockRef, Capability, Flag, FlagLevel, Flow, FlowInput, FlowStep, HiddenChar,
     LoopReview, ModelReview, Origin, review,
@@ -38,8 +40,9 @@ pub use blocks::{
 pub use config::{CONFIG_FORMAT, LoopConfig, Overrides, find_block};
 pub use engine::{
     Answer, Ask, AskKind, BlockState, Budget, ChatTurn, ContextLimits, DEFAULT_CONTEXT_WINDOW,
-    Event, Host, LlmAnswer, LlmCall, MalformedCall, RunInputs, RunLimits, RunOutcome, RunStatus,
-    ToolOutput, TurnUsage, Value, run,
+    Event, Host, LlmAnswer, LlmCall, LlmFailure, MalformedCall, RUN_STATE_VERSION, RunInputs,
+    RunLimits, RunOutcome, RunState, RunStatus, ToolOutput, TurnUsage, Value, run, run_with,
+    sentence,
 };
 pub use exchange::{
     ExMessage, Exchange, Role, ToolCall, ToolInfo, check_arguments, estimate_messages,

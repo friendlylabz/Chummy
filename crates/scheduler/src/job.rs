@@ -360,6 +360,26 @@ mod tests {
             Job::from_json(&" ".repeat(MAX_FILE_BYTES + 1)),
             Err(JobError::TooLarge)
         );
+
+        // (was messages_fill_placeholders_once)
+        {
+            let mut j = Job::new("j", "J", "a");
+            j.message = "Now _NOW_; file _FILE_:\n_FILE_TEXT_".into();
+            let m = j.message_for(&now(), Some(("in/a.txt", Some("says _DATE_"))));
+            assert_eq!(
+                m,
+                "Now Sunday 2026-11-22 13:28; file in/a.txt:\nsays _DATE_"
+            );
+            // File text is added when the message doesn't place it.
+            j.message = "Summarize this:".into();
+            assert_eq!(
+                j.message_for(&now(), Some(("a", Some("text")))),
+                "Summarize this:\n\ntext"
+            );
+            assert_eq!(j.message_for(&now(), None), "Summarize this:");
+            j.save_reply_to = Some("reports/_DATE_-_TIME_.md".into());
+            assert_eq!(j.reply_path(&now()).unwrap(), "reports/2026-11-22-1328.md");
+        }
     }
 
     #[test]
@@ -386,25 +406,5 @@ mod tests {
             assert!(path_problem(bad).is_some(), "{bad}");
         }
         assert!(path_problem("notes/today.md").is_none() && path_problem(".").is_none());
-    }
-
-    #[test]
-    fn messages_fill_placeholders_once() {
-        let mut j = Job::new("j", "J", "a");
-        j.message = "Now _NOW_; file _FILE_:\n_FILE_TEXT_".into();
-        let m = j.message_for(&now(), Some(("in/a.txt", Some("says _DATE_"))));
-        assert_eq!(
-            m,
-            "Now Sunday 2026-11-22 13:28; file in/a.txt:\nsays _DATE_"
-        );
-        // File text is added when the message doesn't place it.
-        j.message = "Summarize this:".into();
-        assert_eq!(
-            j.message_for(&now(), Some(("a", Some("text")))),
-            "Summarize this:\n\ntext"
-        );
-        assert_eq!(j.message_for(&now(), None), "Summarize this:");
-        j.save_reply_to = Some("reports/_DATE_-_TIME_.md".into());
-        assert_eq!(j.reply_path(&now()).unwrap(), "reports/2026-11-22-1328.md");
     }
 }

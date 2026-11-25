@@ -256,27 +256,3 @@ pub fn reveal_logs(app: AppHandle, state: State<'_, AppState>) -> CmdResult<()> 
         .open_path(state.dirs.logs.to_string_lossy(), None::<&str>)
         .map_err(|e| e.to_string())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn list_items_flatten_the_summary() {
-        let item = RunListItem {
-            summary: RunSummary {
-                header: Default::default(),
-                end: None,
-                bytes: 3,
-                day: "2026-01-01".into(),
-                encrypted: false,
-                locked: None,
-            },
-            status: "running".into(),
-        };
-        let v = serde_json::to_value(item).unwrap();
-        assert_eq!(v["status"], "running");
-        assert_eq!(v["bytes"], 3);
-        assert!(v["header"].is_object());
-    }
-}

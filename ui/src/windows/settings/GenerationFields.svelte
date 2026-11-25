@@ -1,20 +1,33 @@
 <script lang="ts">
   /**
-   * A model connection's optional generation settings: reasoning effort,
-   * sampling, penalties, seed and stop sequences. Empty means "not sent", so
-   * the server's default applies. Settings this kind of server doesn't take
-   * are greyed out with the reason (and never sent).
+   * A model connection's generation settings, in one collapsible group:
+   * temperature, longest answer, reasoning effort, sampling, penalties, seed
+   * and stop sequences. Empty means "not sent", so the server's default
+   * applies (the longest answer is always set). Settings this kind of server
+   * doesn't take are greyed out with the reason (and never sent).
    */
   import { untrack } from "svelte";
   import type { ProviderKind } from "$lib/ipc";
-  import { EFFORTS, PARAMS, parseParam, showParam, unsupported, type Generation } from "$lib/generation";
+  import { EFFORTS, MAX_TOKENS, PARAMS, parseParam, showParam, TEMPERATURE, unsupported, type Generation } from "$lib/generation";
   import Icon from "$lib/components/Icon.svelte";
 
   let {
     kind,
     value = $bindable({}),
     bad = $bindable(false),
-  }: { kind: ProviderKind; value?: Generation; bad?: boolean } = $props();
+    temperature = $bindable(""),
+    maxTokens = $bindable(""),
+    maxBad = false,
+  }: {
+    kind: ProviderKind;
+    value?: Generation;
+    bad?: boolean;
+    /** As typed; empty: not sent. */
+    temperature?: string;
+    /** As typed. */
+    maxTokens?: string;
+    maxBad?: boolean;
+  } = $props();
 
   const start = untrack(() => value) ?? {};
   const texts = $state<Record<string, string>>(
@@ -22,9 +35,19 @@
   );
   const results = $derived(PARAMS.map((p) => ({ p, r: parseParam(p, texts[p.key]) })));
   const anySet = PARAMS.some((p) => texts[p.key].trim() !== "");
-  // Open when something's set, so it isn't hidden.
+  // Open when something beyond the basics is set, so it isn't hidden.
   let open = $state(anySet);
   const count = $derived(results.filter(({ r }) => "value" in r && r.value !== null && !(Array.isArray(r.value) && !r.value.length)).length);
+  const temperatureBad = $derived(temperature.trim() !== "" && "error" in parseParam(TEMPERATURE, temperature));
+  const summary = $derived(
+    [
+      temperature.trim() ? `temperature ${temperature.trim()}` : "default temperature",
+      maxBad ? "" : `up to ${Number(maxTokens).toLocaleString("en-US")} tokens`,
+      count ? `${count} more set` : "",
+    ]
+      .filter(Boolean)
+      .join(" · "),
+  );
 
   $effect(() => {
     const g: Record<string, unknown> = {};
@@ -34,18 +57,31 @@
       else if (r.value !== null && !(Array.isArray(r.value) && !r.value.length)) g[p.key] = r.value;
     }
     value = g as Generation;
-    bad = wrong;
+    bad = wrong || temperatureBad;
   });
 </script>
 
 <details class="more" bind:open>
   <summary>
     <span class="chev"><Icon name="chevron-down" size={14} /></span>
-    More generation settings
-    <span class="muted small">{count ? `${count} set` : "server defaults"}</span>
+    Generation settings
+    <span class="muted small" class:err={maxBad || bad}>{maxBad || bad ? "check the values" : summary}</span>
   </summary>
-  <p class="hint intro">Empty means not sent, so the server's own default applies. An agent can change any of these for itself (Settings → Agents).</p>
+  <p class="hint intro">
+    Empty means not sent, so the server's own default applies. An agent can change any of these for itself (Settings → Agents),
+    and so can each model block in a loop.
+  </p>
   <div class="grid">
+    <div class="field">
+      <label for="gen-temperature">{TEMPERATURE.label}</label>
+      <input id="gen-temperature" class="input" bind:value={temperature} inputmode="decimal" placeholder="Server default" aria-invalid={temperatureBad} />
+      <span class="hint" class:err={temperatureBad}>{temperatureBad ? "Temperature must be between 0 and 2." : TEMPERATURE.help}</span>
+    </div>
+    <div class="field">
+      <label for="gen-max">{MAX_TOKENS.label}</label>
+      <input id="gen-max" class="input" bind:value={maxTokens} inputmode="numeric" aria-invalid={maxBad} />
+      <span class="hint" class:err={maxBad}>{maxBad ? "16 to 32,768 tokens." : `${MAX_TOKENS.help} Always sent.`}</span>
+    </div>
     {#each results as { p, r } (p.key)}
       {@const why = unsupported(kind, p.key)}
       <div class="field" class:off={!!why} class:wide={p.type === "stop" || p.type === "effort"}>
@@ -77,9 +113,10 @@
 
 <style>
   .more {
-    margin-top: var(--space-4);
-    padding-top: var(--space-3);
-    border-top: 1px solid var(--border);
+    margin: var(--space-2) 0 var(--space-4);
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
   }
   summary {
     display: flex;

@@ -69,8 +69,64 @@ export const PARAMS: ParamInfo[] = [
   { key: "stop", label: "Stop sequences", type: "stop", help: `Stop the answer when one of these appears. One per line, at most ${MAX_STOP}.` },
 ];
 
+/** Every setting a model call takes, including temperature and the longest answer. */
+export type SettingKey = keyof ModelOverrides;
+export type SettingInfo = Omit<ParamInfo, "key"> & { key: SettingKey; required?: boolean };
+
+export const TEMPERATURE: SettingInfo = {
+  key: "temperature",
+  label: "Temperature",
+  type: "float",
+  min: 0,
+  max: 2,
+  placeholder: "e.g. 0.3",
+  help: "Lower is more predictable. Small models often do best around 0.2–0.4.",
+};
+export const MAX_TOKENS: SettingInfo = {
+  key: "max_tokens",
+  label: "Longest answer (tokens)",
+  type: "int",
+  min: 16,
+  max: 32768,
+  placeholder: "e.g. 2048",
+  help: "Small models often ramble: a lower limit keeps answers short.",
+  required: true,
+};
+/** All of them, in the order they're shown everywhere. */
+export const SETTINGS: SettingInfo[] = [TEMPERATURE, MAX_TOKENS, ...PARAMS];
+
+/** A setting's value in a model connection (null: not sent). */
+export function modelValue(m: { temperature?: number | null; max_tokens?: number; generation?: Generation } | undefined, k: SettingKey): unknown {
+  if (!m) return undefined;
+  if (k === "temperature") return m.temperature ?? null;
+  if (k === "max_tokens") return m.max_tokens;
+  return (m.generation ?? {})[k as Param] ?? null;
+}
+
+/**
+ * A model block's settings as overrides: `temperature` and `max_tokens` are
+ * block params of their own, the rest live in its `generation` object.
+ */
+export function blockOverrides(params: Record<string, unknown>): ModelOverrides {
+  const o: Record<string, unknown> = { ...((params.generation as object | undefined) ?? {}) };
+  if (params.temperature != null) o.temperature = params.temperature;
+  if (params.max_tokens != null) o.max_tokens = params.max_tokens;
+  return o as ModelOverrides;
+}
+
+/** The block params for some overrides (`undefined` removes a param). */
+export function blockParams(o: ModelOverrides): { temperature: unknown; max_tokens: unknown; generation: unknown } {
+  const { temperature, max_tokens, ...rest } = o;
+  return {
+    temperature: temperature ?? undefined,
+    max_tokens: max_tokens ?? undefined,
+    generation: Object.keys(rest).length ? rest : undefined,
+  };
+}
+
 /** Whether a kind of server takes a setting: a reason when it doesn't (mirrors Rust `support`). */
-export function unsupported(kind: ProviderKind, key: Param): string | null {
+export function unsupported(kind: ProviderKind, key: Param | SettingKey): string | null {
+  if (key === "temperature" || key === "max_tokens") return null;
   switch (kind) {
     case "open_ai_compatible":
     case "ollama":

@@ -258,6 +258,7 @@ export const statusLabel: Record<string, string> = {
   stopped: "Stopped",
   failed: "Failed",
   limit: "Hit a limit",
+  paused: "Paused",
   interrupted: "Interrupted",
   running: "Running",
 };

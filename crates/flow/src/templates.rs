@@ -104,7 +104,7 @@ mod tests {
     use crate::format::Block;
 
     #[test]
-    fn every_template_file_is_hashed_at_build_time_and_is_its_fingerprint() {
+    fn every_template_is_valid_and_hashed_at_build_time() {
         assert_eq!(
             TEMPLATE_PRINTS.len(),
             FILES.len(),
@@ -127,10 +127,31 @@ mod tests {
         for t in templates() {
             assert!(prints.contains(&fingerprint(&t.file).as_str()), "{}", t.id);
         }
+
+        // (was templates_are_valid)
+        {
+            for t in templates() {
+                let a = analyze(&t.file);
+                assert!(a.ok, "{}: {:?}", t.id, a.issues);
+                let warnings: Vec<_> = a
+                    .issues
+                    .iter()
+                    .filter(|i| t.id != "blank" || !i.message.contains("Reply"))
+                    .collect();
+                assert!(
+                    t.id == "blank" || warnings.is_empty(),
+                    "{}: {:?}",
+                    t.id,
+                    warnings
+                );
+            }
+        }
     }
     use crate::validate::analyze;
 
-    use crate::engine::{Host, LlmAnswer, LlmCall, RunInputs, RunStatus, ToolOutput, run};
+    use crate::engine::{
+        Host, LlmAnswer, LlmCall, LlmFailure, RunInputs, RunStatus, ToolOutput, run,
+    };
     use crate::exchange::{Role, ToolCall, ToolInfo};
     use serde_json::{Value as Json, json};
     use std::sync::Mutex;
@@ -178,25 +199,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn templates_are_valid() {
-        for t in templates() {
-            let a = analyze(&t.file);
-            assert!(a.ok, "{}: {:?}", t.id, a.issues);
-            let warnings: Vec<_> = a
-                .issues
-                .iter()
-                .filter(|i| t.id != "blank" || !i.message.contains("Reply"))
-                .collect();
-            assert!(
-                t.id == "blank" || warnings.is_empty(),
-                "{}: {:?}",
-                t.id,
-                warnings
-            );
-        }
-    }
-
     // ------------------------------------------------------------------
     // The Chummy assistant: one agent loop with the model's own to-do list.
 
@@ -225,6 +227,11 @@ mod tests {
         fail_work: Mutex<u32>,
         /// "Report what went wrong" calls, with what they were sent.
         reports: Mutex<Vec<LlmCall>>,
+        /// Every model call's messages, in order.
+        seen: Mutex<Vec<String>>,
+        /// Ask to pause after this many model calls (0: never).
+        pause_after: usize,
+        pause: std::sync::Arc<AtomicBool>,
     }
 
     fn says(t: &str) -> LlmAnswer {
@@ -289,15 +296,22 @@ mod tests {
             &self,
             call: LlmCall,
             _: &mut (dyn FnMut(&str) + Send),
-        ) -> Result<LlmAnswer, String> {
+        ) -> Result<LlmAnswer, LlmFailure> {
             let all = call
                 .messages
                 .iter()
                 .map(|m| m.text.to_lowercase())
                 .collect::<Vec<_>>()
                 .join("\n");
+            {
+                let mut seen = self.seen.lock().unwrap();
+                seen.push(all.clone());
+                if seen.len() == self.pause_after {
+                    self.pause.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
             if let Some(f) = self.fail_on.filter(|f| all.contains(f)) {
-                return Err(format!("the model server failed on “{f}”"));
+                return Err(format!("the model server failed on “{f}”").into());
             }
             let last = call.messages.last().unwrap().text.to_lowercase();
             if last.contains("write a summary to carry on from") {
@@ -536,6 +550,85 @@ mod tests {
         assert_eq!(third[2].text, "I'll look it up.");
     }
 
+    /// Runs the assistant able to pause (by `host.pause`), or carries on
+    /// `resume`.
+    async fn assist_pausable(
+        host: &Agentic,
+        message: &str,
+        resume: Option<crate::engine::RunState>,
+    ) -> crate::engine::RunOutcome {
+        let t = templates().into_iter().find(|t| t.id == ASSISTANT).unwrap();
+        let inputs = RunInputs {
+            message: message.into(),
+            ..Default::default()
+        };
+        let cancel = AtomicBool::new(false);
+        crate::engine::run_with(
+            &t.file,
+            host,
+            &inputs,
+            resume,
+            &cancel,
+            Some(&host.pause),
+            |_| {},
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn the_assistant_carries_on_the_same_after_a_pause_anywhere() {
+        let script = || {
+            vec![
+                echo("I'll look it up.", 1),
+                echo("", 2),
+                says("It says hi, twice."),
+            ]
+        };
+        let ask = "What does echo say?";
+        let whole = Agentic::with(script());
+        let all = assist_pausable(&whole, ask, None).await;
+        assert_eq!(all.status, RunStatus::Completed, "{all:?}");
+        let calls = whole.seen.lock().unwrap().len();
+        assert!(calls >= 5, "{calls}");
+        // Pause after every model call but the last, save and read back the
+        // state, and carry on: the same calls, tools and replies as without.
+        for k in 1..calls {
+            let host = Agentic {
+                pause_after: k,
+                ..Agentic::with(script())
+            };
+            let first = assist_pausable(&host, ask, None).await;
+            assert!(
+                matches!(first.status, RunStatus::Paused { reason: None }),
+                "after call {k}: {first:?}"
+            );
+            let state = first.paused.as_deref().unwrap();
+            let state = serde_json::from_str(&serde_json::to_string(state).unwrap()).unwrap();
+            host.pause
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+            let rest = assist_pausable(&host, ask, Some(state)).await;
+            assert_eq!(
+                rest.status,
+                RunStatus::Completed,
+                "after call {k}: {rest:?}"
+            );
+            assert_eq!(rest.replies, all.replies, "after call {k}");
+            assert_eq!(
+                *host.seen.lock().unwrap(),
+                *whole.seen.lock().unwrap(),
+                "after call {k}"
+            );
+            assert_eq!(
+                *host.tools_run.lock().unwrap(),
+                *whole.tools_run.lock().unwrap()
+            );
+            assert_eq!(
+                (rest.steps, rest.llm_calls, rest.tool_calls),
+                (all.steps, all.llm_calls, all.tool_calls)
+            );
+        }
+    }
+
     #[tokio::test]
     async fn assistant_keeps_the_models_own_todo_list() {
         let host = Agentic::with(vec![
@@ -571,7 +664,7 @@ mod tests {
         // The early stop is shown, then the model is told to carry on, in a
         // fresh exchange holding the request, the work so far and the list.
         assert_eq!(out.replies[1], "I've read a.");
-        let work = host.work.lock().unwrap();
+        let work = host.work.lock().unwrap().clone();
         let back = &work[2].messages;
         // The fresh exchange, then the step reminder.
         assert_eq!(back.len(), 3, "{back:?}");
@@ -591,20 +684,20 @@ mod tests {
             out.replies.last().unwrap(),
             "- [x] Read a\n- [x] Write b\n\nAll done."
         );
-    }
 
-    #[tokio::test]
-    async fn assistant_sends_it_back_twice_at_most() {
-        let host = Agentic::with(vec![
-            says("- [ ] Do it\n\nHmm."),
-            says("- [ ] Do it\n\nHmm again."),
-            says("- [ ] Do it\n\nStill hmm."),
-            says("never used"),
-        ]);
-        let out = assist(&host, "Do it").await;
-        assert_eq!(out.status, RunStatus::Completed, "{out:?}");
-        assert_eq!(host.calls(), 3);
-        assert_eq!(out.replies.last().unwrap(), "- [ ] Do it\n\nStill hmm.");
+        // (was assistant_sends_it_back_twice_at_most)
+        {
+            let host = Agentic::with(vec![
+                says("- [ ] Do it\n\nHmm."),
+                says("- [ ] Do it\n\nHmm again."),
+                says("- [ ] Do it\n\nStill hmm."),
+                says("never used"),
+            ]);
+            let out = assist(&host, "Do it").await;
+            assert_eq!(out.status, RunStatus::Completed, "{out:?}");
+            assert_eq!(host.calls(), 3);
+            assert_eq!(out.replies.last().unwrap(), "- [ ] Do it\n\nStill hmm.");
+        }
     }
 
     #[tokio::test]

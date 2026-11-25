@@ -166,7 +166,7 @@
           <div class="part answer-part"><span class="who">You</span><span data-selectable>{p.text}</span></div>
         {:else}
           <div class="msg notice in-response">
-            <Icon name={status === "stopped" ? "stop" : "alert"} size={14} />
+            <Icon name={status === "stopped" ? "stop" : status === "paused" ? "pause" : "alert"} size={14} />
             <span data-selectable>{p.text}</span>
           </div>
         {/if}
@@ -226,8 +226,22 @@
           {@render response(run.parts)}
           <div class="activity">
             <span class="pulse"></span>
-            <span class="step">{run.currentLabel ? `${run.currentLabel}…` : "Working…"}</span>
+            <span class="step"
+              >{run.pausing
+                ? "Pausing after this step…"
+                : run.currentLabel
+                  ? `${run.currentLabel}…`
+                  : "Working…"}</span
+            >
             <span class="timer" title="Time since this run started">{elapsed}</span>
+            {#if run.info.pausable}
+              <Button
+                variant="ghost"
+                icon="pause"
+                disabled={run.pausing}
+                onclick={() => runs.pause(run.info.run_id).catch(() => {})}>Pause</Button
+              >
+            {/if}
             <Button variant="ghost" icon="stop" onclick={() => commands.stopRun(run.info.run_id)}>Stop</Button>
           </div>
           {#if run.streaming && !run.waitingForYou}<div class="stream">{run.streaming.slice(-600)}</div>{/if}
@@ -287,7 +301,14 @@
     bottom: 0;
     margin-top: auto;
     padding: var(--space-4) var(--space-5) var(--space-5);
-    background: linear-gradient(to bottom, transparent, var(--bg) var(--space-4));
+    /* Fade from the page colour itself (not transparent black, which some
+       WebKit versions blend through grey), and keep the box on a layer of
+       its own all the time: otherwise WebKitGTK may put it on one only
+       while something animates under it (a run's timer and pulse) and,
+       on some GPUs, show the fading strip black for a moment. */
+    background: linear-gradient(to bottom, color-mix(in srgb, var(--bg) 0%, transparent), var(--bg) var(--space-4));
+    will-change: transform;
+    isolation: isolate;
   }
   .meta-row {
     display: flex;
@@ -369,7 +390,7 @@
   }
   .thread {
     flex: 1 0 auto;
-    width: min(760px, 100%);
+    width: var(--chat-w);
     margin: 0 auto;
     padding: var(--space-5) var(--space-5) var(--space-3);
     display: flex;

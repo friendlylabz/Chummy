@@ -97,9 +97,14 @@ pub struct ChatRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
     /// Reasoning effort, sampling and the rest; unset ones come from the
-    /// connection, and only what its kind of server accepts is sent.
+    /// connection (unless `exact_generation`), and only what its kind of
+    /// server accepts is sent.
     #[serde(default)]
     pub generation: crate::Generation,
+    /// `generation` is already everything to send (a model block's settings
+    /// applied over the connection's), so the connection's don't fill in.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exact_generation: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

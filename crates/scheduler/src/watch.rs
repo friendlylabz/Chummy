@@ -132,20 +132,20 @@ mod tests {
             w.poll(snap(&[("old.txt", 2, 9), ("report.md", 3, 10)]))
                 .is_empty()
         );
-    }
 
-    #[test]
-    fn temporary_files_are_ignored() {
-        for n in [
-            ".DS_Store",
-            "~$doc.docx",
-            "a.txt~",
-            "big.iso.part",
-            "x.CRDOWNLOAD",
-            "f.tmp",
-        ] {
-            assert!(ignored(n), "{n}");
+        // (was temporary_files_are_ignored)
+        {
+            for n in [
+                ".DS_Store",
+                "~$doc.docx",
+                "a.txt~",
+                "big.iso.part",
+                "x.CRDOWNLOAD",
+                "f.tmp",
+            ] {
+                assert!(ignored(n), "{n}");
+            }
+            assert!(!ignored("notes.md"));
         }
-        assert!(!ignored("notes.md"));
     }
 }

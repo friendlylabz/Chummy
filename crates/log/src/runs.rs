@@ -127,6 +127,7 @@ impl RunEnd {
             RunStatus::Stopped => ("stopped", None, None),
             RunStatus::LimitReached { message } => ("limit", Some(message.clone()), None),
             RunStatus::Failed { block, error } => ("failed", Some(error.clone()), block.clone()),
+            RunStatus::Paused { reason } => ("paused", reason.clone(), None),
         };
         RunEnd {
             ended_at: now_ms(),
@@ -806,21 +807,21 @@ mod tests {
         assert!(matches!(&entries[1], Entry::Step(s) if s.inputs[0].value.text == "Sunny"));
         assert!(matches!(&entries[3], Entry::End(e) if e.status == "completed"));
         assert!(read(tmp.path(), "../x", None).is_none());
-    }
 
-    #[test]
-    fn a_dropped_log_is_marked_interrupted() {
-        let tmp = tempfile::tempdir().unwrap();
-        drop(
-            RunLog::create(
-                tmp.path(),
-                header("run-2", "Helper", now_ms()),
-                LogOptions::default(),
-            )
-            .unwrap(),
-        );
-        let s = search(tmp.path(), &RunQuery::default(), &HashSet::new(), None);
-        assert_eq!(s[0].end.as_ref().unwrap().status, "interrupted");
+        // (was a_dropped_log_is_marked_interrupted)
+        {
+            let tmp = tempfile::tempdir().unwrap();
+            drop(
+                RunLog::create(
+                    tmp.path(),
+                    header("run-2", "Helper", now_ms()),
+                    LogOptions::default(),
+                )
+                .unwrap(),
+            );
+            let s = search(tmp.path(), &RunQuery::default(), &HashSet::new(), None);
+            assert_eq!(s[0].end.as_ref().unwrap().status, "interrupted");
+        }
     }
 
     #[test]

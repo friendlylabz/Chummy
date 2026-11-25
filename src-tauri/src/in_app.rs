@@ -77,6 +77,7 @@ pub async fn title_chat(
         ],
         tools: vec![],
         tool_choice: ToolChoice::Auto,
+        generation: Default::default(),
         temperature: Some(0.2),
         max_tokens: Some(48),
         model: None,

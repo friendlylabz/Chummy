@@ -280,40 +280,40 @@ mod tests {
             other
         );
         assert!(lib.upgrade_builtins().is_empty(), "only once");
-    }
 
-    #[test]
-    fn unedited_copies_of_retired_built_ins_are_replaced() {
-        let tmp = tempfile::tempdir().unwrap();
-        let lib = Library::new(tmp.path());
-        let current = chummy_flow::templates()
-            .into_iter()
-            .find(|t| t.id == chummy_flow::ASSISTANT)
-            .unwrap()
-            .file;
-        // Stand-ins for an old version, and for an edited copy of it.
-        let mut old = current.clone();
-        old.description = "An older version.".into();
-        let mut edited = old.clone();
-        edited.limits.max_steps = 123;
-        std::fs::write(tmp.path().join("old.json"), old.to_json()).unwrap();
-        std::fs::write(tmp.path().join("edited.json"), edited.to_json()).unwrap();
-        let print = fingerprint(&old);
-        assert_eq!(
-            lib.upgrade_builtins_with(&[print.as_str()]),
-            std::slice::from_ref(&current.name)
-        );
-        assert_eq!(lib.load("old").unwrap(), current);
-        assert_eq!(lib.load("edited").unwrap(), edited, "edits are kept");
-        // The real list holds proper fingerprints.
-        assert!(
-            RETIRED
-                .iter()
-                .all(|p| p.len() == 64 && p.chars().all(|c| c.is_ascii_hexdigit()))
-        );
-        assert!(
-            !RETIRED.contains(&fingerprint(&current).as_str()),
-            "the current one isn't retired"
-        );
+        // (was unedited_copies_of_retired_built_ins_are_replaced)
+        {
+            let tmp = tempfile::tempdir().unwrap();
+            let lib = Library::new(tmp.path());
+            let current = chummy_flow::templates()
+                .into_iter()
+                .find(|t| t.id == chummy_flow::ASSISTANT)
+                .unwrap()
+                .file;
+            // Stand-ins for an old version, and for an edited copy of it.
+            let mut old = current.clone();
+            old.description = "An older version.".into();
+            let mut edited = old.clone();
+            edited.limits.max_steps = 123;
+            std::fs::write(tmp.path().join("old.json"), old.to_json()).unwrap();
+            std::fs::write(tmp.path().join("edited.json"), edited.to_json()).unwrap();
+            let print = fingerprint(&old);
+            assert_eq!(
+                lib.upgrade_builtins_with(&[print.as_str()]),
+                std::slice::from_ref(&current.name)
+            );
+            assert_eq!(lib.load("old").unwrap(), current);
+            assert_eq!(lib.load("edited").unwrap(), edited, "edits are kept");
+            // The real list holds proper fingerprints.
+            assert!(
+                RETIRED
+                    .iter()
+                    .all(|p| p.len() == 64 && p.chars().all(|c| c.is_ascii_hexdigit()))
+            );
+            assert!(
+                !RETIRED.contains(&fingerprint(&current).as_str()),
+                "the current one isn't retired"
+            );
+        }
     }
 }

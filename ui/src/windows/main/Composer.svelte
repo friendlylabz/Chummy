@@ -5,6 +5,8 @@
   import { chat } from "$lib/stores/chat.svelte";
   import { runs } from "$lib/stores/runs.svelte";
   import { asks } from "$lib/stores/asks.svelte";
+  import { paused } from "$lib/stores/paused.svelte";
+  import { errorText } from "$lib/ipc";
   import Icon from "$lib/components/Icon.svelte";
   import { tick } from "svelte";
   import { TextUndo, undoKey } from "$lib/undo";
@@ -21,7 +23,19 @@
   const question = $derived(
     run ? asks.forRun(run.info.run_id).find((p) => p.ask.kind === "question") : undefined,
   );
-  const disabled = $derived(!setup.ready || !agent || (!!jobRun && !question));
+  /** This chat's paused run, if it has one. */
+  const pausedHere = $derived(agent && !run ? paused.forChat(agent.id, chat.chatId) : undefined);
+  const disabled = $derived(!setup.ready || !agent || (!!jobRun && !question) || !!pausedHere);
+  let pauseError = $state("");
+  async function pause() {
+    if (!run) return;
+    pauseError = "";
+    try {
+      await runs.pause(run.info.run_id);
+    } catch (e) {
+      pauseError = errorText(e);
+    }
+  }
   const placeholder = $derived.by(() => {
     const s = setup.status;
     const missing = [
@@ -34,6 +48,10 @@
       return `To start chatting, ${list}`;
     }
     if (question) return `Answer ${agent?.name ?? "the agent"}…`;
+    if (pausedHere)
+      return pausedHere.reason
+        ? "Paused: the model couldn't be reached. Resume when it's back, or discard."
+        : "Paused. Resume to carry on where it stopped, or discard.";
     if (jobRun && agent) return `${agent.name} is busy with the job “${jobRun.info.title}”…`;
     return agent ? `Message ${agent.name}…` : "Choose an agent to chat with";
   });
@@ -105,6 +123,8 @@
 
 {#if chat.error}<div class="error" role="alert">{chat.error}</div>{/if}
 {#if question && asks.errors[question.id]}<div class="error" role="alert">{asks.errors[question.id]}</div>{/if}
+{#if pauseError}<div class="error" role="alert">{pauseError}</div>{/if}
+{#if pausedHere && paused.errors[pausedHere.chat_id]}<div class="error" role="alert">{paused.errors[pausedHere.chat_id]}</div>{/if}
 <form
   class="composer"
   class:disabled
@@ -125,8 +145,41 @@
     aria-label="Message"
   ></textarea>
   {#if run && !question}
-    <button type="button" class="send stop" aria-label="Stop" onclick={() => commands.stopRun(run.info.run_id)}>
+    {#if run.info.pausable}
+      <button
+        type="button"
+        class="send pause"
+        aria-label={run.pausing ? "Pausing after this step" : "Pause"}
+        title={run.pausing ? "Pausing after this step…" : "Pause (carry on later, even after quitting)"}
+        disabled={run.pausing}
+        onclick={pause}
+      >
+        <Icon name="pause" size={15} />
+      </button>
+    {/if}
+    <button type="button" class="send stop" aria-label="Stop" title="Stop" onclick={() => commands.stopRun(run.info.run_id)}>
       <Icon name="stop" size={15} />
+    </button>
+  {:else if pausedHere}
+    <button
+      type="button"
+      class="send discard"
+      aria-label="Discard the paused run"
+      title="Discard the paused run"
+      disabled={paused.busy[pausedHere.chat_id]}
+      onclick={() => paused.discard(pausedHere)}
+    >
+      <Icon name="trash" size={15} />
+    </button>
+    <button
+      type="button"
+      class="send"
+      aria-label="Resume"
+      title="Resume where it stopped"
+      disabled={paused.busy[pausedHere.chat_id]}
+      onclick={() => paused.resume(pausedHere)}
+    >
+      <Icon name="play" size={16} />
     </button>
   {:else}
     <button type="submit" class="send" disabled={disabled || !text.trim()} aria-label="Send">
@@ -137,7 +190,7 @@
 
 <style>
   .error {
-    width: min(760px, 100%);
+    width: var(--chat-w);
     margin: 0 auto var(--space-2);
     padding: var(--space-2) var(--space-3);
     border-radius: var(--radius-md);
@@ -148,7 +201,7 @@
     display: flex;
     align-items: flex-end;
     gap: var(--space-2);
-    width: min(760px, 100%);
+    width: var(--chat-w);
     margin: 0 auto;
     padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
     border-radius: var(--radius-xl);
@@ -204,5 +257,20 @@
   .send.stop {
     background: var(--text);
     color: var(--bg);
+  }
+  .send.pause,
+  .send.discard {
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border-strong);
+  }
+  .send.pause:hover:not(:disabled),
+  .send.discard:hover:not(:disabled) {
+    background: var(--surface-hover);
+  }
+  .send.pause:disabled {
+    background: var(--surface-2);
+    color: var(--text-faint);
+    cursor: progress;
   }
 </style>

@@ -321,23 +321,23 @@ mod tests {
         assert!(store.list().0.is_empty());
         assert!(store.history("digest").is_empty());
         store.delete("digest").unwrap();
-    }
 
-    #[test]
-    fn state_round_trips() {
-        let tmp = tempfile::tempdir().unwrap();
-        let store = JobStore::open(tmp.path()).unwrap();
-        assert_eq!(store.state(), (BTreeMap::new(), false));
-        let mut m = BTreeMap::new();
-        m.insert(
-            "a".to_string(),
-            JobState {
-                checked_until: 5,
-                anchor: 1,
-                last_run: Some(3),
-            },
-        );
-        store.save_state(&m, true).unwrap();
-        assert_eq!(store.state(), (m, true));
+        // (was state_round_trips)
+        {
+            let tmp = tempfile::tempdir().unwrap();
+            let store = JobStore::open(tmp.path()).unwrap();
+            assert_eq!(store.state(), (BTreeMap::new(), false));
+            let mut m = BTreeMap::new();
+            m.insert(
+                "a".to_string(),
+                JobState {
+                    checked_until: 5,
+                    anchor: 1,
+                    last_run: Some(3),
+                },
+            );
+            store.save_state(&m, true).unwrap();
+            assert_eq!(store.state(), (m, true));
+        }
     }
 }

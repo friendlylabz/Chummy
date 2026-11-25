@@ -474,14 +474,14 @@ mod tests {
             bind(Path::new("/a,b"), "/workspace", false),
             "type=bind,\"source=/a,b\",target=/workspace"
         );
-    }
 
-    #[test]
-    fn windows_long_paths_are_shortened() {
-        assert_eq!(
-            bind(Path::new(r"\\?\C:\Users\me\ws"), "/workspace", false),
-            r"type=bind,source=C:\Users\me\ws,target=/workspace"
-        );
+        // (was windows_long_paths_are_shortened)
+        {
+            assert_eq!(
+                bind(Path::new(r"\\?\C:\Users\me\ws"), "/workspace", false),
+                r"type=bind,source=C:\Users\me\ws,target=/workspace"
+            );
+        }
     }
 
     #[test]
@@ -491,27 +491,27 @@ mod tests {
         assert!(!valid_image("--privileged"));
         assert!(!valid_image("img name"));
         assert!(!valid_image(""));
+
+        // (was names_are_unique)
+        {
+            assert_ne!(call_name(), call_name());
+        }
+
+        // (was limits_are_clamped)
+        {
+            let o = ContainerOptions {
+                memory_mb: 1,
+                cpus: f64::NAN,
+                ..Default::default()
+            }
+            .normalized();
+            assert_eq!((o.memory_mb, o.cpus), (128, 2.0));
+        }
     }
 
     #[test]
     fn calls_without_an_image_explain() {
         let s = ContainerSandbox::new(ContainerOptions::default(), ToolPaths::new("/x")).unwrap();
         assert!(s.image_id().unwrap_err().contains("Security and Privacy"));
-    }
-
-    #[test]
-    fn limits_are_clamped() {
-        let o = ContainerOptions {
-            memory_mb: 1,
-            cpus: f64::NAN,
-            ..Default::default()
-        }
-        .normalized();
-        assert_eq!((o.memory_mb, o.cpus), (128, 2.0));
-    }
-
-    #[test]
-    fn names_are_unique() {
-        assert_ne!(call_name(), call_name());
     }
 }

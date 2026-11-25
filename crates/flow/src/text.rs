@@ -261,14 +261,14 @@ mod tests {
         assert_eq!(chunks[0], "One sentence here.");
         assert_eq!(split("short", 100, 0, 5), vec!["short"]);
         assert_eq!(split("", 10, 0, 5), vec![""]);
-    }
 
-    #[test]
-    fn split_handles_overlap_and_unicode() {
-        let text = "ééééé ééééé ééééé ééééé";
-        let chunks = split(text, 8, 3, 2);
-        assert!(chunks.len() > 1);
-        assert!(chunks.iter().all(|c| !c.is_empty()));
+        // (was split_handles_overlap_and_unicode)
+        {
+            let text = "ééééé ééééé ééééé ééééé";
+            let chunks = split(text, 8, 3, 2);
+            assert!(chunks.len() > 1);
+            assert!(chunks.iter().all(|c| !c.is_empty()));
+        }
     }
 
     #[test]
@@ -292,51 +292,51 @@ mod tests {
     }
 
     #[test]
-    fn fills_numbered_inputs_in_one_pass() {
-        let v = |xs: &[&str]| xs.iter().map(|x| x.to_string()).collect::<Vec<_>>();
-        assert_eq!(
-            fill_numbered("_INPUT1_ and _INPUT2_", &v(&["a", "b"])),
-            "a and b"
-        );
-        // Text from input 2 that looks like a placeholder stays as it is.
-        assert_eq!(
-            fill_numbered("_INPUT1_|_INPUT2_", &v(&["x", "_INPUT1_"])),
-            "x|_INPUT1_"
-        );
-        let ten: Vec<String> = (1..=10).map(|i| i.to_string()).collect();
-        assert_eq!(fill_numbered("_INPUT10_-_INPUT1_", &ten), "10-1");
-        assert_eq!(
-            fill_numbered("_INPUT3_ _INPUT_ _INPUTx_ _INPUT", &v(&["a"])),
-            "_INPUT3_ _INPUT_ _INPUTx_ _INPUT"
-        );
-    }
-
-    #[test]
     fn fills_prompts() {
         assert_eq!(fill_prompt("Q: _INPUT_?", "x"), "Q: x?");
         assert_eq!(fill_prompt("Summarize.", "text"), "Summarize.\n\ntext");
         assert_eq!(fill_prompt("", "just this"), "just this");
-    }
 
-    #[test]
-    fn templates_fill_memory_and_input_once() {
-        let mut m = Memory::new();
-        m.insert("notes".into(), "saw _INPUT_ and {{notes}}".into());
-        assert_eq!(
-            fill_template("Notes: {{notes}}\nTask: _INPUT_", Some("do {{notes}}"), &m),
-            "Notes: saw _INPUT_ and {{notes}}\nTask: do {{notes}}"
-        );
-        // Unknown names are empty; things that aren't names are left alone.
-        assert_eq!(
-            fill_template("[{{missing}}] {{not a name}} {{", None, &m),
-            "[] {{not a name}} {{"
-        );
-        // Without _INPUT_, the input goes after.
-        assert_eq!(fill_template("Do this:", Some("x"), &m), "Do this:\n\nx");
-        assert_eq!(fill_template("", Some("x"), &m), "x");
-        assert_eq!(
-            fill_template("{{ notes }}", None, &m),
-            "saw _INPUT_ and {{notes}}"
-        );
+        // (was templates_fill_memory_and_input_once)
+        {
+            let mut m = Memory::new();
+            m.insert("notes".into(), "saw _INPUT_ and {{notes}}".into());
+            assert_eq!(
+                fill_template("Notes: {{notes}}\nTask: _INPUT_", Some("do {{notes}}"), &m),
+                "Notes: saw _INPUT_ and {{notes}}\nTask: do {{notes}}"
+            );
+            // Unknown names are empty; things that aren't names are left alone.
+            assert_eq!(
+                fill_template("[{{missing}}] {{not a name}} {{", None, &m),
+                "[] {{not a name}} {{"
+            );
+            // Without _INPUT_, the input goes after.
+            assert_eq!(fill_template("Do this:", Some("x"), &m), "Do this:\n\nx");
+            assert_eq!(fill_template("", Some("x"), &m), "x");
+            assert_eq!(
+                fill_template("{{ notes }}", None, &m),
+                "saw _INPUT_ and {{notes}}"
+            );
+        }
+
+        // (was fills_numbered_inputs_in_one_pass)
+        {
+            let v = |xs: &[&str]| xs.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+            assert_eq!(
+                fill_numbered("_INPUT1_ and _INPUT2_", &v(&["a", "b"])),
+                "a and b"
+            );
+            // Text from input 2 that looks like a placeholder stays as it is.
+            assert_eq!(
+                fill_numbered("_INPUT1_|_INPUT2_", &v(&["x", "_INPUT1_"])),
+                "x|_INPUT1_"
+            );
+            let ten: Vec<String> = (1..=10).map(|i| i.to_string()).collect();
+            assert_eq!(fill_numbered("_INPUT10_-_INPUT1_", &ten), "10-1");
+            assert_eq!(
+                fill_numbered("_INPUT3_ _INPUT_ _INPUTx_ _INPUT", &v(&["a"])),
+                "_INPUT3_ _INPUT_ _INPUTx_ _INPUT"
+            );
+        }
     }
 }

@@ -22,6 +22,8 @@ pub struct ChummyDirs {
     pub logs: PathBuf,
     /// Scheduled jobs, their state and run history.
     pub jobs: PathBuf,
+    /// Paused chat runs, sealed (see [`crate::paused`]).
+    pub paused: PathBuf,
 }
 
 impl ChummyDirs {
@@ -37,6 +39,7 @@ impl ChummyDirs {
             tools: root.join("tools"),
             logs: root.join("logs"),
             jobs: root.join("jobs"),
+            paused: root.join("paused"),
             root,
         }
     }
@@ -54,6 +57,7 @@ impl ChummyDirs {
             &self.tools,
             &self.logs,
             &self.jobs,
+            &self.paused,
         ] {
             std::fs::create_dir_all(dir)?;
         }

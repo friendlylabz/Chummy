@@ -73,23 +73,7 @@ mod tests {
     }
 
     #[test]
-    fn reads_the_flag_both_ways() {
-        let cwd = Path::new("/home/me");
-        assert_eq!(data_dir_arg(args(&[]), cwd).unwrap(), None);
-        assert_eq!(
-            data_dir_arg(args(&["--data-dir", "/x/chummy"]), cwd).unwrap(),
-            Some(PathBuf::from("/x/chummy"))
-        );
-        assert_eq!(
-            data_dir_arg(args(&["--data-dir=portable"]), cwd).unwrap(),
-            Some(PathBuf::from("/home/me/portable"))
-        );
-        assert!(data_dir_arg(args(&["--data-dir"]), cwd).is_err());
-        assert!(data_dir_arg(args(&["--data-dir="]), cwd).is_err());
-    }
-
-    #[test]
-    fn only_empty_new_or_chummy_folders() {
+    fn the_data_dir_flag_and_its_folder() {
         let tmp = tempfile::tempdir().unwrap();
         let new = tmp.path().join("new");
         assert!(prepare_data_dir(&new).unwrap().is_dir());
@@ -101,5 +85,21 @@ mod tests {
         let file = tmp.path().join("f");
         std::fs::write(&file, "x").unwrap();
         assert!(prepare_data_dir(&file).is_err());
+
+        // (was reads_the_flag_both_ways)
+        {
+            let cwd = Path::new("/home/me");
+            assert_eq!(data_dir_arg(args(&[]), cwd).unwrap(), None);
+            assert_eq!(
+                data_dir_arg(args(&["--data-dir", "/x/chummy"]), cwd).unwrap(),
+                Some(PathBuf::from("/x/chummy"))
+            );
+            assert_eq!(
+                data_dir_arg(args(&["--data-dir=portable"]), cwd).unwrap(),
+                Some(PathBuf::from("/home/me/portable"))
+            );
+            assert!(data_dir_arg(args(&["--data-dir"]), cwd).is_err());
+            assert!(data_dir_arg(args(&["--data-dir="]), cwd).is_err());
+        }
     }
 }

@@ -14,6 +14,7 @@ mod host;
 mod in_app;
 mod library;
 mod notify;
+mod paused;
 mod settings;
 mod state;
 mod tray;
@@ -87,6 +88,7 @@ pub fn run() {
             };
             let handle = app.handle().clone();
             logs::start(&handle, &state);
+            paused::load(&state);
             app.manage(state);
             commands::tools::refresh_builtins(&handle);
             // Container and OpenShell are checked at start-up; until a check
@@ -147,6 +149,10 @@ pub fn run() {
             chat::send_message,
             chat::test_run,
             chat::stop_run,
+            chat::pause_run,
+            chat::resume_run,
+            chat::discard_paused,
+            chat::list_paused,
             chat::list_runs,
             chat::run_pane,
             providers::list_presets,

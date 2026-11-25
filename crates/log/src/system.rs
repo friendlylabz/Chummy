@@ -223,35 +223,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn writes_reads_and_tells_listeners() {
-        let tmp = tempfile::tempdir().unwrap();
-        let log = SystemLog::new(tmp.path());
-        log.set_min_level(Some(Level::Debug));
-        let seen = std::sync::Arc::new(Mutex::new(0));
-        let s2 = seen.clone();
-        log.set_listener(move |_| *s2.lock().unwrap() += 1);
-        let at = now_ms();
-        for i in 0..3 {
-            log.write(SysEntry {
-                at,
-                level: Level::Info,
-                source: "app".into(),
-                message: format!("hello {i}"),
-                fields: [("k".to_string(), "v".to_string())].into(),
-            });
-        }
-        let day = day_of(at);
-        assert_eq!(log.days(), std::slice::from_ref(&day));
-        let read = log.read_day(&day);
-        assert_eq!(read.len(), 3);
-        assert_eq!(read[2].message, "hello 2");
-        assert_eq!(read[0].fields["k"], "v");
-        assert_eq!(*seen.lock().unwrap(), 3);
-        assert_eq!(log.recent().len(), 3);
-        assert!(log.read_day("../../etc").is_empty());
-    }
-
-    #[test]
     fn levels_filter_and_off_writes_nothing() {
         let tmp = tempfile::tempdir().unwrap();
         let log = SystemLog::new(tmp.path());
@@ -271,6 +242,35 @@ mod tests {
         log.write(e(Level::Error));
         let levels: Vec<Level> = log.recent().into_iter().map(|e| e.level).collect();
         assert_eq!(levels, [Level::Info, Level::Error]);
+
+        // (was writes_reads_and_tells_listeners)
+        {
+            let tmp = tempfile::tempdir().unwrap();
+            let log = SystemLog::new(tmp.path());
+            log.set_min_level(Some(Level::Debug));
+            let seen = std::sync::Arc::new(Mutex::new(0));
+            let s2 = seen.clone();
+            log.set_listener(move |_| *s2.lock().unwrap() += 1);
+            let at = now_ms();
+            for i in 0..3 {
+                log.write(SysEntry {
+                    at,
+                    level: Level::Info,
+                    source: "app".into(),
+                    message: format!("hello {i}"),
+                    fields: [("k".to_string(), "v".to_string())].into(),
+                });
+            }
+            let day = day_of(at);
+            assert_eq!(log.days(), std::slice::from_ref(&day));
+            let read = log.read_day(&day);
+            assert_eq!(read.len(), 3);
+            assert_eq!(read[2].message, "hello 2");
+            assert_eq!(read[0].fields["k"], "v");
+            assert_eq!(*seen.lock().unwrap(), 3);
+            assert_eq!(log.recent().len(), 3);
+            assert!(log.read_day("../../etc").is_empty());
+        }
     }
 
     #[test]

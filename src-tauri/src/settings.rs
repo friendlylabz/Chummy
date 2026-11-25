@@ -648,7 +648,7 @@ mod tests {
     }
 
     #[test]
-    fn v1_workspace_is_migrated_away() {
+    fn older_settings_are_migrated() {
         let v1 = serde_json::json!({
             "version": 1, "theme": "light",
             "workspace": { "path": "/tmp/x", "confirmed_at": 1 }
@@ -657,20 +657,20 @@ mod tests {
         assert!(v.get("workspace").is_none());
         let s: Settings = serde_json::from_value(v).unwrap();
         assert_eq!((s.version, s.theme), (VERSION, Theme::Light));
-    }
 
-    #[test]
-    fn v2_agents_keep_their_tools() {
-        let v2 = serde_json::json!({
-            "version": 2,
-            "permissions": { "network": true, "tools": true },
-            "tools": { "calculator": { "enabled": true }, "fetch_page": { "enabled": false, "network": true } },
-            "agents": [{ "id": "a", "name": "A", "loop_id": "l",
-                         "workspace": { "path": "/tmp/a", "confirmed_at": 1 }, "created_at": 1 }]
-        });
-        let s: Settings = serde_json::from_value(migrate(v2)).unwrap();
-        let a = &s.agents[0];
-        assert_eq!(a.tools.iter().collect::<Vec<_>>(), ["calculator"]);
-        assert!(a.network);
+        // (was v2_agents_keep_their_tools)
+        {
+            let v2 = serde_json::json!({
+                "version": 2,
+                "permissions": { "network": true, "tools": true },
+                "tools": { "calculator": { "enabled": true }, "fetch_page": { "enabled": false, "network": true } },
+                "agents": [{ "id": "a", "name": "A", "loop_id": "l",
+                             "workspace": { "path": "/tmp/a", "confirmed_at": 1 }, "created_at": 1 }]
+            });
+            let s: Settings = serde_json::from_value(migrate(v2)).unwrap();
+            let a = &s.agents[0];
+            assert_eq!(a.tools.iter().collect::<Vec<_>>(), ["calculator"]);
+            assert!(a.network);
+        }
     }
 }

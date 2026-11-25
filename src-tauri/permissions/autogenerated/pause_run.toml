@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-pause-run"
+description = "Enables the pause_run command without any pre-configured scope."
+commands.allow = ["pause_run"]
+
+[[permission]]
+identifier = "deny-pause-run"
+description = "Denies the pause_run command without any pre-configured scope."
+commands.deny = ["pause_run"]

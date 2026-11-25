@@ -499,10 +499,10 @@ mod tests {
             assert!(p.contains("=="), "{p} isn't pinned");
         }
         assert_eq!(PYTHON_VERSION.split('.').count(), 3);
-    }
 
-    #[test]
-    fn there_is_a_uv_build_for_this_platform() {
-        assert!(uv_asset().is_ok());
+        // (was there_is_a_uv_build_for_this_platform)
+        {
+            assert!(uv_asset().is_ok());
+        }
     }
 }

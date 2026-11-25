@@ -306,43 +306,49 @@ mod tests {
         });
         let back = LoopFile::from_json(&l.to_json()).unwrap();
         assert_eq!(l, back);
-    }
 
-    #[test]
-    fn rejects_ambiguity() {
-        assert!(matches!(
-            LoopFile::from_json("{}"),
-            Err(FlowError::Parse(_))
-        ));
-        assert!(matches!(
-            LoopFile::from_json(r#"{"format":"other","version":1}"#),
-            Err(FlowError::WrongFormat(_))
-        ));
-        assert!(matches!(
-            LoopFile::from_json(r#"{"format":"chummy.loop","version":9,"name":"x","blocks":[]}"#),
-            Err(FlowError::UnsupportedVersion(9))
-        ));
-        // A huge version must not wrap around to 1.
-        assert!(
-            LoopFile::from_json(
-                r#"{"format":"chummy.loop","version":4294967297,"name":"x","blocks":[]}"#
-            )
-            .is_err()
-        );
-        assert!(
-            LoopFile::from_json(r#"{"format":"chummy.loop","version":1.5,"name":"x","blocks":[]}"#)
+        // (was rejects_ambiguity)
+        {
+            assert!(matches!(
+                LoopFile::from_json("{}"),
+                Err(FlowError::Parse(_))
+            ));
+            assert!(matches!(
+                LoopFile::from_json(r#"{"format":"other","version":1}"#),
+                Err(FlowError::WrongFormat(_))
+            ));
+            assert!(matches!(
+                LoopFile::from_json(
+                    r#"{"format":"chummy.loop","version":9,"name":"x","blocks":[]}"#
+                ),
+                Err(FlowError::UnsupportedVersion(9))
+            ));
+            // A huge version must not wrap around to 1.
+            assert!(
+                LoopFile::from_json(
+                    r#"{"format":"chummy.loop","version":4294967297,"name":"x","blocks":[]}"#
+                )
                 .is_err()
-        );
-        // Version 1 files still load.
-        assert!(
-            LoopFile::from_json(r#"{"format":"chummy.loop","version":1,"name":"x","blocks":[]}"#)
+            );
+            assert!(
+                LoopFile::from_json(
+                    r#"{"format":"chummy.loop","version":1.5,"name":"x","blocks":[]}"#
+                )
+                .is_err()
+            );
+            // Version 1 files still load.
+            assert!(
+                LoopFile::from_json(
+                    r#"{"format":"chummy.loop","version":1,"name":"x","blocks":[]}"#
+                )
                 .is_ok()
-        );
-        // Unknown fields are errors, not silently dropped.
-        let extra = r#"{"format":"chummy.loop","version":1,"name":"x","blocks":[],"nodes":[]}"#;
-        assert!(LoopFile::from_json(extra).is_err());
-        let extra_block = r#"{"format":"chummy.loop","version":1,"name":"x",
-            "blocks":[{"id":"a","type":"input","colour":"red"}]}"#;
-        assert!(LoopFile::from_json(extra_block).is_err());
+            );
+            // Unknown fields are errors, not silently dropped.
+            let extra = r#"{"format":"chummy.loop","version":1,"name":"x","blocks":[],"nodes":[]}"#;
+            assert!(LoopFile::from_json(extra).is_err());
+            let extra_block = r#"{"format":"chummy.loop","version":1,"name":"x",
+                "blocks":[{"id":"a","type":"input","colour":"red"}]}"#;
+            assert!(LoopFile::from_json(extra_block).is_err());
+        }
     }
 }

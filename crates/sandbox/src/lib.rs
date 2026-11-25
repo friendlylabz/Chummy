@@ -86,6 +86,18 @@ mod tests {
         let grants = Grants::default();
         assert!(grants.is_empty());
         assert!(!grants.allows(&Grant::Network { hosts: vec![] }));
+
+        // (was grants_insert_and_revoke)
+        {
+            let mut grants = Grants::default();
+            let net = Grant::Network {
+                hosts: vec!["example.com".into()],
+            };
+            grants.insert(net.clone());
+            assert!(grants.allows(&net));
+            grants.revoke(&net);
+            assert!(!grants.allows(&net));
+        }
     }
 
     #[test]
@@ -96,17 +108,5 @@ mod tests {
         assert!(paths_overlap(Path::new("/a"), Path::new("/a/b")));
         assert!(!paths_overlap(Path::new("/a/b"), Path::new("/a/bc")));
         assert!(!paths_overlap(Path::new("/a/x"), Path::new("/a/y")));
-    }
-
-    #[test]
-    fn grants_insert_and_revoke() {
-        let mut grants = Grants::default();
-        let net = Grant::Network {
-            hosts: vec!["example.com".into()],
-        };
-        grants.insert(net.clone());
-        assert!(grants.allows(&net));
-        grants.revoke(&net);
-        assert!(!grants.allows(&net));
     }
 }

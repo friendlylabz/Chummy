@@ -349,15 +349,28 @@ import chummy
         let risky = parse_meta(&GOOD.replace("network = true", "network = true\n# risky = true"));
         assert!(risky.unwrap().risky);
         assert!(m.needs.is_empty());
-    }
 
-    #[test]
-    fn reads_needs() {
-        let m = parse_meta(&GOOD.replace("network = true", "needs = [\"programs\", \"programs\"]"))
-            .unwrap();
-        assert_eq!(m.needs, vec!["programs".to_string()]);
-        let bad = parse_meta(&GOOD.replace("network = true", "needs = [\"gpu\"]"));
-        assert!(bad.unwrap_err().to_string().contains("gpu"));
+        // (was python_versions)
+        {
+            assert!(python_satisfies(">=3.12", "3.14.7").unwrap());
+            assert!(!python_satisfies(">=3.15", "3.14.7").unwrap());
+            assert!(python_satisfies(">=3.12,<4", "3.14.7").unwrap());
+            assert!(python_satisfies("==3.14.*", "3.14.7").unwrap());
+            assert!(!python_satisfies("==3.13.*", "3.14.7").unwrap());
+            assert!(python_satisfies("~=3.12", "3.14.7").unwrap());
+            assert!(!python_satisfies("~=3.12.1", "3.14.7").unwrap());
+            assert!(python_satisfies("abc", "3.14").is_err());
+        }
+
+        // (was reads_needs)
+        {
+            let m =
+                parse_meta(&GOOD.replace("network = true", "needs = [\"programs\", \"programs\"]"))
+                    .unwrap();
+            assert_eq!(m.needs, vec!["programs".to_string()]);
+            let bad = parse_meta(&GOOD.replace("network = true", "needs = [\"gpu\"]"));
+            assert!(bad.unwrap_err().to_string().contains("gpu"));
+        }
     }
 
     #[test]
@@ -395,17 +408,5 @@ import chummy
         ] {
             assert!(!valid_requirement(bad), "{bad}");
         }
-    }
-
-    #[test]
-    fn python_versions() {
-        assert!(python_satisfies(">=3.12", "3.14.7").unwrap());
-        assert!(!python_satisfies(">=3.15", "3.14.7").unwrap());
-        assert!(python_satisfies(">=3.12,<4", "3.14.7").unwrap());
-        assert!(python_satisfies("==3.14.*", "3.14.7").unwrap());
-        assert!(!python_satisfies("==3.13.*", "3.14.7").unwrap());
-        assert!(python_satisfies("~=3.12", "3.14.7").unwrap());
-        assert!(!python_satisfies("~=3.12.1", "3.14.7").unwrap());
-        assert!(python_satisfies("abc", "3.14").is_err());
     }
 }

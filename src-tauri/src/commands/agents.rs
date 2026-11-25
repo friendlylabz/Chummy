@@ -340,6 +340,7 @@ pub async fn delete_agent(
         return Ok(false);
     }
     crate::commands::chat::stop_agent_runs(&state, &id);
+    crate::paused::discard_agent(&app, &state, &id);
     crate::chats::delete_agent(&state.dirs.chats, &id)?;
     state.update(&app, |s| {
         s.agents.retain(|a| a.id != id);

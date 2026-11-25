@@ -367,13 +367,13 @@ mod tests {
         assert_eq!(parse_python("\n 3.12.10 \n").as_deref(), Some("3.12.10"));
         assert_eq!(parse_python("Python 3.12"), None);
         assert_eq!(parse_python(""), None);
-    }
 
-    #[test]
-    fn settings_default_to_native() {
-        let s: SandboxSettings = serde_json::from_str("{}").unwrap();
-        assert_eq!(s.kind, SandboxKind::Native);
-        let s: SandboxSettings = serde_json::from_str(r#"{"kind":"openshell"}"#).unwrap();
-        assert_eq!(s.kind, SandboxKind::Openshell);
+        // (was settings_default_to_native)
+        {
+            let s: SandboxSettings = serde_json::from_str("{}").unwrap();
+            assert_eq!(s.kind, SandboxKind::Native);
+            let s: SandboxSettings = serde_json::from_str(r#"{"kind":"openshell"}"#).unwrap();
+            assert_eq!(s.kind, SandboxKind::Openshell);
+        }
     }
 }

@@ -19,6 +19,10 @@ pub const RUN_STARTED: &str = "run:started";
 pub const RUN_EVENT: &str = "run:event";
 /// Payload: `RunFinished`.
 pub const RUN_FINISHED: &str = "run:finished";
+/// A chat run will pause after its current block. Payload: `RunPausing`.
+pub const RUN_PAUSING: &str = "run:pausing";
+/// The paused chat runs changed. Payload: `Vec<paused::PausedInfo>`.
+pub const PAUSED_CHANGED: &str = "paused:changed";
 /// A question and answer added to a running chat run's response. Payload: `RunSaid`.
 pub const RUN_SAID: &str = "run:said";
 /// Payload: `ChatMessageEvent`.

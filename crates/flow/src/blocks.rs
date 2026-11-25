@@ -1,5 +1,6 @@
 //! The block catalog: every block type, its parameters and its ports.
 
+use crate::generation::GenerationOverrides;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
@@ -229,6 +230,10 @@ pub struct LlmParams {
     /// Longest answer; `None` uses the model connection's setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    /// Reasoning effort, sampling, penalties, seed and stop sequences for
+    /// this block: missing inherits, `null` doesn't send, a value sets.
+    #[serde(default, skip_serializing_if = "GenerationOverrides::is_empty")]
+    pub generation: GenerationOverrides,
     /// Model connection id. `None` uses the agent's model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -878,6 +883,10 @@ pub enum ParamKind {
     Roles,
     /// Tool switches: one for all tools (inherit / on / off), and one per tool.
     Tools,
+    /// A model block's generation settings, shown together: `temperature`,
+    /// `max_tokens` and the `generation` object (see [`GenerationOverrides`]),
+    /// each inherited from the model unless set.
+    Generation,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -1026,23 +1035,10 @@ pub fn catalog() -> Vec<BlockInfo> {
                 ParamSpec {
                     optional: true,
                     ..p(
-                        "temperature",
-                        "Temperature",
-                        K::Number {
-                            min: 0.0,
-                            max: 2.0,
-                            step: 0.05,
-                        },
-                        "Leave empty to use the model's own setting (Settings → Models).",
-                    )
-                },
-                ParamSpec {
-                    optional: true,
-                    ..p(
-                        "max_tokens",
-                        "Max answer length (tokens)",
-                        K::Integer { min: 1, max: 32768 },
-                        "Leave empty to use the model's own setting (Settings → Models).",
+                        "generation",
+                        "Generation settings",
+                        K::Generation,
+                        "Temperature, longest answer, reasoning effort, sampling, penalties, seed and stop sequences for this block only. Each one follows the model's setting (Settings → Models, and the agent's own) unless you set it here.",
                     )
                 },
                 ParamSpec {
@@ -1616,6 +1612,32 @@ mod tests {
         ));
         assert!(BlockKind::parse("llm", &json!({ "promt": "typo" })).is_err());
         assert!(BlockKind::parse("nope", &json!({})).is_err());
+
+        // (was a_model_block_keeps_its_generation_settings)
+        {
+            let k = BlockKind::parse(
+                "llm",
+                &json!({ "prompt": "_INPUT_", "temperature": 0.2, "generation": { "reasoning_effort": "low", "seed": null } }),
+            )
+            .unwrap();
+            let BlockKind::Llm(p) = k else { panic!() };
+            assert_eq!(
+                p.generation.reasoning_effort,
+                Some(Some(crate::Effort::Low))
+            );
+            assert_eq!(p.generation.seed, Some(None));
+            assert_eq!(p.temperature, Some(0.2));
+            // Unknown settings are refused, empty ones aren't written.
+            assert!(BlockKind::parse("llm", &json!({ "generation": { "top_q": 1 } })).is_err());
+            let plain = BlockKind::parse("llm", &json!({ "prompt": "x" })).unwrap();
+            let BlockKind::Llm(p) = plain else { panic!() };
+            assert!(
+                serde_json::to_value(&p)
+                    .unwrap()
+                    .get("generation")
+                    .is_none()
+            );
+        }
     }
 
     #[test]

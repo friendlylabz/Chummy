@@ -172,12 +172,12 @@ mod tests {
             script.contains(&format!("PY_VERSION=\"{PYTHON_VERSION}\"")),
             "scripts/build-wasi-python.sh builds a different Python than PYTHON_VERSION"
         );
-    }
 
-    #[test]
-    fn minor_versions() {
-        assert_eq!(minor_version("3.14.10"), "3.14");
-        assert_eq!(minor_version("3.14"), "3.14");
+        // (was minor_versions)
+        {
+            assert_eq!(minor_version("3.14.10"), "3.14");
+            assert_eq!(minor_version("3.14"), "3.14");
+        }
     }
 
     #[test]

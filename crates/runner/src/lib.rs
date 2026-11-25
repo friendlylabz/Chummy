@@ -20,10 +20,12 @@ use std::future::Future;
 use std::sync::Arc;
 
 use chummy_flow::{
-    Answer, Ask, Budget, ContextLimits, Event, ExMessage, Host, LlmAnswer, LlmCall, LoopFile,
-    MalformedCall, Role, RunInputs, RunOutcome, RunStatus, ToolInfo, ToolOutput, run,
+    Answer, Ask, Budget, ContextLimits, Event, ExMessage, Host, LlmAnswer, LlmCall, LlmFailure,
+    LoopFile, MalformedCall, Role, RunInputs, RunOutcome, RunStatus, ToolInfo, ToolOutput, run,
 };
-use chummy_llm::{ChatEvent, ChatRequest, Client, Message, ProviderConfig, ProviderKind, ToolSpec};
+use chummy_llm::{
+    ChatEvent, ChatRequest, Client, LlmError, Message, ProviderConfig, ProviderKind, ToolSpec,
+};
 use chummy_log::system::{self as syslog, Level};
 use chummy_sandbox::Jail;
 use chummy_scheduler::{AskBroker, Cause, Origin, RecordStatus, RunRequest, RunResult, Snapshot};
@@ -264,12 +266,49 @@ impl<S: Services> AgentHost<S> {
     }
 }
 
+/// A model block's generation settings as overrides of its model's (which
+/// already carry the agent's): missing inherits, `null` doesn't send.
+fn block_overrides(g: &chummy_flow::GenerationOverrides) -> chummy_llm::ModelOverrides {
+    use chummy_llm::ReasoningEffort as R;
+    let effort = |e: chummy_flow::Effort| match e {
+        chummy_flow::Effort::None => R::None,
+        chummy_flow::Effort::Minimal => R::Minimal,
+        chummy_flow::Effort::Low => R::Low,
+        chummy_flow::Effort::Medium => R::Medium,
+        chummy_flow::Effort::High => R::High,
+    };
+    chummy_llm::ModelOverrides {
+        temperature: None,
+        max_tokens: None,
+        reasoning_effort: g.reasoning_effort.map(|o| o.map(effort)),
+        top_p: g.top_p,
+        top_k: g.top_k,
+        min_p: g.min_p,
+        presence_penalty: g.presence_penalty,
+        frequency_penalty: g.frequency_penalty,
+        repeat_penalty: g.repeat_penalty,
+        seed: g.seed,
+        stop: g.stop.clone(),
+    }
+}
+
+/// Whether a model call failed because the model couldn't be reached
+/// (no connection, the stream broke off, or the server is down, overloaded
+/// or rate-limiting), which a chat pauses on, rather than refused.
+pub fn unreachable(e: &LlmError) -> bool {
+    match e {
+        LlmError::Connect { .. } | LlmError::Stream(_) => true,
+        LlmError::Api { status, .. } => matches!(status, 408 | 429 | 502 | 503 | 504),
+        LlmError::Config(_) | LlmError::Auth { .. } | LlmError::Protocol(_) => false,
+    }
+}
+
 impl<S: Services> Host for AgentHost<S> {
     async fn llm(
         &self,
         call: LlmCall,
         on_text: &mut (dyn FnMut(&str) + Send),
-    ) -> Result<LlmAnswer, String> {
+    ) -> Result<LlmAnswer, LlmFailure> {
         let provider = match &call.model {
             Some(id) => self.providers.iter().find(|p| &p.id == id).cloned().ok_or(
                 "This block's model connection no longer exists. Pick another in the loop editor.",
@@ -301,8 +340,16 @@ impl<S: Services> Host for AgentHost<S> {
                     .unwrap_or(provider.max_tokens)
                     .clamp(1, chummy_llm::MAX_ANSWER_TOKENS),
             ),
-            // The connection's (already with the agent's changes) fill in.
-            generation: Default::default(),
+            // The connection's settings (already with the agent's changes),
+            // with the block's own on top when it has any.
+            exact_generation: !call.generation.is_empty(),
+            generation: if call.generation.is_empty() {
+                Default::default()
+            } else {
+                block_overrides(&call.generation)
+                    .apply(&provider)
+                    .generation
+            },
         };
         let mut malformed = Vec::new();
         let sent_chars: usize = req.messages.iter().map(|m| m.content.len()).sum::<usize>()
@@ -331,7 +378,10 @@ impl<S: Services> Host for AgentHost<S> {
                     format!("A call to {} failed", provider.name),
                     &[("model", &provider.model), ("error", &e.to_string())],
                 );
-                format!("{}: {e}", provider.name)
+                LlmFailure {
+                    unavailable: unreachable(&e),
+                    message: format!("{}: {e}", provider.name),
+                }
             })?;
         if let Some(ledger) = &self.usage {
             let tokens = match resp.usage {
@@ -589,6 +639,11 @@ pub fn result_of(o: &RunOutcome) -> RunResult {
         RunStatus::Stopped => (RecordStatus::Stopped, "Stopped.".into()),
         RunStatus::LimitReached { message } => (RecordStatus::Limit, message.clone()),
         RunStatus::Failed { error, .. } => (RecordStatus::Failed, error.clone()),
+        // Jobs run without a pause flag, so this doesn't happen.
+        RunStatus::Paused { reason } => (
+            RecordStatus::Stopped,
+            reason.clone().unwrap_or_else(|| "Paused.".into()),
+        ),
     };
     RunResult {
         status,
@@ -660,6 +715,28 @@ pub async fn run_job<S: Services>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_blocks_generation_settings_go_over_the_models() {
+        let model: ProviderConfig = serde_json::from_value(serde_json::json!({
+            "id": "m", "name": "M", "kind": "open_ai_compatible", "model": "x",
+            "generation": { "top_p": 0.9, "seed": 7, "reasoning_effort": "high" }
+        }))
+        .unwrap();
+        let block: chummy_flow::GenerationOverrides =
+            serde_json::from_str(r#"{"reasoning_effort":"low","top_p":null,"stop":["END"]}"#)
+                .unwrap();
+        let used = block_overrides(&block).apply(&model);
+        assert_eq!(
+            used.generation.reasoning_effort,
+            Some(chummy_llm::ReasoningEffort::Low)
+        );
+        assert_eq!(used.generation.top_p, None, "null: not sent");
+        assert_eq!(used.generation.seed, Some(7), "missing: inherited");
+        assert_eq!(used.generation.stop, ["END"]);
+        assert_eq!(used.temperature, model.temperature);
+        assert_eq!(used.max_tokens, model.max_tokens);
+    }
     use chummy_flow::{AskKind, Block, Link, Position};
     use chummy_llm::ProviderKind;
     use chummy_sandbox::Protected;

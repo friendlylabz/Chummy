@@ -215,21 +215,9 @@
     {#if modelsError}<span class="hint">{modelsError}</span>{:else if models.length}<span class="hint">{models.length === 1 ? "1 model" : `${models.length} models`} available. Start typing to filter.</span>{/if}
   </div>
 
-  <div class="field">
-    <label for="pf-temp">Temperature (optional)</label>
-    <input id="pf-temp" class="input" style="width: 120px" bind:value={temperature} inputmode="decimal" placeholder="Default" />
-    <span class="hint">Lower is more predictable. Small models often do best around 0.2–0.4. Each agent can change this and
-      the settings below for itself (Settings → Agents).</span>
-  </div>
+  <GenerationFields {kind} bind:value={generation} bind:bad={generationBad} bind:temperature bind:maxTokens {maxBad} />
 
-  <div class="field">
-    <label for="pf-max">Longest answer (tokens)</label>
-    <input id="pf-max" class="input" style="width: 150px" bind:value={maxTokens} inputmode="numeric" aria-invalid={maxBad} />
-    <span class="hint">
-      {#if maxBad}16 to 32,768 tokens.{:else}Used by every model block that doesn't set its own (in the loop editor or
-        Agent Loop Configuration). Small models often ramble: a lower limit keeps answers short.{/if}
-    </span>
-  </div>
+  <h2 class="group">Context and limits</h2>
 
   <div class="field">
     <label for="pf-ctx">Context length (tokens)</label>
@@ -300,8 +288,6 @@
     </span>
   </div>
 
-  <GenerationFields {kind} bind:value={generation} bind:bad={generationBad} />
-
   {#if report}
     <div class="results"><ProbeResults {report} /></div>
   {/if}
@@ -322,6 +308,12 @@
 </div>
 
 <style>
+  .group {
+    margin: var(--space-5) 0 var(--space-3);
+    font-size: var(--text-sm);
+    font-weight: 650;
+    color: var(--text-muted);
+  }
   h1 {
     font-size: var(--text-xl);
     font-weight: 650;

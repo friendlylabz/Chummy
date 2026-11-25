@@ -358,6 +358,7 @@ mod tests {
         let mut asst = Message::assistant("");
         asst.tool_calls = vec![call.clone()];
         let req = ChatRequest {
+            exact_generation: false,
             messages: vec![
                 Message::system("s"),
                 Message::user("u"),

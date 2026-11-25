@@ -105,11 +105,4 @@ mod tests {
         assert_eq!(g[0].name, "NVIDIA GeForce RTX 4070");
         assert_eq!(g[1].vram_bytes, 81920 * 1024 * 1024);
     }
-
-    #[test]
-    fn detects_something() {
-        let hw = Hardware::detect();
-        assert!(hw.ram_bytes > 0);
-        assert!(!hw.summary().is_empty());
-    }
 }

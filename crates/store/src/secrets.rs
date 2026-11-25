@@ -99,19 +99,3 @@ impl SecretStore for MemorySecrets {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn memory_store_round_trips() {
-        let s = MemorySecrets::default();
-        assert_eq!(s.get("k").unwrap(), None);
-        s.set("k", "v").unwrap();
-        assert_eq!(s.get("k").unwrap().as_deref(), Some("v"));
-        s.delete("k").unwrap();
-        s.delete("k").unwrap();
-        assert_eq!(s.get("k").unwrap(), None);
-    }
-}

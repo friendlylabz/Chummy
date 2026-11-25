@@ -175,16 +175,6 @@ mod tests {
     use crate::exchange::{ExMessage, Role};
 
     #[test]
-    fn cuts_keep_both_ends() {
-        let s = "a".repeat(100) + &"b".repeat(100);
-        let (t, left) = cut(&s, 30);
-        assert_eq!(left, 170);
-        assert!(t.starts_with(&"a".repeat(10)));
-        assert!(t.ends_with(&"b".repeat(20)));
-        assert_eq!(cut("short", 30), ("short".to_string(), 0));
-    }
-
-    #[test]
     fn values_read_well() {
         let l = logged(&Value::List(vec!["x".into(), "y".into()]), 100);
         assert_eq!(l.text, "1. x\n2. y");
@@ -194,5 +184,15 @@ mod tests {
         let l = logged(&Value::Exchange(e), 100);
         assert_eq!(l.kind, "exchange");
         assert!(l.text.contains("Hi"), "{}", l.text);
+
+        // (was cuts_keep_both_ends)
+        {
+            let s = "a".repeat(100) + &"b".repeat(100);
+            let (t, left) = cut(&s, 30);
+            assert_eq!(left, 170);
+            assert!(t.starts_with(&"a".repeat(10)));
+            assert!(t.ends_with(&"b".repeat(20)));
+            assert_eq!(cut("short", 30), ("short".to_string(), 0));
+        }
     }
 }

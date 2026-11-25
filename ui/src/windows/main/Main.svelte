@@ -4,6 +4,7 @@
   import { settings } from "$lib/stores/settings.svelte";
   import { chat } from "$lib/stores/chat.svelte";
   import { runs } from "$lib/stores/runs.svelte";
+  import { paused } from "$lib/stores/paused.svelte";
   import { asks } from "$lib/stores/asks.svelte";
   import { commands, events, type Activity, type CloseAction } from "$lib/ipc";
   import Button from "$lib/components/Button.svelte";
@@ -40,6 +41,7 @@
     chat.init();
     runs.init();
     asks.init();
+    paused.init();
     events.onCloseRequested((a) => (closing = a));
     // Narrow windows start with the sessions panel tucked away.
     if (window.innerWidth < 900) sessionsOpen = false;

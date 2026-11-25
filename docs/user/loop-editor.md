@@ -20,7 +20,7 @@ The blocks you'll use most:
 
 | Block | What it does |
 |---|---|
-| **Ask the model** | Sends a prompt (with `_INPUT_` where the input goes) and outputs the Answer, a Tool call, the Reasoning, or Failed. With an exchange, its **Reminder** is sent last for that call only: a good place for "do this step now". |
+| **Ask the model** | Sends a prompt (with `_INPUT_` where the input goes) and outputs the Answer, a Tool call, the Reasoning, or Failed. With an exchange, its **Reminder** is sent last for that call only: a good place for "do this step now". Its **Generation settings** group can change any of the model's settings (temperature, longest answer, reasoning effort, sampling, seed, stop sequences) for this block only, e.g. a higher reasoning effort just for planning; each one inherits the model's until you set it, and **Don't send** leaves it to the server. |
 | **Run tool** | Runs the tool calls the model asked for and adds the results to the conversation. |
 | **Start / Add to / Read exchange** | Build and read a conversation with the model that flows between blocks. |
 | **Combine**, **Split**, **Join**, **Find matches** | Put text together, cut it up, or pick parts out. |

@@ -167,6 +167,7 @@ pub async fn probe(client: &Client) -> ProbeReport {
     // 3. A tool call.
     let t = Instant::now();
     let req = ChatRequest {
+        exact_generation: false,
         messages: vec![Message::user(
             "What's the weather in Paris right now? Use the get_weather tool.",
         )],

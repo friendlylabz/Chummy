@@ -101,21 +101,21 @@ mod tests {
         std::fs::create_dir(&ws).unwrap();
         let got = validate_workspace(&ws, &Protected::none()).unwrap();
         assert_eq!(got, std::fs::canonicalize(&ws).unwrap());
-    }
 
-    #[test]
-    fn missing_and_file_are_rejected() {
-        let tmp = tempfile::tempdir().unwrap();
-        let file = tmp.path().join("f.txt");
-        std::fs::write(&file, "x").unwrap();
-        assert_eq!(
-            validate_workspace(&tmp.path().join("nope"), &Protected::none()),
-            Err(WorkspaceError::NotFound)
-        );
-        assert_eq!(
-            validate_workspace(&file, &Protected::none()),
-            Err(WorkspaceError::NotADirectory)
-        );
+        // (was missing_and_file_are_rejected)
+        {
+            let tmp = tempfile::tempdir().unwrap();
+            let file = tmp.path().join("f.txt");
+            std::fs::write(&file, "x").unwrap();
+            assert_eq!(
+                validate_workspace(&tmp.path().join("nope"), &Protected::none()),
+                Err(WorkspaceError::NotFound)
+            );
+            assert_eq!(
+                validate_workspace(&file, &Protected::none()),
+                Err(WorkspaceError::NotADirectory)
+            );
+        }
     }
 
     #[test]

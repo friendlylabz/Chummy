@@ -10,6 +10,7 @@
   import Button from "./Button.svelte";
   import Icon from "./Icon.svelte";
   import Toggle from "./Toggle.svelte";
+  import BlockGeneration from "./BlockGeneration.svelte";
   import { readTools, writeTools, isDisabled, setDisabled, readSwitch } from "$lib/switches";
 
   let {
@@ -35,6 +36,8 @@
   } = $props();
 
   const roleOptions = ["user", "assistant", "system", "tool"];
+  /** The block params the Generation settings group writes. */
+  const GENERATION_KEYS = ["temperature", "max_tokens", "generation"];
 
   onMount(() => {
     if (info.params.some((p) => p.kind === "tools")) tools.init();
@@ -79,14 +82,18 @@
 </script>
 
     {#each info.params as p (p.key)}
-      <div class="field" class:changed={changed.includes(p.key)}>
-        {#if changed.includes(p.key) && onreset}
+      {@const keys = p.kind === "generation" ? GENERATION_KEYS : [p.key]}
+      {@const isChanged = keys.some((k) => changed.includes(k))}
+      <div class="field" class:changed={isChanged}>
+        {#if isChanged && onreset}
           <div class="field-head">
             <span class="hint">Changed for this agent</span>
-            <button type="button" class="reset" onclick={() => onreset?.(p.key)}>Use loop default</button>
+            <button type="button" class="reset" onclick={() => keys.filter((k) => changed.includes(k)).forEach((k) => onreset?.(k))}>Use loop default</button>
           </div>
         {/if}
-        {#if p.kind === "bool"}
+        {#if p.kind === "generation"}
+          <BlockGeneration {params} {onset} idPrefix="{idPrefix}-gen" />
+        {:else if p.kind === "bool"}
           <label class="check">
             <input type="checkbox" checked={!!value(p)} onchange={(e) => onset(p.key, (e.currentTarget as HTMLInputElement).checked)} />
             {p.label}
@@ -118,13 +125,10 @@
               min={p.min}
               max={p.max}
               step={p.kind === "number" ? p.step : 1}
-              placeholder={p.optional ? (p.key === "max_tokens" || p.key === "temperature" ? "Same as the model" : "Default") : ""}
+              placeholder={p.optional ? "Default" : ""}
               value={value(p) ?? ""}
               oninput={(e) => numberInput(p, (e.currentTarget as HTMLInputElement).value)}
             />
-            {#if p.optional && value(p) != null && (p.key === "max_tokens" || p.key === "temperature")}
-              <button type="button" class="reset start" onclick={() => onset(p.key, undefined)}>Use the model's setting</button>
-            {/if}
           {:else if p.kind === "choice"}
             <select
               id="{idPrefix}-{p.key}"
@@ -201,7 +205,7 @@
             </select>
           {/if}
         {/if}
-        {#if p.help}<span class="hint">{p.help}</span>{/if}
+        {#if p.help && p.kind !== "generation"}<span class="hint">{p.help}</span>{/if}
       </div>
     {/each}
 
@@ -230,9 +234,6 @@
     color: var(--accent);
     font-size: var(--text-xs);
     cursor: pointer;
-  }
-  .reset.start {
-    justify-self: start;
   }
   label {
     font-size: var(--text-sm);

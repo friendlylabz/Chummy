@@ -9,7 +9,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use chummy_flow::{ChatTurn, Event, LoopFile, RunInputs, RunOutcome, RunStatus, analyze, run};
+use chummy_flow::{
+    ChatTurn, Event, LoopFile, RunInputs, RunOutcome, RunState, RunStatus, analyze, run_with,
+};
 use chummy_log::runs::{RunEnd, RunHeader, RunLog};
 use chummy_log::system::{self as syslog, Level};
 use chummy_sandbox::Jail;
@@ -21,6 +23,7 @@ use super::{CmdResult, err, now};
 use crate::chats;
 use crate::events;
 use crate::host::{AppHost, agent_host};
+use crate::paused::{self, PausedInfo, PausedRun};
 use crate::settings::{Agent, Settings};
 use crate::state::{AppState, PANE_LINES, RunInfo, Said, lock};
 
@@ -190,6 +193,7 @@ pub async fn delete_chat(
     {
         return Ok(false);
     }
+    paused::discard(&app, &state, &agent_id, &chat_id)?;
     let index = chats::delete(&state.dirs.chats, &agent_id, &chat_id)?;
     emit_index(&app, &agent_id, index);
     Ok(true)
@@ -313,6 +317,154 @@ pub fn stop_run(state: State<'_, AppState>, run_id: String) {
     state.asks.withdraw_run(&run_id);
 }
 
+#[derive(Clone, Serialize)]
+pub struct RunPausing {
+    pub run_id: String,
+}
+
+/// Pauses a chat run after its current block (or right away while it
+/// waits on you, if it can run that block again). Its state is kept until
+/// the chat resumes or discards it.
+#[tauri::command]
+pub fn pause_run(app: AppHandle, state: State<'_, AppState>, run_id: String) -> CmdResult<()> {
+    let runs = lock(&state.runs);
+    let run = runs.get(&run_id).ok_or("That run has already finished.")?;
+    let flag = run.pause.as_ref().ok_or("Only chat runs can be paused.")?;
+    flag.store(true, Ordering::Relaxed);
+    let _ = app.emit(events::RUN_PAUSING, RunPausing { run_id });
+    Ok(())
+}
+
+/// Every paused chat run.
+#[tauri::command]
+pub fn list_paused(state: State<'_, AppState>) -> Vec<PausedInfo> {
+    paused::list(&state)
+}
+
+/// Carries on a chat's paused run, where it stopped. Returns the new run's
+/// id.
+#[tauri::command]
+pub fn resume_run(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    agent_id: String,
+    chat_id: String,
+) -> CmdResult<String> {
+    let s = state.settings();
+    let agent = s
+        .agent(&agent_id)
+        .cloned()
+        .ok_or("That agent no longer exists.")?;
+    if chat_busy(&state, &chat_id) {
+        return Err("This chat is already working.".into());
+    }
+    if let Some(what) = agent_busy_with(&state, &agent_id, true) {
+        return Err(format!("{} is busy with {what}.", agent.name));
+    }
+    // Check everything before taking the run, so a run that can't carry on
+    // yet stays paused.
+    let run = paused::peek(&state, &agent_id, &chat_id)?;
+    if run.workspace != agent.workspace.path {
+        return Err(format!(
+            "“{}”'s workspace has changed since this run paused, so it can't carry on. Discard it and send the message again.",
+            agent.name
+        ));
+    }
+    let jail = Jail::open(&agent.workspace.path, &state.protected).map_err(|e| {
+        format!(
+            "“{}”'s workspace can't be used: {e}. Choose its folder again in Settings → Agents.",
+            agent.name
+        )
+    })?;
+    let model = s.agent_model(&agent).cloned();
+    if model.is_none() {
+        return Err("No model is connected. Add one in Settings → Models.".into());
+    }
+    // From here it's this run's alone: taken once, never again.
+    let run = paused::take(&app, &state, &agent_id, &chat_id)?;
+    let title = chats::index(&state.dirs.chats, &agent_id)
+        .ok()
+        .and_then(|ix| ix.chats.into_iter().find(|c| c.id == chat_id))
+        .map(|c| c.title)
+        .unwrap_or(run.chat_title.clone());
+    let run_id = new_run_id();
+    let origin = Origin {
+        run_id: run_id.clone(),
+        kind: RunKind::Chat,
+        agent_id: Some(agent.id.clone()),
+        chat_id: Some(chat_id.clone()),
+        job_id: None,
+        title: format!("{} · {title}", agent.name),
+    };
+    let model_name = model.as_ref().map(|m| m.name.clone());
+    let host = agent_host(&app, &s, Some(&agent), model, Some(jail), Some(origin));
+    syslog::log(
+        Level::Info,
+        "runs",
+        format!("Resuming a paused run: {} · {title}", agent.name),
+        &[("run", &run_id)],
+    );
+    start(
+        &app,
+        &state,
+        Launch {
+            run_id: run_id.clone(),
+            file: run.file,
+            host,
+            inputs: run.inputs,
+            agent: Some(agent),
+            chat: Some((chat_id, title)),
+            source: "chat",
+            model: model_name,
+            resume: Some(run.state),
+            first: run.first,
+        },
+    );
+    Ok(run_id)
+}
+
+/// Throws away a chat's paused run, after asking. Returns whether it did.
+#[tauri::command]
+pub async fn discard_paused(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    agent_id: String,
+    chat_id: String,
+) -> CmdResult<bool> {
+    if !paused::is_paused(&state, &agent_id, &chat_id) {
+        return Ok(false);
+    }
+    if !crate::dialogs::confirm(
+        &app,
+        window.label(),
+        "Discard the paused run?",
+        "It can't be resumed after this. What it already said stays in the chat.",
+        "Discard",
+        true,
+    )
+    .await
+    {
+        return Ok(false);
+    }
+    paused::discard(&app, &state, &agent_id, &chat_id)?;
+    append(
+        &app,
+        &state,
+        &agent_id,
+        &chat_id,
+        ChatMessage {
+            id: msg_id(),
+            role: "notice".into(),
+            text: "The paused run was discarded.".into(),
+            at: now(),
+            from: None,
+            run: None,
+        },
+    )?;
+    Ok(true)
+}
+
 pub fn stop_agent_runs(state: &AppState, agent_id: &str) {
     for r in lock(&state.runs).values() {
         if r.agent_id.as_deref() == Some(agent_id) {
@@ -432,6 +584,9 @@ pub fn send_message(
     if chat_busy(&state, &chat_id) {
         return Err("This chat is still working on the last message.".into());
     }
+    if paused::is_paused(&state, &agent_id, &chat_id) {
+        return Err("This chat has a paused run. Resume it or discard it first.".into());
+    }
     if let Some(what) = agent_busy_with(&state, &agent_id, true) {
         return Err(format!("{} is busy with {what}.", agent.name));
     }
@@ -482,17 +637,24 @@ pub fn send_message(
     let model = s.agent_model(&agent).cloned();
     let model_name = model.as_ref().map(|m| m.name.clone());
     let host = agent_host(&app, &s, Some(&agent), model, Some(jail), Some(origin));
+    // A chat's first message: once answered, the chat may be named by the
+    // model (only with "Use model within app" on; see crate::in_app).
+    let first = inputs.history.is_empty();
     start(
         &app,
         &state,
-        run_id.clone(),
-        file,
-        host,
-        inputs,
-        Some(agent),
-        Some((chat_id, title)),
-        "chat",
-        model_name,
+        Launch {
+            run_id: run_id.clone(),
+            file,
+            host,
+            inputs,
+            agent: Some(agent),
+            chat: Some((chat_id, title)),
+            source: "chat",
+            model: model_name,
+            resume: None,
+            first,
+        },
     );
     Ok(run_id)
 }
@@ -550,14 +712,18 @@ pub fn test_run(
     start(
         &app,
         &state,
-        run_id.clone(),
-        file,
-        host,
-        inputs,
-        agent,
-        None,
-        "test",
-        model_name,
+        Launch {
+            run_id: run_id.clone(),
+            file,
+            host,
+            inputs,
+            agent,
+            chat: None,
+            source: "test",
+            model: model_name,
+            resume: None,
+            first: false,
+        },
     );
     Ok(run_id)
 }
@@ -651,26 +817,47 @@ pub fn emitter(app: &AppHandle, guard: &RunGuard) -> impl FnMut(Event) + Send + 
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn start(
-    app: &AppHandle,
-    state: &AppState,
+/// A run to start.
+struct Launch {
     run_id: String,
     file: LoopFile,
     host: AppHost,
     inputs: RunInputs,
     agent: Option<Agent>,
+    /// The chat a chat run belongs to, and its title. Only chat runs can
+    /// pause.
     chat: Option<(String, String)>,
     source: &'static str,
     model: Option<String>,
-) {
+    /// A paused run to carry on.
+    resume: Option<RunState>,
+    /// The chat's first message: once answered, the chat may be named by
+    /// the model (only with "Use model within app" on; see crate::in_app).
+    first: bool,
+}
+
+fn start(app: &AppHandle, state: &AppState, launch: Launch) {
+    let Launch {
+        run_id,
+        file,
+        host,
+        inputs,
+        agent,
+        chat,
+        source,
+        model,
+        resume,
+        first,
+    } = launch;
     let cancel = Arc::new(AtomicBool::new(false));
+    let resumed = resume.is_some();
+    let pause = chat.is_some().then(|| Arc::new(AtomicBool::new(false)));
     let (chat_id, chat_title) = chat.unzip();
     let info = RunInfo {
         run_id: run_id.clone(),
         agent_id: agent.as_ref().map(|a| a.id.clone()),
         chat_id: chat_id.clone(),
-        chat_title,
+        chat_title: chat_title.clone(),
         title: agent
             .as_ref()
             .map(|a| a.name.clone())
@@ -679,6 +866,8 @@ fn start(
         job_id: None,
         started_at: now(),
         cancel: cancel.clone(),
+        pausable: pause.is_some(),
+        pause: pause.clone(),
         pane: Default::default(),
         said: Default::default(),
     };
@@ -687,18 +876,28 @@ fn start(
     let meta = RunMeta {
         agent_name: agent.as_ref().map(|a| a.name.clone()),
         loop_name: file.name.clone(),
-        model,
-        message: inputs.message.clone(),
+        model: model.clone(),
+        message: if resumed {
+            format!("(Resumed) {}", inputs.message)
+        } else {
+            inputs.message.clone()
+        },
     };
-    // A chat's first message: once answered, the chat may be named by the
-    // model (only with "Use model within app" on; see crate::in_app).
-    let first = chat_id.is_some() && inputs.history.is_empty();
     let first_message = inputs.message.clone();
     let guard = track(app, state, info, meta);
     let app = app.clone();
     let id = run_id;
     tauri::async_runtime::spawn(async move {
-        let outcome = run(&file, &host, &inputs, &cancel, emitter(&app, &guard)).await;
+        let mut outcome = run_with(
+            &file,
+            &host,
+            &inputs,
+            resume,
+            &cancel,
+            pause.as_deref(),
+            emitter(&app, &guard),
+        )
+        .await;
         let end = guard.finish(&outcome);
 
         let state = app.state::<AppState>();
@@ -707,11 +906,36 @@ fn start(
             .map(|r| lock(&r.said).clone())
             .unwrap_or_default();
         if let (Some(agent), Some(chat)) = (&agent, &chat_id) {
+            let replied = !outcome.replies.is_empty();
+            // A paused run is kept for the chat to resume; what it said so
+            // far goes to the chat now.
+            let saved = match (&outcome.status, outcome.paused.take()) {
+                (RunStatus::Paused { reason }, Some(mut st)) => {
+                    st.clear_replies();
+                    Some(paused::keep(
+                        &app,
+                        &state,
+                        PausedRun::new(
+                            agent.id.clone(),
+                            chat.clone(),
+                            chat_title.clone().unwrap_or_default(),
+                            agent.workspace.path.clone(),
+                            file.clone(),
+                            inputs.clone(),
+                            *st,
+                            reason.clone(),
+                            first && !replied,
+                            model.clone(),
+                        ),
+                    ))
+                }
+                _ => None,
+            };
             let ms = end.ended_at.saturating_sub(guard.started_at);
-            for m in messages_for(&outcome, &id, &end, ms, said) {
+            for m in messages_for(&outcome, &id, &end, ms, said, saved) {
                 let _ = append(&app, &state, &agent.id, chat, m);
             }
-            if first && !outcome.replies.is_empty() {
+            if first && replied {
                 tauri::async_runtime::spawn(crate::in_app::title_chat(
                     app.clone(),
                     agent.id.clone(),
@@ -799,6 +1023,7 @@ impl RunGuard {
                     "stopped" => "was stopped",
                     "failed" => "failed",
                     "limit" => "hit a limit",
+                    "paused" => "was paused",
                     _ => "ended",
                 }
             ),
@@ -829,8 +1054,25 @@ fn messages_for(
     end: &RunEnd,
     ms: u64,
     said: Vec<Said>,
+    // For a paused run: whether it was saved (or is held in memory only).
+    saved: Option<bool>,
 ) -> Vec<ChatMessage> {
     let (status, notice) = match &o.status {
+        RunStatus::Paused { reason } => {
+            let mut text = match reason {
+                Some(why) => format!(
+                    "Paused: {} Resume once the model is back.",
+                    chummy_flow::sentence(why)
+                ),
+                None => "Paused. Resume to carry on where it stopped.".to_string(),
+            };
+            if saved == Some(false) {
+                text.push_str(
+                    " There's no system keychain to keep it safely, so it's only kept until Chummy quits.",
+                );
+            }
+            ("paused", Some(text))
+        }
         RunStatus::Completed if o.replies.is_empty() => (
             "completed",
             Some(
@@ -907,6 +1149,7 @@ mod tests {
             tool_calls: 0,
             waiting: vec![],
             usage: Default::default(),
+            paused: None,
         }
     }
 
@@ -925,7 +1168,7 @@ mod tests {
             },
             &["Looking.", "Found it.", "Done."],
         );
-        let m = messages_for(&o, "run1", &RunEnd::default(), 1500, said);
+        let m = messages_for(&o, "run1", &RunEnd::default(), 1500, said, None);
         let roles: Vec<&str> = m.iter().map(|m| m.role.as_str()).collect();
         assert_eq!(
             roles,
@@ -948,7 +1191,7 @@ mod tests {
             },
             &[why],
         );
-        let m = messages_for(&o, "r", &RunEnd::default(), 0, vec![]);
+        let m = messages_for(&o, "r", &RunEnd::default(), 0, vec![], None);
         assert_eq!(m[1].text, "The run ended with this error.");
         // Otherwise the error is the notice.
         let o = outcome(
@@ -958,14 +1201,14 @@ mod tests {
             },
             &["Looking."],
         );
-        let m = messages_for(&o, "r", &RunEnd::default(), 0, vec![]);
+        let m = messages_for(&o, "r", &RunEnd::default(), 0, vec![], None);
         assert_eq!(m[1].text, "Work: the server is down");
     }
 
     #[test]
     fn replies_are_kept_without_a_record() {
         let o = outcome(RunStatus::Completed, &["a", "b"]);
-        let m = messages_for(&o, "r", &RunEnd::default(), 0, vec![]);
+        let m = messages_for(&o, "r", &RunEnd::default(), 0, vec![], None);
         assert_eq!(m.len(), 1);
         assert_eq!(m[0].text, "a\n\nb");
     }

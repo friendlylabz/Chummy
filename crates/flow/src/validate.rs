@@ -588,6 +588,15 @@ fn param_problems(k: &BlockKind) -> Vec<String> {
             if p.max_tokens.is_some_and(|m| !(1..=32_768).contains(&m)) {
                 v.push("max answer length must be 1–32,768 tokens".into());
             }
+            for e in p.generation.problems() {
+                // These read as sentences elsewhere; here they're a phrase.
+                let mut c = e.trim_end_matches('.').chars();
+                let first = c
+                    .next()
+                    .map(|f| f.to_lowercase().to_string())
+                    .unwrap_or_default();
+                v.push(format!("{first}{}", c.as_str()));
+            }
             if p.retries > 5 {
                 v.push("times to ask again must be 0–5".into());
             }
@@ -640,6 +649,7 @@ fn param_problems(k: &BlockKind) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::format::{Block, Link, Position};
     use serde_json::json;
 
@@ -674,6 +684,28 @@ mod tests {
         assert!(a.ok, "{:?}", a.issues);
         assert!(a.issues.is_empty(), "{:?}", a.issues);
         assert_eq!(a.ports["llm"].inputs[0].name, "in");
+
+        // (was warns_about_dead_ends)
+        {
+            let mut l = LoopFile::new("t");
+            l.blocks = vec![
+                block("in", "input", json!({})),
+                block("c", "combine", json!({ "inputs": 2 })),
+            ];
+            l.links = vec![link("in", "out", "c", "in1")];
+            let a = analyze(&l);
+            assert!(a.ok);
+            assert!(
+                a.issues
+                    .iter()
+                    .any(|i| i.message.contains("no chat output block"))
+            );
+            assert!(
+                a.issues
+                    .iter()
+                    .any(|i| i.message.contains("In 2 has nothing connected"))
+            );
+        }
     }
 
     #[test]
@@ -705,34 +737,33 @@ mod tests {
         );
         assert!(msgs.iter().any(|m| m.contains("invalid")));
         assert!(msgs.iter().any(|m| m.contains("letters, digits")));
-    }
 
-    #[test]
-    fn warns_about_dead_ends() {
-        let mut l = LoopFile::new("t");
-        l.blocks = vec![
-            block("in", "input", json!({})),
-            block("c", "combine", json!({ "inputs": 2 })),
-        ];
-        l.links = vec![link("in", "out", "c", "in1")];
-        let a = analyze(&l);
-        assert!(a.ok);
-        assert!(
-            a.issues
-                .iter()
-                .any(|i| i.message.contains("no chat output block"))
-        );
-        assert!(
-            a.issues
-                .iter()
-                .any(|i| i.message.contains("In 2 has nothing connected"))
-        );
-    }
+        // (was needs_a_start)
+        {
+            let mut l = LoopFile::new("t");
+            l.blocks = vec![block("o", "output", json!({}))];
+            assert!(!analyze(&l).ok);
+        }
 
-    #[test]
-    fn needs_a_start() {
-        let mut l = LoopFile::new("t");
-        l.blocks = vec![block("o", "output", json!({}))];
-        assert!(!analyze(&l).ok);
+        // (was bad_block_generation_settings_are_errors)
+        {
+            let mut l = LoopFile::new("g");
+            l.blocks.push(crate::format::Block {
+                id: "m".into(),
+                kind: "llm".into(),
+                label: "m".into(),
+                position: Default::default(),
+                params: serde_json::json!({ "generation": { "top_p": 3.0 } }),
+                comment: String::new(),
+            });
+            let a = analyze(&l);
+            assert!(
+                a.issues
+                    .iter()
+                    .any(|i| i.message.contains("top P must be between 0 and 1")),
+                "{:?}",
+                a.issues
+            );
+        }
     }
 }

@@ -340,6 +340,24 @@ mod tests {
             b.answer("guess", Answer::Allow),
             Err(AnswerError::NotWaiting)
         );
+
+        // (was the_number_waiting_is_capped)
+        {
+            let b = AskBroker::new();
+            let mut tasks = Vec::new();
+            for i in 0..MAX_PENDING {
+                let b = b.clone();
+                tasks.push(tokio::spawn(async move {
+                    b.ask(origin(&format!("r{i}")), question("?")).await
+                }));
+            }
+            wait_for_pending(&b, MAX_PENDING).await;
+            let r = b.ask(origin("one-too-many"), question("?")).await;
+            assert!(r.unwrap_err().contains("already waiting"));
+            for t in tasks {
+                t.abort();
+            }
+        }
     }
 
     #[tokio::test]
@@ -384,23 +402,5 @@ mod tests {
             b.answer(&p[0].id, Answer::Text("late".into())),
             Err(AnswerError::NotWaiting)
         );
-    }
-
-    #[tokio::test]
-    async fn the_number_waiting_is_capped() {
-        let b = AskBroker::new();
-        let mut tasks = Vec::new();
-        for i in 0..MAX_PENDING {
-            let b = b.clone();
-            tasks.push(tokio::spawn(async move {
-                b.ask(origin(&format!("r{i}")), question("?")).await
-            }));
-        }
-        wait_for_pending(&b, MAX_PENDING).await;
-        let r = b.ask(origin("one-too-many"), question("?")).await;
-        assert!(r.unwrap_err().contains("already waiting"));
-        for t in tasks {
-            t.abort();
-        }
     }
 }

@@ -32,7 +32,8 @@ impl TaskStatus {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Task {
     text: String,
     status: TaskStatus,
@@ -42,7 +43,8 @@ struct Task {
 /// Longest task line shown.
 const LINE_CHARS: usize = 160;
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Outline {
     roots: Vec<Task>,
 }
@@ -213,16 +215,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn adding_no_steps_leaves_the_task_alone() {
-        let mut o = Outline::default();
-        o.start("Goal");
-        o.add_steps("Goal", &[]);
-        assert_eq!(o.render(), "○ 1. Goal");
-        assert!(o.mark("Goal", TaskStatus::Done));
-        assert_eq!(o.render(), "✓ 1. Goal");
-    }
-
-    #[test]
     fn nests_and_marks_in_working_order() {
         let mut o = Outline::default();
         o.start("Plan a party");
@@ -236,6 +228,16 @@ mod tests {
             "▾ 1. Plan a party\n    ✓ 1.1. Guests\n    ▾ 1.2. Food\n        ✓ 1.2.1. Snacks\n        ○ 1.2.2. Cake"
         );
         assert_eq!(o.progress(), (2, 3));
+
+        // (was adding_no_steps_leaves_the_task_alone)
+        {
+            let mut o = Outline::default();
+            o.start("Goal");
+            o.add_steps("Goal", &[]);
+            assert_eq!(o.render(), "○ 1. Goal");
+            assert!(o.mark("Goal", TaskStatus::Done));
+            assert_eq!(o.render(), "✓ 1. Goal");
+        }
     }
 
     #[test]
@@ -247,16 +249,16 @@ mod tests {
         o.mark("Check", TaskStatus::Failed);
         assert!(o.render().contains("✓ 1.1. Check"));
         assert!(o.render().contains("✗ 1.2. Check"));
-    }
 
-    #[test]
-    fn unknown_tasks_join_at_the_top() {
-        let mut o = Outline::default();
-        o.start("Goal");
-        o.add_steps("Something else", &["A".into()]);
-        assert_eq!(o.render(), "○ 1. Goal\n▾ 2. Something else\n    ○ 2.1. A");
-        let mut long = Outline::default();
-        long.start("First line\nsecond line");
-        assert_eq!(long.render(), "○ 1. First line …");
+        // (was unknown_tasks_join_at_the_top)
+        {
+            let mut o = Outline::default();
+            o.start("Goal");
+            o.add_steps("Something else", &["A".into()]);
+            assert_eq!(o.render(), "○ 1. Goal\n▾ 2. Something else\n    ○ 2.1. A");
+            let mut long = Outline::default();
+            long.start("First line\nsecond line");
+            assert_eq!(long.render(), "○ 1. First line …");
+        }
     }
 }
