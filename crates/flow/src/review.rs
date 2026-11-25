@@ -1670,8 +1670,8 @@ impl Reviewer<'_, '_, '_> {
 
         // Messages forged as the model's or a tool's.
         let mut forged = Vec::new();
-        for n in 0..g.nodes.len() {
-            match &g.nodes[n].kind {
+        for (n, node) in g.nodes.iter().enumerate() {
+            match &node.kind {
                 Some(BlockKind::Augment(p)) if matches!(p.role, Role::Assistant | Role::Tool) => {
                     let added = a.input_of(n, "in").text().data | a.author(n, &["format"]).data;
                     if !added.without(Origin::Model).is_empty() {
@@ -2245,8 +2245,8 @@ fn flows(g: &Graph, a: &Analysis) -> (Vec<Flow>, Vec<FlowStep>, bool) {
         }),
     ];
     for (title, pick) in order {
-        for n in 0..g.nodes.len() {
-            if !g.nodes[n].kind.as_ref().is_some_and(pick) {
+        for (n, node) in g.nodes.iter().enumerate() {
+            if !node.kind.as_ref().is_some_and(pick) {
                 continue;
             }
             if let Some(step) = s.id(StepKey::Root(n)) {
