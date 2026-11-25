@@ -95,7 +95,15 @@ answers. Add it in Settings → Models as "Other OpenAI-compatible server" at
   platform code (sandboxes, keychain, paths, the bundled Python).
 - `wasi-python.yml` builds the tools' Python.
 - Pushing a tag like `v0.1.2` runs `release.yml`: installers for every
-  platform in a draft GitHub release. Linux builds on Ubuntu 24.04, whose
+  platform in a draft GitHub release. **The tag sets the version**: before
+  building, each job writes it into the app with `scripts/set-version.mjs`,
+  so the app and its installers always carry the tag's version. Tags must
+  be plain `vMAJOR.MINOR.PATCH` (Windows installers refuse anything else);
+  a bad tag fails the release before anything builds. After a release,
+  bring the repository's files up to date: run **Set version**
+  (`set-version.yml`) from the Actions tab with the tag, which commits the
+  change, or run `node scripts/set-version.mjs v0.1.3` yourself (`--check`
+  only reports whether the files match). Linux builds on Ubuntu 24.04, whose
   glibc (2.39) is the oldest the packages run on. After building, the
   release takes the graphics stack out of the AppImage
   (`scripts/appimage-unbundle-graphics.sh`) so the system's Mesa never runs

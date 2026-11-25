@@ -5,6 +5,9 @@ name: Release
 #   - push a tag like v0.1.0, or
 #   - Actions → Release → Run workflow, and type the version (the tag is
 #     created on the chosen branch's latest commit).
+# The tag sets the version: every build writes it into the app first
+# (scripts/set-version.mjs), so the app and its installers always say the
+# tag's version, whatever the repository's files say.
 # The release stays a draft while building and is published only when every
 # platform built.
 on:
@@ -13,14 +16,35 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Version to release (becomes the tag), like v0.1.0"
+        description: "Version to release (becomes the tag), like v0.1.3"
         required: true
-        default: "v0.1.2"
+        type: string
 
 permissions:
   contents: write
 
 jobs:
+  # The version from the tag, checked before anything is built: plain
+  # MAJOR.MINOR.PATCH (Windows installers refuse anything else).
+  version:
+    name: Version from the tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: v
+        env:
+          GIVEN: ${{ inputs.tag || github.ref_name }}
+        run: |
+          node scripts/set-version.mjs "$GIVEN"
+          v="${GIVEN#v}"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "tag=v$v" >> "$GITHUB_OUTPUT"
+
   # The Python that tools run on, built fresh for every release from
   # python.org's signed source (scripts/build-wasi-python.sh), with a
   # provenance attestation. Every platform's app embeds this one build.
@@ -37,7 +61,7 @@ jobs:
 
   build:
     name: Build (${{ matrix.name }})
-    needs: wasi-python
+    needs: [version, wasi-python]
     strategy:
       fail-fast: false
       matrix:
@@ -90,6 +114,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      # Before npm ci and the build, so everything carries the tag's version.
+      - name: Version ${{ needs.version.outputs.version }}
+        run: node scripts/set-version.mjs "${{ needs.version.outputs.version }}"
       - run: npm ci
 
       - uses: tauri-apps/tauri-action@v0
@@ -98,8 +125,8 @@ jobs:
           # Fail the build rather than ship an app without the tools' Python.
           CHUMMY_REQUIRE_BUNDLED_PYTHON: "1"
         with:
-          tagName: ${{ inputs.tag || github.ref_name }}
-          releaseName: Chummy ${{ inputs.tag || github.ref_name }}
+          tagName: ${{ needs.version.outputs.tag }}
+          releaseName: Chummy ${{ needs.version.outputs.tag }}
           releaseCommitish: ${{ github.sha }}
           releaseBody: |
             **Chummy is a heavy work in progress, and 100% vibe-coded.** Expect rough edges.
@@ -125,7 +152,7 @@ jobs:
         if: runner.os == 'Linux'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ inputs.tag || github.ref_name }}
+          TAG: ${{ needs.version.outputs.tag }}
           APPIMAGETOOL: ${{ runner.temp }}/appimagetool
         run: |
           curl -sSfL -o "$APPIMAGETOOL" \
@@ -156,7 +183,7 @@ jobs:
   # Publish only once every platform has built and uploaded.
   publish:
     name: Publish the release
-    needs: build
+    needs: [version, build]
     runs-on: ubuntu-latest
     steps:
       - name: The tools' Python
@@ -167,7 +194,7 @@ jobs:
       - name: Attach the tools' Python and how it was built
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ inputs.tag || github.ref_name }}
+          TAG: ${{ needs.version.outputs.tag }}
         run: |
           cp wasi-python/build-info.txt python-wasi-build-info.txt
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
@@ -175,5 +202,5 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ inputs.tag || github.ref_name }}
+          TAG: ${{ needs.version.outputs.tag }}
         run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
