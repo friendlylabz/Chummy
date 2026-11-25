@@ -17,7 +17,7 @@ Get the latest build from the [Releases page](https://github.com/friendlylabz/Ch
 | **Windows** | `Chummy_…_x64-setup.exe` | Windows may say it "protected your PC" because the app isn't signed yet: click **More info → Run anyway**. (There's also an `.msi`.) |
 | **macOS** (Apple Silicon: M1 and newer) | `Chummy_…_aarch64.dmg` | Open it and drag Chummy to Applications. The app isn't notarized yet, so the first time, macOS will refuse to open it: go to **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** (or right-click the app → Open). |
 | **macOS** (Intel) | `Chummy_…_x64.dmg` | As above. |
-| **Linux** | `Chummy_…_amd64.AppImage` | Make it runnable (`chmod +x Chummy_*.AppImage`, or Properties → Permissions) and open it. Some distributions need `libfuse2` for AppImages. There are also `.deb` and `.rpm` packages. |
+| **Linux** | `Chummy_…_amd64.AppImage` | Make it runnable (`chmod +x Chummy_*.AppImage`, or Properties → Permissions) and open it. Some distributions need `libfuse2` for AppImages. There are also `.deb` and `.rpm` packages; on Debian and Ubuntu the `.deb` is the better fit. Needs Ubuntu 24.04, Debian 13, Fedora 40 or newer. |
 
 The first time it opens, Chummy walks you through connecting a model (for
 example [Ollama](https://ollama.com) or [LM Studio](https://lmstudio.ai) on

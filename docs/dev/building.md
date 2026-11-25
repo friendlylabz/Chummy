@@ -87,8 +87,16 @@ answers. Add it in Settings → Models as "Other OpenAI-compatible server" at
 
 ## CI and releases
 
-- `.github/workflows/ci.yml`: frontend checks, engine tests, and Rust (fmt,
-  clippy, tests) on Linux, macOS and Windows.
+- `.github/workflows/checks.yml` holds every check: frontend checks, engine
+  tests, and Rust (fmt, clippy, tests).
+- `ci.yml` runs them on Linux for each push and pull request.
+- `ci-all.yml` ("CI (all systems)") runs them on Linux, macOS and Windows.
+  Start it by hand from the Actions tab before a release, or after changing
+  platform code (sandboxes, keychain, paths, the bundled Python).
 - `wasi-python.yml` builds the tools' Python.
 - Pushing a tag like `v0.1.2` runs `release.yml`: installers for every
-  platform in a draft GitHub release.
+  platform in a draft GitHub release. Linux builds on Ubuntu 24.04, whose
+  glibc (2.39) is the oldest the packages run on. After building, the
+  release takes the graphics stack out of the AppImage
+  (`scripts/appimage-unbundle-graphics.sh`) so the system's Mesa never runs
+  against our older copies of the libraries it shares.

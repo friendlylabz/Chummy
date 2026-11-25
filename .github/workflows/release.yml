@@ -53,8 +53,10 @@ jobs:
             os: macos-15-intel
             args: --target x86_64-apple-darwin
             target: x86_64-apple-darwin
+          # The oldest supported Ubuntu sets the oldest glibc the AppImage
+          # runs on; 22.04 runners are unsupported from April 17, 2027.
           - name: Linux
-            os: ubuntu-22.04
+            os: ubuntu-24.04
             args: ""
             target: ""
           - name: Windows
@@ -114,6 +116,27 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      # Leave the graphics stack to the system: the bundled copies of the
+      # libraries Mesa shares crashed WebKitWebProcess on newer systems
+      # (scripts/appimage-unbundle-graphics.sh says which and why). tauri-action
+      # has already uploaded the AppImage, so this replaces it.
+      - name: AppImage without the graphics stack
+        if: runner.os == 'Linux'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+          APPIMAGETOOL: ${{ runner.temp }}/appimagetool
+        run: |
+          curl -sSfL -o "$APPIMAGETOOL" \
+            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  $APPIMAGETOOL" | sha256sum -c -
+          chmod +x "$APPIMAGETOOL"
+          image=$(find target/release/bundle/appimage -maxdepth 1 -name '*.AppImage' | head -1)
+          scripts/appimage-unbundle-graphics.sh "$image"
+          # The repacked image must still start and hold the app.
+          APPIMAGE_EXTRACT_AND_RUN=1 "$image" --self-test
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "$image"
 
       # Apple Silicon kills apps that run JIT code under the hardened runtime
       # without these entitlements ("Code Signature Invalid"; v0.1.0 crashed

@@ -1,5 +1,8 @@
 name: CI
 
+# Each push and pull request: every check, on Linux only. To test Windows
+# and macOS too, run "CI (all systems)" (ci-all.yml) from the Actions tab.
+
 on:
   push:
     branches: [main]
@@ -9,112 +12,12 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
-  # The tools' Python (scripts/build-wasi-python.sh), cached while the
-  # script is unchanged. The Rust jobs embed it and test tools on it.
-  wasi-python:
-    name: Python for WASI
-    uses: ./.github/workflows/wasi-python.yml
+  checks:
+    name: Checks
+    uses: ./.github/workflows/checks.yml
     permissions:
       contents: read
-
-  frontend:
-    name: Frontend (typecheck + build)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npm run check
-      - run: npm run test:ui
-      - run: npm run build
-
-  engine:
-    name: Built-in engine (Python tests)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - run: python -m unittest discover -s crates/local/engine -v
-      - name: Built-in tools (logic, on the host Python)
-        run: python -m unittest discover -s crates/tools/tests -p 'test_*.py' -v
-
-  rust:
-    name: Rust (${{ matrix.os }})
-    needs: wasi-python
-    strategy:
-      fail-fast: false
-      matrix:
-        # macos-15-intel: the arm64 macOS runners have been too busy to start jobs.
-        os: [ubuntu-22.04, windows-latest, macos-15-intel]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v5
-      - name: The tools' Python (embedded in the app; the sandbox tests run real tools on it)
-        uses: actions/download-artifact@v4
-        with:
-          name: wasi-python
-          path: wasi-python
-      - name: Point the tests at it
-        shell: bash
-        run: |
-          echo "CHUMMY_TEST_PYTHON_ZIP=$GITHUB_WORKSPACE/wasi-python/python-wasi.zip" >> "$GITHUB_ENV"
-          echo "CHUMMY_TEST_PYPI=1" >> "$GITHUB_ENV"
-          echo "CHUMMY_REQUIRE_BUNDLED_PYTHON=1" >> "$GITHUB_ENV"
-
-      - name: Linux system libraries
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev libdbus-1-dev
-
-      # rustup reads rust-toolchain.toml, so this installs the pinned version.
-      - name: Rust toolchain
-        run: rustup show active-toolchain || rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      # tauri::generate_context! embeds the built frontend.
-      - run: npm run build
-
-      - name: Format
-        if: runner.os == 'Linux'
-        run: cargo fmt --all --check
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      # The Container sandbox test runs real tools in real Docker containers.
-      - name: Docker image for the container sandbox test
-        if: runner.os == 'Linux'
-        run: |
-          docker pull python:3.14-slim
-          echo "CHUMMY_TEST_DOCKER_IMAGE=python:3.14-slim" >> "$GITHUB_ENV"
-      - name: Test
-        run: cargo test --workspace --locked
-      # Real HTTPS to github.com and PyPI with the operating system checking
-      # certificates (Windows fetches missing root certificates on demand).
-      - name: HTTPS with the OS certificate verifier
-        run: cargo test -p chummy-http --locked -- --ignored
-      # Apple Silicon kills apps under the hardened runtime that run JIT code
-      # without these entitlements ("Code Signature Invalid"; v0.1.0 crashed
-      # setting up tools). Intel Macs don't enforce it, so this runner can
-      # only check that the signed app works with Entitlements.plist.
-      - name: macOS hardened runtime with the JIT entitlements
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          cargo build -p chummy --locked
-          bin=target/debug/chummy
-          codesign --force -o runtime --entitlements src-tauri/Entitlements.plist -s - "$bin"
-          "$bin" --self-test
+    with:
+      # Same Ubuntu as the Linux release build (release.yml).
+      oses: '["ubuntu-24.04"]'

@@ -1,0 +1,22 @@
+name: CI (all systems)
+
+# Started by hand (Actions tab → "CI (all systems)" → Run workflow): every
+# check on Linux, Windows and macOS. Worth running before a release and after
+# changes to platform code (sandboxes, keychain, paths, the bundled Python).
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-all-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Checks
+    uses: ./.github/workflows/checks.yml
+    permissions:
+      contents: read
+    with:
+      # macos-15-intel: the arm64 macOS runners have been too busy to start jobs.
+      oses: '["ubuntu-24.04", "windows-latest", "macos-15-intel"]'
