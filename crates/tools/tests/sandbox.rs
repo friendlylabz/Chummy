@@ -48,7 +48,7 @@ fn shared_root() -> &'static Path {
 
 fn host() -> ToolHost {
     let paths = ToolPaths::new(shared_root());
-    ToolHost::new(&paths, reqwest::Client::new()).unwrap()
+    ToolHost::new(&paths, chummy_http::builder().build().unwrap()).unwrap()
 }
 
 macro_rules! need_python {

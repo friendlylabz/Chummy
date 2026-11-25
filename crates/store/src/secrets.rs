@@ -6,7 +6,9 @@
 //! [`MemorySecrets`].
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+
+use keyring_core::api::CredentialStore;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SecretError {
@@ -27,28 +29,61 @@ pub trait SecretStore: Send + Sync {
 }
 
 /// The OS keychain. Entries are stored under `service` (the app identifier)
-/// with `key` as the account name.
+/// with `key` as the account name: a generic password with that service and
+/// account in the login keychain on macOS, a generic credential named
+/// `key.service` on Windows, and an item with `service` and `username`
+/// attributes in the Secret Service on Linux. These are the names keyring 3
+/// used, so secrets saved by earlier versions are still found.
 pub struct Keychain {
     service: String,
+    /// The platform's store, or why it couldn't be opened.
+    store: Result<Arc<CredentialStore>, String>,
 }
 
 impl Keychain {
     pub fn new(service: impl Into<String>) -> Self {
         Self {
             service: service.into(),
+            store: platform_store().map_err(|e| e.to_string()),
         }
     }
 
-    fn entry(&self, key: &str) -> Result<keyring::Entry, SecretError> {
-        keyring::Entry::new(&self.service, key).map_err(map_err)
+    fn entry(&self, key: &str) -> Result<keyring_core::Entry, SecretError> {
+        let store = self
+            .store
+            .as_ref()
+            .map_err(|e| SecretError::Unavailable(e.clone()))?;
+        store.build(&self.service, key, None).map_err(map_err)
     }
 }
 
-fn map_err(e: keyring::Error) -> SecretError {
+#[cfg(target_os = "macos")]
+fn platform_store() -> keyring_core::Result<Arc<CredentialStore>> {
+    Ok(apple_native_keyring_store::keychain::Store::new()?)
+}
+
+#[cfg(windows)]
+fn platform_store() -> keyring_core::Result<Arc<CredentialStore>> {
+    Ok(windows_native_keyring_store::Store::new()?)
+}
+
+#[cfg(target_os = "linux")]
+fn platform_store() -> keyring_core::Result<Arc<CredentialStore>> {
+    Ok(dbus_secret_service_keyring_store::Store::new()?)
+}
+
+#[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
+fn platform_store() -> keyring_core::Result<Arc<CredentialStore>> {
+    Err(keyring_core::Error::NotSupportedByStore(
+        "no system keychain on this platform".into(),
+    ))
+}
+
+fn map_err(e: keyring_core::Error) -> SecretError {
     match e {
-        keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_) => {
-            SecretError::Unavailable(e.to_string())
-        }
+        keyring_core::Error::PlatformFailure(_)
+        | keyring_core::Error::NoStorageAccess(_)
+        | keyring_core::Error::NoDefaultStore => SecretError::Unavailable(e.to_string()),
         other => SecretError::Other(other.to_string()),
     }
 }
@@ -57,7 +92,7 @@ impl SecretStore for Keychain {
     fn get(&self, key: &str) -> Result<Option<String>, SecretError> {
         match self.entry(key)?.get_password() {
             Ok(v) => Ok(Some(v)),
-            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(keyring_core::Error::NoEntry) => Ok(None),
             Err(e) => Err(map_err(e)),
         }
     }
@@ -68,7 +103,7 @@ impl SecretStore for Keychain {
 
     fn delete(&self, key: &str) -> Result<(), SecretError> {
         match self.entry(key)?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
             Err(e) => Err(map_err(e)),
         }
     }

@@ -387,7 +387,7 @@ mod tests {
     fn at(s: &str) -> i64 {
         s.parse::<DateTime>()
             .unwrap()
-            .to_zoned(ny())
+            .to_zoned_datetime(ny())
             .unwrap()
             .timestamp()
             .as_second()

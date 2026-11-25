@@ -8,7 +8,7 @@
 
 use jiff::civil::{DateTime, Time, Weekday};
 use jiff::tz::TimeZone;
-use jiff::{Timestamp, Zoned};
+use jiff::{Timestamp, ZonedDateTime};
 use serde::{Deserialize, Serialize};
 
 /// Shortest gap between runs of a repeating schedule.
@@ -134,7 +134,10 @@ impl Trigger {
         match self {
             Trigger::Folder { .. } => None,
             Trigger::Once { at } => {
-                let t = parse_at(at)?.to_zoned(tz.clone()).ok()?.timestamp();
+                let t = parse_at(at)?
+                    .to_zoned_datetime(tz.clone())
+                    .ok()?
+                    .timestamp();
                 (t > after).then_some(t)
             }
             Trigger::Every { minutes } => {
@@ -146,14 +149,14 @@ impl Trigger {
             }
             Trigger::Daily { time, days } => {
                 let time = parse_time(time)?;
-                let mut date = after.to_zoned(tz.clone()).date();
+                let mut date = after.to_zoned_datetime(tz.clone()).date();
                 // Today and the next week cover every choice of days.
                 for _ in 0..9 {
                     let wd = date.weekday();
                     if days.is_empty() || days.iter().any(|d| d.weekday() == wd) {
                         let t = date
                             .to_datetime(time)
-                            .to_zoned(tz.clone())
+                            .to_zoned_datetime(tz.clone())
                             .ok()?
                             .timestamp();
                         if t > after {
@@ -215,8 +218,8 @@ impl Trigger {
 }
 
 /// The current time in `tz`.
-pub fn zoned(ts: Timestamp, tz: &TimeZone) -> Zoned {
-    ts.to_zoned(tz.clone())
+pub fn zoned(ts: Timestamp, tz: &TimeZone) -> ZonedDateTime {
+    ts.to_zoned_datetime(tz.clone())
 }
 
 #[cfg(test)]
@@ -230,13 +233,15 @@ mod tests {
     fn at(s: &str) -> Timestamp {
         s.parse::<DateTime>()
             .unwrap()
-            .to_zoned(ny())
+            .to_zoned_datetime(ny())
             .unwrap()
             .timestamp()
     }
 
     fn local(t: Timestamp) -> String {
-        t.to_zoned(ny()).strftime("%a %Y-%m-%d %H:%M").to_string()
+        t.to_zoned_datetime(ny())
+            .strftime("%a %Y-%m-%d %H:%M")
+            .to_string()
     }
 
     #[test]

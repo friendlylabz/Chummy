@@ -664,7 +664,7 @@ pub async fn run_job<S: Services>(
     tz: &TimeZone,
     on_event: impl FnMut(Event) + Send,
 ) -> (RunResult, Option<RunOutcome>) {
-    let now = jiff::Timestamp::now().to_zoned(tz.clone());
+    let now = jiff::Timestamp::now().to_zoned_datetime(tz.clone());
     let job = &req.job;
     let path = match &req.cause {
         Cause::File { path } => Some(path.clone()),

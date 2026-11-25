@@ -323,7 +323,7 @@ mod tests {
 
     #[tokio::test]
     async fn refuses_when_off_or_local() {
-        let c = reqwest::Client::new();
+        let c = chummy_http::builder().build().unwrap();
         let off = NetPolicy::off("Internet access is off for this tool.");
         let e = http_request(&c, &off, &json!({ "url": "https://example.com" })).await;
         assert_eq!(e.unwrap_err(), "Internet access is off for this tool.");

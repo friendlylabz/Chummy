@@ -112,7 +112,7 @@ impl PauseVault {
         let cipher = XChaCha20Poly1305::new_from_slice(&key).expect("32-byte key");
         let sealed = cipher
             .encrypt(
-                XNonce::from_slice(&nonce),
+                <&XNonce>::try_from(&nonce[..]).expect("a 24-byte nonce"),
                 Payload {
                     msg: plain,
                     aad: &associated(agent, chat),
@@ -175,7 +175,7 @@ impl PauseVault {
         let (nonce, sealed) = rest.split_at(NONCE_LEN);
         let cipher = XChaCha20Poly1305::new_from_slice(&key).expect("32-byte key");
         match cipher.decrypt(
-            XNonce::from_slice(nonce),
+            <&XNonce>::try_from(nonce).expect("a 24-byte nonce"),
             Payload {
                 msg: sealed,
                 aad: &associated(agent, chat),

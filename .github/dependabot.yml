@@ -1,0 +1,30 @@
+# Keeps the pinned versions current. Every dependency is pinned exactly
+# (actions by commit, crates in Cargo.lock, npm packages in
+# package-lock.json), so builds are repeatable; once a month Dependabot
+# opens one pull request per ecosystem with whatever has new releases, and
+# CI runs on it before anything changes on main.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      crates:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      npm:
+        patterns: ["*"]

@@ -11,7 +11,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use chummy_store::JsonDoc;
-use jiff::Zoned;
+use jiff::ZonedDateTime;
 use serde::{Deserialize, Serialize};
 
 /// Days of history kept.
@@ -42,17 +42,17 @@ pub struct UsageLedger {
 }
 
 fn today() -> String {
-    Zoned::now().strftime("%Y-%m-%d").to_string()
+    ZonedDateTime::now().strftime("%Y-%m-%d").to_string()
 }
 
 /// Time until the next local midnight, when allowances refresh.
 pub fn until_midnight() -> Duration {
-    let now = Zoned::now();
+    let now = ZonedDateTime::now();
     let next = now
         .date()
         .tomorrow()
         .ok()
-        .and_then(|d| d.to_zoned(now.time_zone().clone()).ok());
+        .and_then(|d| d.to_zoned_datetime(now.time_zone().clone()).ok());
     match next {
         Some(n) => {
             let secs = n.timestamp().as_second() - now.timestamp().as_second();

@@ -1,11 +1,11 @@
 # /// script
 # requires-python = ">=3.14"
-# dependencies = ["tzdata==2025.2"]
+# dependencies = ["tzdata==2026.6"]
 #
 # [tool.chummy]
 # name = "current_time"
 # title = "Current date and time"
-# version = "1.0.0"
+# version = "1.0.1"
 # ///
 """Tells the model today's date and the time."""
 

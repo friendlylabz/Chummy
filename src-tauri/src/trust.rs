@@ -26,7 +26,7 @@ use std::sync::Mutex;
 
 use chummy_log::system::{Level, log};
 use chummy_store::secrets::SecretStore;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
@@ -96,7 +96,7 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
 }
 
 fn mac_for(key: &[u8], prints: &[String]) -> Hmac<Sha256> {
-    let mut m = <Hmac<Sha256> as Mac>::new_from_slice(key).expect("HMAC takes any key length");
+    let mut m = <Hmac<Sha256> as KeyInit>::new_from_slice(key).expect("HMAC takes any key length");
     m.update(format!("{FORMAT}/{VERSION}\n").as_bytes());
     for p in prints {
         m.update(p.as_bytes());

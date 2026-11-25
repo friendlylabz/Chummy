@@ -1,11 +1,11 @@
 # /// script
 # requires-python = ">=3.14"
-# dependencies = ["beautifulsoup4==4.13.4"]
+# dependencies = ["beautifulsoup4==4.15.0"]
 #
 # [tool.chummy]
 # name = "fetch_page"
 # title = "Fetch web page"
-# version = "1.0.0"
+# version = "1.0.1"
 # network = true
 # timeout = 60
 # ///

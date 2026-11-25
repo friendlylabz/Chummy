@@ -6,7 +6,7 @@
 //! runs the job. A job can never give itself more access than its agent has.
 //! Spec: `docs/dev/file-formats.md` (Scheduled jobs).
 
-use jiff::Zoned;
+use jiff::ZonedDateTime;
 use serde::{Deserialize, Serialize};
 
 use crate::trigger::Trigger;
@@ -263,7 +263,7 @@ impl Job {
     ///
     /// When there's file text and the message uses neither file placeholder,
     /// the text is added after the message.
-    pub fn message_for(&self, now: &Zoned, file: Option<(&str, Option<&str>)>) -> String {
+    pub fn message_for(&self, now: &ZonedDateTime, file: Option<(&str, Option<&str>)>) -> String {
         let (path, text) = match file {
             Some((p, t)) => (p, t.unwrap_or("")),
             None => ("", ""),
@@ -280,7 +280,7 @@ impl Job {
     }
 
     /// The file a reply is saved to, for a run at `now`.
-    pub fn reply_path(&self, now: &Zoned) -> Option<String> {
+    pub fn reply_path(&self, now: &ZonedDateTime) -> Option<String> {
         self.save_reply_to.as_ref().map(|t| {
             t.replace("_DATE_", &now.strftime("%Y-%m-%d").to_string())
                 .replace("_TIME_", &now.strftime("%H%M").to_string())
@@ -290,7 +290,7 @@ impl Job {
 
 /// Fills the placeholders in one pass, so text that came from a file is
 /// never itself searched for placeholders.
-fn fill(template: &str, now: &Zoned, path: &str, text: &str) -> String {
+fn fill(template: &str, now: &ZonedDateTime, path: &str, text: &str) -> String {
     const KEYS: [&str; 5] = ["_FILE_TEXT_", "_FILE_", "_NOW_", "_DATE_", "_TIME_"];
     let value = |k: &str| match k {
         "_FILE_TEXT_" => text.to_string(),
@@ -324,7 +324,7 @@ mod tests {
     use super::*;
     use crate::trigger::Day;
 
-    fn now() -> Zoned {
+    fn now() -> ZonedDateTime {
         "2026-11-22T13:28:00-05:00[America/New_York]"
             .parse()
             .unwrap()

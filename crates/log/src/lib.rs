@@ -21,7 +21,7 @@ pub mod system;
 pub fn day_of(ms: u64) -> String {
     jiff::Timestamp::from_millisecond(ms as i64)
         .map(|t| {
-            t.to_zoned(jiff::tz::TimeZone::system())
+            t.to_zoned_datetime(jiff::tz::TimeZone::system())
                 .strftime("%Y-%m-%d")
                 .to_string()
         })

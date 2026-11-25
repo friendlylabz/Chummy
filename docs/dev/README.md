@@ -29,7 +29,7 @@ The file formats (loops, tools, scheduled jobs) are described in
 **Prerequisites**
 
 - [Rust](https://rustup.rs). The version is pinned in `rust-toolchain.toml`, and rustup installs it automatically.
-- Node.js 22+
+- Node.js 26 (22 or newer works)
 - Platform libraries:
   - **Linux:** `sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev libdbus-1-dev build-essential`. Saving API keys at runtime needs a Secret Service provider (GNOME Keyring, KWallet).
   - **macOS:** Xcode Command Line Tools (`xcode-select --install`)

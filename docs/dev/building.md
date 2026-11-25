@@ -2,8 +2,8 @@
 
 ## Prerequisites
 
-- [Rust](https://rustup.rs) (version pinned in `rust-toolchain.toml`) and
-  Node.js 22+.
+- [Rust](https://rustup.rs) (version pinned in `rust-toolchain.toml`; rustup
+  installs it) and Node.js 26 (what CI and releases use; 22 or newer works).
 - Linux: `libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
   libxdo-dev libssl-dev libdbus-1-dev build-essential`, plus a Secret
   Service (GNOME Keyring or KWallet) to save API keys.
@@ -84,6 +84,30 @@ answers. Add it in Settings → Models as "Other OpenAI-compatible server" at
   `python3 -m unittest discover -s crates/tools/tests -p 'test_*.py'`; the
   `TerminalPromptExamples` test there runs every command the Terminal
   assistant's prompt shows, so keep it in step with `terminal.py`.
+
+## Dependencies and versions
+
+Every build uses exactly the versions written down in the repository, so a
+release can be rebuilt the same way later:
+
+- **Rust**: the toolchain in `rust-toolchain.toml` (rustup installs it);
+  crates at the versions in `Cargo.lock` (CI builds with `--locked`).
+- **npm packages**: `package-lock.json` (`npm ci`).
+- **GitHub Actions**: each `uses:` names a full commit, with its version in a
+  comment, so a moved tag can't change what runs. Runner images are named
+  (`ubuntu-24.04`, `macos-15-intel`), not `-latest`.
+- **Downloads in scripts**: by version and SHA-256 (the tools' Python and
+  its build tools, appimagetool, the built-in engine's uv in
+  `crates/local/src/pins.rs`); the built-in tools' packages in
+  `crates/tools/builtin/pylock.*.toml`.
+
+Keeping them current: **Dependabot** (`.github/dependabot.yml`) opens one
+pull request a month each for Actions, crates and npm packages, and CI
+checks it. By hand: `cargo update` (and edit `Cargo.toml` for a new major
+version), `npm update`, `python3 scripts/update-engine-pins.py`, and the
+versions and hashes at the top of `scripts/build-wasi-python.sh`. Update
+`rust-toolchain.toml` to a new Rust a few days after its release, and the
+Node version in the workflows when a new Node LTS arrives (each October).
 
 ## CI and releases
 

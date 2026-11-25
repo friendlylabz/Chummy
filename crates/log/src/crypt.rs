@@ -89,7 +89,7 @@ impl LogKey {
     }
 
     fn cipher(&self) -> XChaCha20Poly1305 {
-        XChaCha20Poly1305::new(self.0.as_ref().into())
+        XChaCha20Poly1305::new_from_slice(self.0.as_ref()).expect("a 32-byte key")
     }
 
     /// Seals one line of text.
@@ -98,7 +98,7 @@ impl LogKey {
         let ct = self
             .cipher()
             .encrypt(
-                XNonce::from_slice(&nonce),
+                <&XNonce>::try_from(&nonce[..]).expect("a 24-byte nonce"),
                 Payload {
                     msg: line.as_bytes(),
                     aad: LINE_AAD,
@@ -141,7 +141,7 @@ pub fn open(line: &str, key: Option<&LogKey>) -> Result<String, OpenError> {
     let pt = key
         .cipher()
         .decrypt(
-            XNonce::from_slice(nonce),
+            <&XNonce>::try_from(nonce).expect("a 24-byte nonce"),
             Payload {
                 msg: ct,
                 aad: LINE_AAD,
@@ -198,9 +198,10 @@ pub fn export_key(key: &LogKey, passphrase: &str) -> Result<String, String> {
     let salt = random::<16>()?;
     let nonce = random::<24>()?;
     let k = kek(passphrase, &salt, M_COST, T_COST, P_COST)?;
-    let ct = XChaCha20Poly1305::new(k.as_ref().into())
+    let ct = XChaCha20Poly1305::new_from_slice(k.as_ref())
+        .expect("a 32-byte key")
         .encrypt(
-            XNonce::from_slice(&nonce),
+            <&XNonce>::try_from(&nonce[..]).expect("a 24-byte nonce"),
             Payload {
                 msg: key.0.as_ref(),
                 aad: EXPORT_AAD,
@@ -250,9 +251,10 @@ pub fn import_key(file: &str, passphrase: &str) -> Result<LogKey, String> {
     }
     let k = kek(passphrase, &salt, e.m_cost, e.t_cost, e.p_cost)?;
     let pt = Zeroizing::new(
-        XChaCha20Poly1305::new(k.as_ref().into())
+        XChaCha20Poly1305::new_from_slice(k.as_ref())
+            .expect("a 32-byte key")
             .decrypt(
-                XNonce::from_slice(&nonce),
+                <&XNonce>::try_from(&nonce[..]).expect("a 24-byte nonce"),
                 Payload {
                     msg: &ct,
                     aad: EXPORT_AAD,
