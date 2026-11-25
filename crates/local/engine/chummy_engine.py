@@ -764,6 +764,19 @@ def make_handler(state: State):
     return Handler
 
 
+_say_lock = threading.Lock()
+
+
+def say(line: str, stream=None) -> None:
+    """Writes one whole line. print() writes the text and the newline
+    separately, so lines from two threads could run into one another (the
+    app then missed the port line and waited for the model in vain)."""
+    stream = stream or sys.stdout
+    with _say_lock:
+        stream.write(line + "\n")
+        stream.flush()
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--model", help="folder with config.json, tokenizer and *.safetensors")
@@ -785,22 +798,23 @@ def main(argv=None):
 
     def load():
         try:
-            print(f"loading {backend.name}...", flush=True)
+            say(f"loading {backend.name}...")
             backend.load()
             state.status = "ready"
-            print(f"ready on {backend.device}", flush=True)
+            say(f"ready on {backend.device}")
         except Exception as e:  # noqa: BLE001
             state.status = "error"
             state.error = f"{type(e).__name__}: {e}"
-            print(f"failed to load: {state.error}", file=sys.stderr, flush=True)
+            say(f"failed to load: {state.error}", sys.stderr)
 
-    threading.Thread(target=load, daemon=True).start()
     # Port 0 lets the OS pick a free port, which is then reported here. The
     # app reads it from this line, so no other program can take the port in
-    # between (and receive the token).
+    # between (and receive the token). It's said before loading starts, so
+    # it's always a line of its own.
     httpd = ThreadingHTTPServer(("127.0.0.1", a.port), make_handler(state))
     httpd.daemon_threads = True
-    print(f"listening on 127.0.0.1:{httpd.server_address[1]}", flush=True)
+    say(f"listening on 127.0.0.1:{httpd.server_address[1]}")
+    threading.Thread(target=load, daemon=True).start()
     try:
         httpd.serve_forever(poll_interval=0.2)
     except KeyboardInterrupt:

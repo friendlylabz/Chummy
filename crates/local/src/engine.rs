@@ -15,6 +15,8 @@ use crate::{ENGINE_SCRIPT, LocalError, http_client, python_env, read_lines};
 
 /// How long a model may take to load before we give up.
 const LOAD_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+/// How long the engine has to say which port it's on (it does at once).
+const PORT_TIMEOUT: Duration = Duration::from_secs(60);
 const LOG_LINES: usize = 300;
 
 /// What to run.
@@ -188,21 +190,20 @@ impl Engine {
         loop {
             if let Ok(Some(exit)) = child.try_wait() {
                 tokio::time::sleep(Duration::from_millis(100)).await; // let log readers finish
-                let tail = self
-                    .log_tail()
-                    .into_iter()
-                    .rev()
-                    .take(5)
-                    .collect::<Vec<_>>();
-                let error = format!(
-                    "the engine stopped ({exit}): {}",
-                    tail.into_iter().rev().collect::<Vec<_>>().join(" | ")
-                );
+                let error = format!("the engine stopped ({exit}): {}", self.last_lines());
                 return Err(self.fail(error, &mut on_status));
             }
-            if started.elapsed() > LOAD_TIMEOUT {
+            // The port comes at once; loading the model can take long.
+            let no_port = lock(&reported).is_none() && started.elapsed() > PORT_TIMEOUT;
+            if no_port || started.elapsed() > LOAD_TIMEOUT {
                 let _ = child.kill().await;
-                return Err(self.fail("the model took too long to load".into(), &mut on_status));
+                let what = if no_port {
+                    "the engine didn't say which port it's on"
+                } else {
+                    "the model took too long to load"
+                };
+                let error = format!("{what}: {}", self.last_lines());
+                return Err(self.fail(error, &mut on_status));
             }
             let Some(port) = *lock(&reported) else {
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -251,6 +252,12 @@ impl Engine {
         }
     }
 
+    /// The engine's last few lines of output, for an error.
+    fn last_lines(&self) -> String {
+        let tail: Vec<String> = self.log_tail().into_iter().rev().take(5).collect();
+        tail.into_iter().rev().collect::<Vec<_>>().join(" | ")
+    }
+
     fn fail(&self, error: String, on_status: &mut impl FnMut(&EngineStatus)) -> LocalError {
         let s = EngineStatus::Failed {
             error: error.clone(),
@@ -279,13 +286,16 @@ impl Engine {
     }
 }
 
-/// The port in the engine's "listening on 127.0.0.1:<port>" line.
+/// The port in the engine's "listening on 127.0.0.1:<port>" line. Also
+/// found after other text on the line, in case another line ran into it.
 fn listening_port(line: &str) -> Option<u16> {
-    line.strip_prefix("listening on 127.0.0.1:")?
-        .trim()
-        .parse()
-        .ok()
-        .filter(|p| *p != 0)
+    const SAYS: &str = "listening on 127.0.0.1:";
+    let at = line.rfind(SAYS)?;
+    let digits: String = line[at + SAYS.len()..]
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    digits.parse().ok().filter(|p| *p != 0)
 }
 
 fn random_token() -> Result<String, LocalError> {
@@ -307,6 +317,15 @@ mod tests {
     #[test]
     fn the_port_comes_from_the_engines_own_line() {
         assert_eq!(listening_port("listening on 127.0.0.1:43123"), Some(43123));
+        // Lines from two threads that ran into one another.
+        assert_eq!(
+            listening_port("loading fake-model...listening on 127.0.0.1:43123"),
+            Some(43123)
+        );
+        assert_eq!(
+            listening_port("listening on 127.0.0.1:43123loading fake-model..."),
+            Some(43123)
+        );
         for bad in [
             "listening on 127.0.0.1:0",
             "listening on 0.0.0.0:80",
