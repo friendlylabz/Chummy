@@ -14,8 +14,8 @@
       "type": "input",
       "label": "Your message",
       "position": {
-        "x": 0,
-        "y": 0
+        "x": 0.0,
+        "y": 0.0
       },
       "params": {}
     },
@@ -24,8 +24,8 @@
       "type": "history",
       "label": "Recent conversation",
       "position": {
-        "x": 0,
-        "y": 200
+        "x": 0.0,
+        "y": 200.0
       },
       "params": {
         "max_messages": 20
@@ -36,8 +36,8 @@
       "type": "function",
       "label": "Get ready",
       "position": {
-        "x": 300,
-        "y": 100
+        "x": 300.0,
+        "y": 100.0
       },
       "params": {
         "function": "get_ready"
@@ -49,8 +49,8 @@
       "type": "function",
       "label": "Agent loop",
       "position": {
-        "x": 600,
-        "y": 100
+        "x": 600.0,
+        "y": 100.0
       },
       "params": {
         "function": "agent"
@@ -62,8 +62,8 @@
       "type": "final",
       "label": "Final answer",
       "position": {
-        "x": 900,
-        "y": 0
+        "x": 900.0,
+        "y": 0.0
       },
       "params": {},
       "comment": "Adds the final answer to the response and ends the run."
@@ -73,12 +73,12 @@
       "type": "combine",
       "label": "What went wrong",
       "position": {
-        "x": 900,
-        "y": 250
+        "x": 900.0,
+        "y": 250.0
       },
       "params": {
-        "inputs": 1,
-        "format": "**I couldn't finish:** _INPUT1_"
+        "format": "**I couldn't finish:** _INPUT1_",
+        "inputs": 1
       }
     },
     {
@@ -86,8 +86,8 @@
       "type": "output",
       "label": "Show it",
       "position": {
-        "x": 1200,
-        "y": 200
+        "x": 1200.0,
+        "y": 200.0
       },
       "params": {}
     },
@@ -96,8 +96,8 @@
       "type": "stop",
       "label": "Stop with error",
       "position": {
-        "x": 1200,
-        "y": 350
+        "x": 1200.0,
+        "y": 350.0
       },
       "params": {},
       "comment": "The run ends as failed, with the reason."
@@ -208,8 +208,8 @@
           "type": "forward",
           "label": "Text",
           "position": {
-            "x": 0,
-            "y": 0
+            "x": 0.0,
+            "y": 0.0
           },
           "params": {}
         },
@@ -218,8 +218,8 @@
           "type": "regex",
           "label": "Checklist lines",
           "position": {
-            "x": 260,
-            "y": 0
+            "x": 260.0,
+            "y": 0.0
           },
           "params": {
             "pattern": "(?m)^[ \\t]*[-*+] \\[[ xX]\\] .*\\S.*$"
@@ -230,8 +230,8 @@
           "type": "join",
           "label": "As one list",
           "position": {
-            "x": 520,
-            "y": 0
+            "x": 520.0,
+            "y": 0.0
           },
           "params": {
             "separator": "\n"
@@ -242,8 +242,8 @@
           "type": "branch",
           "label": "Any?",
           "position": {
-            "x": 780,
-            "y": 0
+            "x": 780.0,
+            "y": 0.0
           },
           "params": {
             "pattern": "\\S"
@@ -255,8 +255,8 @@
           "type": "store",
           "label": "Save the to-do list",
           "position": {
-            "x": 1040,
-            "y": 0
+            "x": 1040.0,
+            "y": 0.0
           },
           "params": {
             "key": "todos",
@@ -323,11 +323,11 @@
           "id": "n1",
           "text": "The model plans with its own checklist, like a to-do tool: it writes the whole list whenever it changes, and the latest one is kept.",
           "position": {
-            "x": 0,
-            "y": 200
+            "x": 0.0,
+            "y": 200.0
           },
-          "width": 320,
-          "height": 110
+          "width": 320.0,
+          "height": 110.0
         }
       ]
     },
@@ -369,8 +369,8 @@
           "type": "forward",
           "label": "Message",
           "position": {
-            "x": 0,
-            "y": 0
+            "x": 0.0,
+            "y": 0.0
           },
           "params": {}
         },
@@ -379,8 +379,8 @@
           "type": "store",
           "label": "Remember the conversation",
           "position": {
-            "x": 0,
-            "y": 200
+            "x": 0.0,
+            "y": 200.0
           },
           "params": {
             "key": "conversation",
@@ -393,8 +393,8 @@
           "type": "store",
           "label": "Remember the request",
           "position": {
-            "x": 260,
-            "y": -200
+            "x": 260.0,
+            "y": -200.0
           },
           "params": {
             "key": "request",
@@ -407,12 +407,12 @@
           "type": "combine",
           "label": "CHUMMY.md",
           "position": {
-            "x": 260,
-            "y": 0
+            "x": 260.0,
+            "y": 0.0
           },
           "params": {
-            "inputs": 1,
-            "format": "CHUMMY.md"
+            "format": "CHUMMY.md",
+            "inputs": 1
           }
         },
         {
@@ -420,8 +420,8 @@
           "type": "read_file",
           "label": "Read CHUMMY.md",
           "position": {
-            "x": 520,
-            "y": 0
+            "x": 520.0,
+            "y": 0.0
           },
           "params": {},
           "comment": "Only inside the agent's folder."
@@ -431,12 +431,12 @@
           "type": "combine",
           "label": "No CHUMMY.md",
           "position": {
-            "x": 780,
-            "y": 120
+            "x": 780.0,
+            "y": 120.0
           },
           "params": {
-            "inputs": 1,
-            "format": "(none: this folder has no CHUMMY.md)"
+            "format": "(none: this folder has no CHUMMY.md)",
+            "inputs": 1
           }
         },
         {
@@ -444,8 +444,8 @@
           "type": "store",
           "label": "Remember the instructions",
           "position": {
-            "x": 1040,
-            "y": 0
+            "x": 1040.0,
+            "y": 0.0
           },
           "params": {
             "key": "instructions",
@@ -458,12 +458,12 @@
           "type": "combine",
           "label": "Top of the folder",
           "position": {
-            "x": 260,
-            "y": 300
+            "x": 260.0,
+            "y": 300.0
           },
           "params": {
-            "inputs": 1,
-            "format": "."
+            "format": ".",
+            "inputs": 1
           }
         },
         {
@@ -471,8 +471,8 @@
           "type": "list_files",
           "label": "List the folder",
           "position": {
-            "x": 520,
-            "y": 300
+            "x": 520.0,
+            "y": 300.0
           },
           "params": {}
         },
@@ -481,8 +481,8 @@
           "type": "join",
           "label": "One per line",
           "position": {
-            "x": 780,
-            "y": 300
+            "x": 780.0,
+            "y": 300.0
           },
           "params": {
             "separator": "\n"
@@ -493,8 +493,8 @@
           "type": "regex",
           "label": "First 60",
           "position": {
-            "x": 1040,
-            "y": 300
+            "x": 1040.0,
+            "y": 300.0
           },
           "params": {
             "pattern": "\\A(?:[^\\n]*(?:\\n|\\z)){1,60}"
@@ -505,8 +505,8 @@
           "type": "join",
           "label": "As text",
           "position": {
-            "x": 1300,
-            "y": 300
+            "x": 1300.0,
+            "y": 300.0
           },
           "params": {
             "separator": ""
@@ -517,8 +517,8 @@
           "type": "branch",
           "label": "Anything?",
           "position": {
-            "x": 1560,
-            "y": 300
+            "x": 1560.0,
+            "y": 300.0
           },
           "params": {
             "pattern": "\\S"
@@ -529,12 +529,12 @@
           "type": "combine",
           "label": "Empty folder",
           "position": {
-            "x": 1820,
-            "y": 420
+            "x": 1820.0,
+            "y": 420.0
           },
           "params": {
-            "inputs": 1,
-            "format": "(empty)"
+            "format": "(empty)",
+            "inputs": 1
           }
         },
         {
@@ -542,12 +542,12 @@
           "type": "combine",
           "label": "Couldn't list",
           "position": {
-            "x": 780,
-            "y": 450
+            "x": 780.0,
+            "y": 450.0
           },
           "params": {
-            "inputs": 1,
-            "format": "(couldn't list it: _INPUT1_)"
+            "format": "(couldn't list it: _INPUT1_)",
+            "inputs": 1
           }
         },
         {
@@ -555,8 +555,8 @@
           "type": "store",
           "label": "Remember the folder",
           "position": {
-            "x": 2080,
-            "y": 300
+            "x": 2080.0,
+            "y": 300.0
           },
           "params": {
             "key": "folder",
@@ -569,12 +569,12 @@
           "type": "combine",
           "label": "No to-do list yet",
           "position": {
-            "x": 260,
-            "y": 600
+            "x": 260.0,
+            "y": 600.0
           },
           "params": {
-            "inputs": 1,
-            "format": "(none yet)"
+            "format": "(none yet)",
+            "inputs": 1
           }
         },
         {
@@ -582,8 +582,8 @@
           "type": "store",
           "label": "Start the to-do list",
           "position": {
-            "x": 520,
-            "y": 600
+            "x": 520.0,
+            "y": 600.0
           },
           "params": {
             "key": "todos",
@@ -595,12 +595,12 @@
           "type": "combine",
           "label": "No work yet",
           "position": {
-            "x": 260,
-            "y": 750
+            "x": 260.0,
+            "y": 750.0
           },
           "params": {
-            "inputs": 1,
-            "format": "(nothing yet)"
+            "format": "(nothing yet)",
+            "inputs": 1
           }
         },
         {
@@ -608,8 +608,8 @@
           "type": "store",
           "label": "Start the progress",
           "position": {
-            "x": 520,
-            "y": 750
+            "x": 520.0,
+            "y": 750.0
           },
           "params": {
             "key": "progress",
@@ -621,12 +621,12 @@
           "type": "combine",
           "label": "Nothing decided yet",
           "position": {
-            "x": 260,
-            "y": 900
+            "x": 260.0,
+            "y": 900.0
           },
           "params": {
-            "inputs": 1,
-            "format": "(not decided yet)"
+            "format": "(not decided yet)",
+            "inputs": 1
           }
         },
         {
@@ -634,8 +634,8 @@
           "type": "store",
           "label": "Start the next move",
           "position": {
-            "x": 520,
-            "y": 900
+            "x": 520.0,
+            "y": 900.0
           },
           "params": {
             "key": "next",
@@ -892,11 +892,11 @@
           "id": "n1",
           "text": "Like a coding agent's start-up context: the project's instruction file (here CHUMMY.md) and a look at the folder. Everything stays inside the agent's folder.",
           "position": {
-            "x": 0,
-            "y": 1050
+            "x": 0.0,
+            "y": 1050.0
           },
-          "width": 420,
-          "height": 100
+          "width": 420.0,
+          "height": 100.0
         }
       ]
     },
@@ -930,8 +930,8 @@
           "type": "forward",
           "label": "Tool call",
           "position": {
-            "x": 0,
-            "y": 0
+            "x": 0.0,
+            "y": 0.0
           },
           "params": {}
         },
@@ -940,8 +940,8 @@
           "type": "read_exchange",
           "label": "What it said",
           "position": {
-            "x": 260,
-            "y": 0
+            "x": 260.0,
+            "y": 0.0
           },
           "params": {
             "role": "assistant"
@@ -953,8 +953,8 @@
           "type": "branch",
           "label": "Said anything?",
           "position": {
-            "x": 520,
-            "y": 0
+            "x": 520.0,
+            "y": 0.0
           },
           "params": {
             "pattern": "\\S"
@@ -965,8 +965,8 @@
           "type": "output",
           "label": "Show it",
           "position": {
-            "x": 780,
-            "y": -100
+            "x": 780.0,
+            "y": -100.0
           },
           "params": {}
         },
@@ -975,8 +975,8 @@
           "type": "function",
           "label": "Keep the to-do list",
           "position": {
-            "x": 780,
-            "y": 100
+            "x": 780.0,
+            "y": 100.0
           },
           "params": {
             "function": "keep_todos"
@@ -1066,8 +1066,8 @@
           "type": "forward",
           "label": "Exchange",
           "position": {
-            "x": 0,
-            "y": 0
+            "x": 0.0,
+            "y": 0.0
           },
           "params": {}
         },
@@ -1076,8 +1076,8 @@
           "type": "read_exchange",
           "label": "The work so far",
           "position": {
-            "x": 260,
-            "y": -200
+            "x": 260.0,
+            "y": -200.0
           },
           "params": {
             "role": "any",
@@ -1089,8 +1089,8 @@
           "type": "store",
           "label": "The newest part",
           "position": {
-            "x": 520,
-            "y": -200
+            "x": 520.0,
+            "y": -200.0
           },
           "params": {
             "key": "recent_work",
@@ -1103,12 +1103,12 @@
           "type": "combine",
           "label": "Ask for the next step",
           "position": {
-            "x": 780,
-            "y": -200
+            "x": 780.0,
+            "y": -200.0
           },
           "params": {
-            "inputs": 1,
-            "format": "You are directing the work on the user's request:\n{{request}}\n\nThe to-do list:\n{{todos}}\n\nThe step being worked on until now:\n{{next}}\n\nThe latest part of the work (the newest is at the end):\n_INPUT1_\n\nDecide the ONE next step to take now to finish the user's request. If the to-do list has an unchecked item, the step is the first one. Stay on the request: no side tasks, nothing the user didn't ask for. Write the step as a direct instruction in one sentence of at most 25 words, starting with a verb and naming the file, tool or fact it's about, for example: \"Read notes.txt and find this month's total.\" If the request is fully done, write: \"Give the user the final answer now.\" Write only that sentence."
+            "format": "You are directing the work on the user's request:\n{{request}}\n\nThe to-do list:\n{{todos}}\n\nThe step being worked on until now:\n{{next}}\n\nThe latest part of the work (the newest is at the end):\n_INPUT1_\n\nDecide the ONE next step to take now to finish the user's request. If the to-do list has an unchecked item, the step is the first one. Stay on the request: no side tasks, nothing the user didn't ask for. Write the step as a direct instruction in one sentence of at most 25 words, starting with a verb and naming the file, tool or fact it's about, for example: \"Read notes.txt and find this month's total.\" If the request is fully done, write: \"Give the user the final answer now.\" Write only that sentence.",
+            "inputs": 1
           }
         },
         {
@@ -1116,11 +1116,11 @@
           "type": "llm",
           "label": "Decide what's next",
           "position": {
-            "x": 1040,
-            "y": -200
+            "x": 1040.0,
+            "y": -200.0
           },
           "params": {
-            "temperature": 0,
+            "temperature": 0.0,
             "tools": "off"
           },
           "comment": "A small extra call: one instruction."
@@ -1130,8 +1130,8 @@
           "type": "regex",
           "label": "First line",
           "position": {
-            "x": 1300,
-            "y": -200
+            "x": 1300.0,
+            "y": -200.0
           },
           "params": {
             "pattern": "\\A\\s*[^\\n]{0,200}"
@@ -1142,8 +1142,8 @@
           "type": "join",
           "label": "As text",
           "position": {
-            "x": 1560,
-            "y": -200
+            "x": 1560.0,
+            "y": -200.0
           },
           "params": {
             "separator": ""
@@ -1154,8 +1154,8 @@
           "type": "branch",
           "label": "Decided anything?",
           "position": {
-            "x": 1820,
-            "y": -200
+            "x": 1820.0,
+            "y": -200.0
           },
           "params": {
             "pattern": "\\S"
@@ -1166,8 +1166,8 @@
           "type": "pane",
           "label": "Show in the pane",
           "position": {
-            "x": 2080,
-            "y": -300
+            "x": 2080.0,
+            "y": -300.0
           },
           "params": {},
           "comment": "One line in the run's pane."
@@ -1177,8 +1177,8 @@
           "type": "store",
           "label": "The step now",
           "position": {
-            "x": 2080,
-            "y": -100
+            "x": 2080.0,
+            "y": -100.0
           },
           "params": {
             "key": "next",
@@ -1191,12 +1191,12 @@
           "type": "combine",
           "label": "If that fails",
           "position": {
-            "x": 1560,
-            "y": 0
+            "x": 1560.0,
+            "y": 0.0
           },
           "params": {
-            "inputs": 1,
-            "format": "Carry on with the user's request: do the first unchecked item on the to-do list, or answer if it's done."
+            "format": "Carry on with the user's request: do the first unchecked item on the to-do list, or answer if it's done.",
+            "inputs": 1
           },
           "comment": "No step decided: carry on with the to-do list."
         }
@@ -1340,11 +1340,11 @@
           "id": "n1",
           "text": "Steers the agent: one step at a time, decided fresh before each Work call, for you (in the pane) and for the model (as {{next}}, sent last by Work's Reminder). The function's Exchange output fires once all of this is done, so Work always sees the newest {{next}}.",
           "position": {
-            "x": 0,
-            "y": 200
+            "x": 0.0,
+            "y": 200.0
           },
-          "width": 400,
-          "height": 120
+          "width": 400.0,
+          "height": 120.0
         }
       ]
     },
@@ -1386,8 +1386,8 @@
           "type": "forward",
           "label": "Failed exchange",
           "position": {
-            "x": 0,
-            "y": 0
+            "x": 0.0,
+            "y": 0.0
           },
           "params": {}
         },
@@ -1396,8 +1396,8 @@
           "type": "read_exchange",
           "label": "The failure",
           "position": {
-            "x": 260,
-            "y": -250
+            "x": 260.0,
+            "y": -250.0
           },
           "params": {
             "role": "user"
@@ -1409,8 +1409,8 @@
           "type": "store",
           "label": "Remember it",
           "position": {
-            "x": 520,
-            "y": -250
+            "x": 520.0,
+            "y": -250.0
           },
           "params": {
             "key": "last_error",
@@ -1422,12 +1422,12 @@
           "type": "combine",
           "label": "Count it",
           "position": {
-            "x": 780,
-            "y": -250
+            "x": 780.0,
+            "y": -250.0
           },
           "params": {
-            "inputs": 1,
-            "format": "{{errors}}x"
+            "format": "{{errors}}x",
+            "inputs": 1
           }
         },
         {
@@ -1435,8 +1435,8 @@
           "type": "store",
           "label": "Failures so far",
           "position": {
-            "x": 1040,
-            "y": -250
+            "x": 1040.0,
+            "y": -250.0
           },
           "params": {
             "key": "errors",
@@ -1448,8 +1448,8 @@
           "type": "branch",
           "label": "Failed 3 times?",
           "position": {
-            "x": 1300,
-            "y": 0
+            "x": 1300.0,
+            "y": 0.0
           },
           "params": {
             "pattern": "^x{3}"
@@ -1460,8 +1460,8 @@
           "type": "read_exchange",
           "label": "Giving up",
           "position": {
-            "x": 1560,
-            "y": 300
+            "x": 1560.0,
+            "y": 300.0
           },
           "params": {
             "role": "user"
@@ -1472,12 +1472,12 @@
           "type": "combine",
           "label": "Give up",
           "position": {
-            "x": 1820,
-            "y": 300
+            "x": 1820.0,
+            "y": 300.0
           },
           "params": {
-            "inputs": 1,
-            "format": "It failed 3 times. The last time: {{last_error}}"
+            "format": "It failed 3 times. The last time: {{last_error}}",
+            "inputs": 1
           }
         },
         {
@@ -1485,12 +1485,12 @@
           "type": "llm",
           "label": "Say what went wrong",
           "position": {
-            "x": 1560,
-            "y": -250
+            "x": 1560.0,
+            "y": -250.0
           },
           "params": {
-            "system": "You are Chummy, working on the user's request:\n{{request}}\n\nA step of the work just failed: the failure is the last message of the conversation.",
             "reminder": "In one or two short sentences: what went wrong, and what will you do differently on the next try? Don't call tools, and don't apologise.",
+            "system": "You are Chummy, working on the user's request:\n{{request}}\n\nA step of the work just failed: the failure is the last message of the conversation.",
             "temperature": 0.2,
             "tools": "off"
           },
@@ -1501,12 +1501,12 @@
           "type": "combine",
           "label": "If that fails too",
           "position": {
-            "x": 1820,
-            "y": -100
+            "x": 1820.0,
+            "y": -100.0
           },
           "params": {
-            "inputs": 1,
-            "format": "{{last_error}}"
+            "format": "{{last_error}}",
+            "inputs": 1
           }
         },
         {
@@ -1514,12 +1514,12 @@
           "type": "combine",
           "label": "For the chat",
           "position": {
-            "x": 2080,
-            "y": -400
+            "x": 2080.0,
+            "y": -400.0
           },
           "params": {
-            "inputs": 1,
-            "format": "_Something went wrong: _INPUT1_ Trying again._"
+            "format": "_Something went wrong: _INPUT1_ Trying again._",
+            "inputs": 1
           }
         },
         {
@@ -1527,8 +1527,8 @@
           "type": "output",
           "label": "Show it",
           "position": {
-            "x": 2340,
-            "y": -400
+            "x": 2340.0,
+            "y": -400.0
           },
           "params": {},
           "comment": "Added to the response; the run carries on."
@@ -1538,8 +1538,8 @@
           "type": "pane",
           "label": "Show in the pane",
           "position": {
-            "x": 2340,
-            "y": -250
+            "x": 2340.0,
+            "y": -250.0
           },
           "params": {}
         },
@@ -1548,12 +1548,12 @@
           "type": "combine",
           "label": "For the next step",
           "position": {
-            "x": 2080,
-            "y": -100
+            "x": 2080.0,
+            "y": -100.0
           },
           "params": {
-            "inputs": 1,
-            "format": "The last try failed: _INPUT1_ Take another way."
+            "format": "The last try failed: _INPUT1_ Take another way.",
+            "inputs": 1
           }
         },
         {
@@ -1561,8 +1561,8 @@
           "type": "store",
           "label": "The step now",
           "position": {
-            "x": 2340,
-            "y": -100
+            "x": 2340.0,
+            "y": -100.0
           },
           "params": {
             "key": "next",
@@ -1575,8 +1575,8 @@
           "type": "drop_last",
           "label": "Take the failure out",
           "position": {
-            "x": 1560,
-            "y": 100
+            "x": 1560.0,
+            "y": 100.0
           },
           "params": {
             "count": 1
@@ -1587,12 +1587,12 @@
           "type": "combine",
           "label": "Why calls weren't run",
           "position": {
-            "x": 1820,
-            "y": 200
+            "x": 1820.0,
+            "y": 200.0
           },
           "params": {
-            "inputs": 1,
-            "format": "Not run: the step failed."
+            "format": "Not run: the step failed.",
+            "inputs": 1
           }
         },
         {
@@ -1600,8 +1600,8 @@
           "type": "decline_calls",
           "label": "Answer waiting calls",
           "position": {
-            "x": 2080,
-            "y": 100
+            "x": 2080.0,
+            "y": 100.0
           },
           "params": {},
           "comment": "Tool calls left waiting are answered as not run, so the exchange is valid again."
@@ -1837,11 +1837,11 @@
           "id": "n1",
           "text": "Failures are reported, not hidden: you see a line in the chat and the pane, the model's next step knows what went wrong, and the exchange goes back without the failure in it. Three failures in one run and it stops for real.",
           "position": {
-            "x": 0,
-            "y": 250
+            "x": 0.0,
+            "y": 250.0
           },
-          "width": 420,
-          "height": 110
+          "width": 420.0,
+          "height": 110.0
         }
       ]
     },
@@ -1875,8 +1875,8 @@
           "type": "forward",
           "label": "Results",
           "position": {
-            "x": 0,
-            "y": 0
+            "x": 0.0,
+            "y": 0.0
           },
           "params": {}
         },
@@ -1885,8 +1885,8 @@
           "type": "read_exchange",
           "label": "The work so far",
           "position": {
-            "x": 260,
-            "y": -200
+            "x": 260.0,
+            "y": -200.0
           },
           "params": {
             "role": "any",
@@ -1898,8 +1898,8 @@
           "type": "store",
           "label": "Save the progress",
           "position": {
-            "x": 520,
-            "y": -200
+            "x": 520.0,
+            "y": -200.0
           },
           "params": {
             "key": "progress",
@@ -1912,8 +1912,8 @@
           "type": "context_check",
           "label": "Context full?",
           "position": {
-            "x": 260,
-            "y": 100
+            "x": 260.0,
+            "y": 100.0
           },
           "params": {},
           "comment": "Estimated tokens (system message included) against the model's compaction point."
@@ -1923,8 +1923,8 @@
           "type": "read_exchange",
           "label": "Everything so far",
           "position": {
-            "x": 560,
-            "y": -50
+            "x": 560.0,
+            "y": -50.0
           },
           "params": {
             "role": "any",
@@ -1936,12 +1936,12 @@
           "type": "combine",
           "label": "Ask for a summary",
           "position": {
-            "x": 820,
-            "y": -50
+            "x": 820.0,
+            "y": -50.0
           },
           "params": {
-            "inputs": 1,
-            "format": "Here is your work on the user's request so far:\n\n_INPUT1_\n\nIt's getting long, so write a summary to carry on from. Include what the user asked for, what you've done, the key facts you found (file names, values, errors, decisions) and what's left to do, with your to-do list if you have one. Write only the summary, at most 25 short lines."
+            "format": "Here is your work on the user's request so far:\n\n_INPUT1_\n\nIt's getting long, so write a summary to carry on from. Include what the user asked for, what you've done, the key facts you found (file names, values, errors, decisions) and what's left to do, with your to-do list if you have one. Write only the summary, at most 25 short lines.",
+            "inputs": 1
           }
         },
         {
@@ -1949,8 +1949,8 @@
           "type": "llm",
           "label": "Summarise the work",
           "position": {
-            "x": 1080,
-            "y": -50
+            "x": 1080.0,
+            "y": -50.0
           },
           "params": {
             "temperature": 0.2,
@@ -1962,12 +1962,12 @@
           "type": "combine",
           "label": "Carry on from it",
           "position": {
-            "x": 1340,
-            "y": -50
+            "x": 1340.0,
+            "y": -50.0
           },
           "params": {
-            "inputs": 1,
-            "format": "The user's request:\n{{request}}\n\nYour work on it so far, summarised to save room:\n_INPUT1_\n\nCarry on from where you left off."
+            "format": "The user's request:\n{{request}}\n\nYour work on it so far, summarised to save room:\n_INPUT1_\n\nCarry on from where you left off.",
+            "inputs": 1
           }
         },
         {
@@ -1975,14 +1975,14 @@
           "type": "exchange",
           "label": "Fresh exchange",
           "position": {
-            "x": 1600,
-            "y": -50
+            "x": 1600.0,
+            "y": -50.0
           },
           "params": {
-            "system": "You are Chummy, a helpful assistant. You work in the user's folder using the tools you have, and you keep going until the user's request is done.\n\n# How you work\n- Text you write is shown to the user. Before you call tools, say in one short sentence what you're about to do.\n- Use tools to look things up and to make changes. Read a file before you change it. Don't guess what you can check.\n- When tool calls don't depend on each other, make them together.\n- If a tool fails or the user doesn't allow a call, read why. Don't repeat the same call: try another way, or explain what's in the way.\n- Do what was asked, no more. Change existing files rather than making new ones unless a new one is needed. To change part of a file, edit just that part (with edit_file, if you have it) instead of writing the whole file again.\n- Long files and results come in parts. If a result says there's more, read on from where it says.\n- Before anything hard to undo, like deleting or overwriting the user's work, ask the user first.\n- If the request is unclear, ask one short question and stop there.\n\n# Planning\nFor work with 3 or more steps, keep a to-do list. Write it as a checklist, one step per line:\n- [ ] a step to do\n- [x] a step that's done\nWrite the whole list again whenever it changes: when you make it, and each time you finish a step. Work on the first unchecked step. Make each step specific. For simple requests, skip the list and just do it.\n\n# Finishing\nWhen everything is done, check your work if you can (for example, read back a file you wrote). Then give your final answer, with no tool calls: short and direct, what you did and what came out. Be honest: if something failed or you couldn't check it, say so. Use Markdown when it helps; no emojis unless asked.\n\n# Your to-do list now\n{{todos}}\n\n# Your current step\n{{next}}\nWork on this step only. Stay on the user's request: no side tasks. When the step is done, stop; the next one is decided for you.\n\n# The user's folder (top level)\n{{folder}}\n\n# The user's instructions for this folder (CHUMMY.md)\n{{instructions}}\n\n# Conversation before this request\n{{conversation}}",
             "roles": [
               "user"
-            ]
+            ],
+            "system": "You are Chummy, a helpful assistant. You work in the user's folder using the tools you have, and you keep going until the user's request is done.\n\n# How you work\n- Text you write is shown to the user. Before you call tools, say in one short sentence what you're about to do.\n- Use tools to look things up and to make changes. Read a file before you change it. Don't guess what you can check.\n- When tool calls don't depend on each other, make them together.\n- If a tool fails or the user doesn't allow a call, read why. Don't repeat the same call: try another way, or explain what's in the way.\n- Do what was asked, no more. Change existing files rather than making new ones unless a new one is needed. To change part of a file, edit just that part (with edit_file, if you have it) instead of writing the whole file again.\n- Long files and results come in parts. If a result says there's more, read on from where it says.\n- Before anything hard to undo, like deleting or overwriting the user's work, ask the user first.\n- If the request is unclear, ask one short question and stop there.\n\n# Planning\nFor work with 3 or more steps, keep a to-do list. Write it as a checklist, one step per line:\n- [ ] a step to do\n- [x] a step that's done\nWrite the whole list again whenever it changes: when you make it, and each time you finish a step. Work on the first unchecked step. Make each step specific. For simple requests, skip the list and just do it.\n\n# Finishing\nWhen everything is done, check your work if you can (for example, read back a file you wrote). Then give your final answer, with no tool calls: short and direct, what you did and what came out. Be honest: if something failed or you couldn't check it, say so. Use Markdown when it helps; no emojis unless asked.\n\n# Your to-do list now\n{{todos}}\n\n# Your current step\n{{next}}\nWork on this step only. Stay on the user's request: no side tasks. When the step is done, stop; the next one is decided for you.\n\n# The user's folder (top level)\n{{folder}}\n\n# The user's instructions for this folder (CHUMMY.md)\n{{instructions}}\n\n# Conversation before this request\n{{conversation}}"
           },
           "comment": "The same instructions, then the summary."
         },
@@ -1991,12 +1991,12 @@
           "type": "combine",
           "label": "Tell you",
           "position": {
-            "x": 1340,
-            "y": -250
+            "x": 1340.0,
+            "y": -250.0
           },
           "params": {
-            "inputs": 1,
-            "format": "_(The work so far got long, so I summarised it to make room.)_"
+            "format": "_(The work so far got long, so I summarised it to make room.)_",
+            "inputs": 1
           }
         },
         {
@@ -2004,8 +2004,8 @@
           "type": "output",
           "label": "Show that",
           "position": {
-            "x": 1600,
-            "y": -250
+            "x": 1600.0,
+            "y": -250.0
           },
           "params": {}
         },
@@ -2014,8 +2014,8 @@
           "type": "branch",
           "label": "If that fails",
           "position": {
-            "x": 1340,
-            "y": 200
+            "x": 1340.0,
+            "y": 200.0
           },
           "params": {
             "pattern": "(?s)."
@@ -2027,8 +2027,8 @@
           "type": "forward",
           "label": "Exchange",
           "position": {
-            "x": 1860,
-            "y": 100
+            "x": 1860.0,
+            "y": 100.0
           },
           "params": {}
         }
@@ -2194,11 +2194,11 @@
           "id": "n1",
           "text": "Like auto-compaction: a long conversation is summarised so the model's context doesn't overflow. When it happens is set per model in Settings → Models (Make room at), or here with Context full?'s own percentage.",
           "position": {
-            "x": 0,
-            "y": 350
+            "x": 0.0,
+            "y": 350.0
           },
-          "width": 420,
-          "height": 130
+          "width": 420.0,
+          "height": 130.0
         }
       ]
     },
@@ -2240,8 +2240,8 @@
           "type": "forward",
           "label": "Answer",
           "position": {
-            "x": 0,
-            "y": 0
+            "x": 0.0,
+            "y": 0.0
           },
           "params": {}
         },
@@ -2250,8 +2250,8 @@
           "type": "function",
           "label": "Keep the to-do list",
           "position": {
-            "x": 260,
-            "y": 0
+            "x": 260.0,
+            "y": 0.0
           },
           "params": {
             "function": "keep_todos"
@@ -2262,8 +2262,8 @@
           "type": "recall",
           "label": "Times sent back",
           "position": {
-            "x": 520,
-            "y": -200
+            "x": 520.0,
+            "y": -200.0
           },
           "params": {
             "key": "nudged"
@@ -2274,8 +2274,8 @@
           "type": "branch",
           "label": "Sent back twice?",
           "position": {
-            "x": 780,
-            "y": 0
+            "x": 780.0,
+            "y": 0.0
           },
           "params": {
             "pattern": "x{2}"
@@ -2287,8 +2287,8 @@
           "type": "branch",
           "label": "Asks you?",
           "position": {
-            "x": 1040,
-            "y": 0
+            "x": 1040.0,
+            "y": 0.0
           },
           "params": {
             "pattern": "\\?[\\s*_)\\\"'”»]*$"
@@ -2300,8 +2300,8 @@
           "type": "branch",
           "label": "Any answer?",
           "position": {
-            "x": 1300,
-            "y": 0
+            "x": 1300.0,
+            "y": 0.0
           },
           "params": {
             "pattern": "\\S"
@@ -2312,8 +2312,8 @@
           "type": "recall",
           "label": "The to-do list",
           "position": {
-            "x": 1560,
-            "y": -200
+            "x": 1560.0,
+            "y": -200.0
           },
           "params": {
             "key": "todos"
@@ -2324,8 +2324,8 @@
           "type": "branch",
           "label": "Unchecked steps?",
           "position": {
-            "x": 1820,
-            "y": 0
+            "x": 1820.0,
+            "y": 0.0
           },
           "params": {
             "pattern": "(?m)^[ \\t]*[-*+] \\[ \\]"
@@ -2336,12 +2336,12 @@
           "type": "combine",
           "label": "Carry on with the list",
           "position": {
-            "x": 2080,
-            "y": 150
+            "x": 2080.0,
+            "y": 150.0
           },
           "params": {
-            "inputs": 1,
-            "format": "The user's request:\n{{request}}\n\nYour latest work on it:\n{{progress}}\n\nYou then said:\n_INPUT1_\n\nBut your to-do list still has unchecked steps:\n{{todos}}\n\nIf there's more to do, carry on with the next unchecked step now. If every step is actually done or isn't needed, write the list again with each step checked, then your final answer."
+            "format": "The user's request:\n{{request}}\n\nYour latest work on it:\n{{progress}}\n\nYou then said:\n_INPUT1_\n\nBut your to-do list still has unchecked steps:\n{{todos}}\n\nIf there's more to do, carry on with the next unchecked step now. If every step is actually done or isn't needed, write the list again with each step checked, then your final answer.",
+            "inputs": 1
           }
         },
         {
@@ -2349,8 +2349,8 @@
           "type": "output",
           "label": "Show what it said",
           "position": {
-            "x": 2080,
-            "y": -250
+            "x": 2080.0,
+            "y": -250.0
           },
           "params": {},
           "comment": "You still see what the model said."
@@ -2360,12 +2360,12 @@
           "type": "combine",
           "label": "Carry on after nothing",
           "position": {
-            "x": 1560,
-            "y": 300
+            "x": 1560.0,
+            "y": 300.0
           },
           "params": {
-            "inputs": 1,
-            "format": "The user's request:\n{{request}}\n\nYour latest work on it:\n{{progress}}\n\nYour last reply was empty. If the work is done, give your final answer now. If not, carry on."
+            "format": "The user's request:\n{{request}}\n\nYour latest work on it:\n{{progress}}\n\nYour last reply was empty. If the work is done, give your final answer now. If not, carry on.",
+            "inputs": 1
           }
         },
         {
@@ -2373,8 +2373,8 @@
           "type": "forward",
           "label": "Carry on",
           "position": {
-            "x": 2340,
-            "y": 250
+            "x": 2340.0,
+            "y": 250.0
           },
           "params": {}
         },
@@ -2383,12 +2383,12 @@
           "type": "combine",
           "label": "Count it",
           "position": {
-            "x": 2600,
-            "y": 400
+            "x": 2600.0,
+            "y": 400.0
           },
           "params": {
-            "inputs": 1,
-            "format": "{{nudged}}x"
+            "format": "{{nudged}}x",
+            "inputs": 1
           }
         },
         {
@@ -2396,8 +2396,8 @@
           "type": "store",
           "label": "Remember the count",
           "position": {
-            "x": 2860,
-            "y": 400
+            "x": 2860.0,
+            "y": 400.0
           },
           "params": {
             "key": "nudged",
@@ -2409,8 +2409,8 @@
           "type": "forward",
           "label": "Final answer",
           "position": {
-            "x": 2340,
-            "y": -100
+            "x": 2340.0,
+            "y": -100.0
           },
           "params": {}
         }
@@ -2637,11 +2637,11 @@
           "id": "n1",
           "text": "Not in the original loop, which simply stops when the model stops calling tools. Small models often stop half-way, so this sends them back (at most twice). Delete the Done? block in the Agent loop and link Answer straight out to get the original behaviour.",
           "position": {
-            "x": 0,
-            "y": 300
+            "x": 0.0,
+            "y": 300.0
           },
-          "width": 420,
-          "height": 130
+          "width": 420.0,
+          "height": 130.0
         }
       ]
     },
@@ -2683,8 +2683,8 @@
           "type": "forward",
           "label": "Request",
           "position": {
-            "x": 0,
-            "y": 0
+            "x": 0.0,
+            "y": 0.0
           },
           "params": {}
         },
@@ -2693,14 +2693,14 @@
           "type": "exchange",
           "label": "Start the exchange",
           "position": {
-            "x": 260,
-            "y": 0
+            "x": 260.0,
+            "y": 0.0
           },
           "params": {
-            "system": "You are Chummy, a helpful assistant. You work in the user's folder using the tools you have, and you keep going until the user's request is done.\n\n# How you work\n- Text you write is shown to the user. Before you call tools, say in one short sentence what you're about to do.\n- Use tools to look things up and to make changes. Read a file before you change it. Don't guess what you can check.\n- When tool calls don't depend on each other, make them together.\n- If a tool fails or the user doesn't allow a call, read why. Don't repeat the same call: try another way, or explain what's in the way.\n- Do what was asked, no more. Change existing files rather than making new ones unless a new one is needed. To change part of a file, edit just that part (with edit_file, if you have it) instead of writing the whole file again.\n- Long files and results come in parts. If a result says there's more, read on from where it says.\n- Before anything hard to undo, like deleting or overwriting the user's work, ask the user first.\n- If the request is unclear, ask one short question and stop there.\n\n# Planning\nFor work with 3 or more steps, keep a to-do list. Write it as a checklist, one step per line:\n- [ ] a step to do\n- [x] a step that's done\nWrite the whole list again whenever it changes: when you make it, and each time you finish a step. Work on the first unchecked step. Make each step specific. For simple requests, skip the list and just do it.\n\n# Finishing\nWhen everything is done, check your work if you can (for example, read back a file you wrote). Then give your final answer, with no tool calls: short and direct, what you did and what came out. Be honest: if something failed or you couldn't check it, say so. Use Markdown when it helps; no emojis unless asked.\n\n# Your to-do list now\n{{todos}}\n\n# Your current step\n{{next}}\nWork on this step only. Stay on the user's request: no side tasks. When the step is done, stop; the next one is decided for you.\n\n# The user's folder (top level)\n{{folder}}\n\n# The user's instructions for this folder (CHUMMY.md)\n{{instructions}}\n\n# Conversation before this request\n{{conversation}}",
             "roles": [
               "user"
-            ]
+            ],
+            "system": "You are Chummy, a helpful assistant. You work in the user's folder using the tools you have, and you keep going until the user's request is done.\n\n# How you work\n- Text you write is shown to the user. Before you call tools, say in one short sentence what you're about to do.\n- Use tools to look things up and to make changes. Read a file before you change it. Don't guess what you can check.\n- When tool calls don't depend on each other, make them together.\n- If a tool fails or the user doesn't allow a call, read why. Don't repeat the same call: try another way, or explain what's in the way.\n- Do what was asked, no more. Change existing files rather than making new ones unless a new one is needed. To change part of a file, edit just that part (with edit_file, if you have it) instead of writing the whole file again.\n- Long files and results come in parts. If a result says there's more, read on from where it says.\n- Before anything hard to undo, like deleting or overwriting the user's work, ask the user first.\n- If the request is unclear, ask one short question and stop there.\n\n# Planning\nFor work with 3 or more steps, keep a to-do list. Write it as a checklist, one step per line:\n- [ ] a step to do\n- [x] a step that's done\nWrite the whole list again whenever it changes: when you make it, and each time you finish a step. Work on the first unchecked step. Make each step specific. For simple requests, skip the list and just do it.\n\n# Finishing\nWhen everything is done, check your work if you can (for example, read back a file you wrote). Then give your final answer, with no tool calls: short and direct, what you did and what came out. Be honest: if something failed or you couldn't check it, say so. Use Markdown when it helps; no emojis unless asked.\n\n# Your to-do list now\n{{todos}}\n\n# Your current step\n{{next}}\nWork on this step only. Stay on the user's request: no side tasks. When the step is done, stop; the next one is decided for you.\n\n# The user's folder (top level)\n{{folder}}\n\n# The user's instructions for this folder (CHUMMY.md)\n{{instructions}}\n\n# Conversation before this request\n{{conversation}}"
           },
           "comment": "The instructions (filled in fresh at every call), then your message."
         },
@@ -2709,8 +2709,8 @@
           "type": "function",
           "label": "Decide what's next",
           "position": {
-            "x": 560,
-            "y": 0
+            "x": 560.0,
+            "y": 0.0
           },
           "params": {
             "function": "decide_next"
@@ -2722,13 +2722,13 @@
           "type": "llm",
           "label": "Work",
           "position": {
-            "x": 860,
-            "y": 0
+            "x": 860.0,
+            "y": 0.0
           },
           "params": {
-            "retries": 3,
             "on_limit": "ask",
-            "reminder": "(A note from your own planning, not from the user.) Your step now: {{next}}\nDo just this step: call a tool if it needs one. If the whole request is done, give the final answer."
+            "reminder": "(A note from your own planning, not from the user.) Your step now: {{next}}\nDo just this step: call a tool if it needs one. If the whole request is done, give the final answer.",
+            "retries": 3
           },
           "comment": "Uses the tools this agent allows. The system message (with {{todos}} and {{next}}) is filled in fresh at every call, and the Reminder sends the step last."
         },
@@ -2737,8 +2737,8 @@
           "type": "function",
           "label": "Show what it says",
           "position": {
-            "x": 1160,
-            "y": 250
+            "x": 1160.0,
+            "y": 250.0
           },
           "params": {
             "function": "show"
@@ -2749,8 +2749,8 @@
           "type": "run_tool",
           "label": "Run tool",
           "position": {
-            "x": 1460,
-            "y": 250
+            "x": 1460.0,
+            "y": 250.0
           },
           "params": {
             "max_result_chars": 12000
@@ -2762,8 +2762,8 @@
           "type": "function",
           "label": "Make room",
           "position": {
-            "x": 1760,
-            "y": 250
+            "x": 1760.0,
+            "y": 250.0
           },
           "params": {
             "function": "make_room"
@@ -2775,8 +2775,8 @@
           "type": "function",
           "label": "Done?",
           "position": {
-            "x": 1160,
-            "y": -200
+            "x": 1160.0,
+            "y": -200.0
           },
           "params": {
             "function": "done_check"
@@ -2787,14 +2787,14 @@
           "type": "exchange",
           "label": "Carry on",
           "position": {
-            "x": 1460,
-            "y": -350
+            "x": 1460.0,
+            "y": -350.0
           },
           "params": {
-            "system": "You are Chummy, a helpful assistant. You work in the user's folder using the tools you have, and you keep going until the user's request is done.\n\n# How you work\n- Text you write is shown to the user. Before you call tools, say in one short sentence what you're about to do.\n- Use tools to look things up and to make changes. Read a file before you change it. Don't guess what you can check.\n- When tool calls don't depend on each other, make them together.\n- If a tool fails or the user doesn't allow a call, read why. Don't repeat the same call: try another way, or explain what's in the way.\n- Do what was asked, no more. Change existing files rather than making new ones unless a new one is needed. To change part of a file, edit just that part (with edit_file, if you have it) instead of writing the whole file again.\n- Long files and results come in parts. If a result says there's more, read on from where it says.\n- Before anything hard to undo, like deleting or overwriting the user's work, ask the user first.\n- If the request is unclear, ask one short question and stop there.\n\n# Planning\nFor work with 3 or more steps, keep a to-do list. Write it as a checklist, one step per line:\n- [ ] a step to do\n- [x] a step that's done\nWrite the whole list again whenever it changes: when you make it, and each time you finish a step. Work on the first unchecked step. Make each step specific. For simple requests, skip the list and just do it.\n\n# Finishing\nWhen everything is done, check your work if you can (for example, read back a file you wrote). Then give your final answer, with no tool calls: short and direct, what you did and what came out. Be honest: if something failed or you couldn't check it, say so. Use Markdown when it helps; no emojis unless asked.\n\n# Your to-do list now\n{{todos}}\n\n# Your current step\n{{next}}\nWork on this step only. Stay on the user's request: no side tasks. When the step is done, stop; the next one is decided for you.\n\n# The user's folder (top level)\n{{folder}}\n\n# The user's instructions for this folder (CHUMMY.md)\n{{instructions}}\n\n# Conversation before this request\n{{conversation}}",
             "roles": [
               "user"
-            ]
+            ],
+            "system": "You are Chummy, a helpful assistant. You work in the user's folder using the tools you have, and you keep going until the user's request is done.\n\n# How you work\n- Text you write is shown to the user. Before you call tools, say in one short sentence what you're about to do.\n- Use tools to look things up and to make changes. Read a file before you change it. Don't guess what you can check.\n- When tool calls don't depend on each other, make them together.\n- If a tool fails or the user doesn't allow a call, read why. Don't repeat the same call: try another way, or explain what's in the way.\n- Do what was asked, no more. Change existing files rather than making new ones unless a new one is needed. To change part of a file, edit just that part (with edit_file, if you have it) instead of writing the whole file again.\n- Long files and results come in parts. If a result says there's more, read on from where it says.\n- Before anything hard to undo, like deleting or overwriting the user's work, ask the user first.\n- If the request is unclear, ask one short question and stop there.\n\n# Planning\nFor work with 3 or more steps, keep a to-do list. Write it as a checklist, one step per line:\n- [ ] a step to do\n- [x] a step that's done\nWrite the whole list again whenever it changes: when you make it, and each time you finish a step. Work on the first unchecked step. Make each step specific. For simple requests, skip the list and just do it.\n\n# Finishing\nWhen everything is done, check your work if you can (for example, read back a file you wrote). Then give your final answer, with no tool calls: short and direct, what you did and what came out. Be honest: if something failed or you couldn't check it, say so. Use Markdown when it helps; no emojis unless asked.\n\n# Your to-do list now\n{{todos}}\n\n# Your current step\n{{next}}\nWork on this step only. Stay on the user's request: no side tasks. When the step is done, stop; the next one is decided for you.\n\n# The user's folder (top level)\n{{folder}}\n\n# The user's instructions for this folder (CHUMMY.md)\n{{instructions}}\n\n# Conversation before this request\n{{conversation}}"
           }
         },
         {
@@ -2802,8 +2802,8 @@
           "type": "forward",
           "label": "Final answer",
           "position": {
-            "x": 1460,
-            "y": -150
+            "x": 1460.0,
+            "y": -150.0
           },
           "params": {}
         },
@@ -2812,8 +2812,8 @@
           "type": "function",
           "label": "Report what went wrong",
           "position": {
-            "x": 1160,
-            "y": 500
+            "x": 1160.0,
+            "y": 500.0
           },
           "params": {
             "function": "report_error"
@@ -2825,8 +2825,8 @@
           "type": "forward",
           "label": "Failed",
           "position": {
-            "x": 1460,
-            "y": 650
+            "x": 1460.0,
+            "y": 650.0
           },
           "params": {}
         }
@@ -2997,11 +2997,11 @@
           "id": "n1",
           "text": "The core cycle: Decide what's next ⇄ Work ⇄ Show what it says ⇄ Run tool ⇄ Make room, until the model answers without tool calls. The loop's limits (model calls, tool calls) stop a model that never finishes.",
           "position": {
-            "x": 0,
-            "y": -500
+            "x": 0.0,
+            "y": -500.0
           },
-          "width": 460,
-          "height": 100
+          "width": 460.0,
+          "height": 100.0
         }
       ]
     }
@@ -3011,11 +3011,11 @@
       "id": "n1",
       "text": "Chummy assistant\n\n1. Get ready: your request, the conversation, CHUMMY.md (your instructions for this folder) and the folder's top level.\n2. Agent loop: one model does the work, one step at a time: before each call, Decide what's next picks the next step (shown in the run's pane) and Work is told to do just that. Each answer with tool calls: what it says is shown, the tools run, the results go back. Long conversations are summarised.\n3. Planning: the model keeps its own checklist (- [ ] / - [x]) as {{todos}}.\n4. Done? An answer without tool calls is the final answer, unless it's empty or steps are unchecked (then it's sent back, twice at most). A question for you ends the turn.\n5. If Work or Run tool fails, the model says what went wrong (in the chat) and the loop tries again from the start, 3 times at most.\n\nDouble-click a function block to see inside.",
       "position": {
-        "x": 0,
-        "y": 450
+        "x": 0.0,
+        "y": 450.0
       },
-      "width": 460,
-      "height": 300
+      "width": 460.0,
+      "height": 300.0
     }
   ]
 }

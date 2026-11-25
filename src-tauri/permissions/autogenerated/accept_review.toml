@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-accept-review"
+description = "Enables the accept_review command without any pre-configured scope."
+commands.allow = ["accept_review"]
+
+[[permission]]
+identifier = "deny-accept-review"
+description = "Denies the accept_review command without any pre-configured scope."
+commands.deny = ["accept_review"]

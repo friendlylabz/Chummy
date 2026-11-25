@@ -17,12 +17,14 @@ mod notify;
 mod settings;
 mod state;
 mod tray;
+mod trust;
 mod windows;
 
 use tauri::{Manager, RunEvent, WindowEvent};
 
 use commands::{
-    agent_setup, agents, asks, chat, general, jobs, local, logs, loops, providers, sandbox, tools,
+    agent_setup, agents, asks, chat, general, jobs, local, logs, loops, providers, review, sandbox,
+    tools,
 };
 use state::AppState;
 
@@ -131,6 +133,10 @@ pub fn run() {
             loops::delete_loop,
             loops::import_loop,
             loops::export_loop,
+            review::get_review,
+            review::accept_review,
+            review::discard_review,
+            review::review_library_loop,
             chat::get_chat,
             chat::list_chats,
             chat::new_chat,

@@ -107,11 +107,19 @@
       {#if loops.list.length}
         <div class="input-row">
           <select id="ag-loop" class="input" bind:value={loopId}>
-            {#each loops.list as l (l.id)}<option value={l.id}>{l.name}{l.ok ? "" : " (has problems)"}</option>{/each}
+            {#each loops.list as l (l.id)}<option value={l.id}>{l.name}{!l.trusted ? " (needs a review)" : l.ok ? "" : " (has problems)"}</option>{/each}
           </select>
-          <Button icon="flow" onclick={() => commands.openWindow("editor", loopId || null)}>Edit loop</Button>
+          {#if loops.list.find((l) => l.id === loopId)?.trusted === false}
+            <Button icon="shield" onclick={() => commands.reviewLibraryLoop(loopId).catch((e) => (error = errorText(e)))}>Review loop</Button>
+          {:else}
+            <Button icon="flow" onclick={() => commands.openWindow("editor", loopId || null)}>Edit loop</Button>
+          {/if}
         </div>
-        <span class="hint">How the agent thinks. Build and change loops in the loop editor.</span>
+        {#if loops.list.find((l) => l.id === loopId)?.trusted === false}
+          <span class="hint warn-text">This loop isn't on your list of trusted loops, so agents can't run it until you review it.</span>
+        {:else}
+          <span class="hint">How the agent thinks. Build and change loops in the loop editor.</span>
+        {/if}
       {:else}
         <div class="notice">
           <Icon name="flow" size={16} />
@@ -211,7 +219,7 @@
             {#if settings.current.active_agent === a.id}<span class="badge accent">In chat</span>{/if}
           </div>
           <div class="muted small">
-            {#if loopName}{loopName}{:else}<span class="warn-text">Loop missing</span>{/if}
+            {#if loopName}{loopName}{#if loops.list.find((l) => l.id === a.loop_id)?.trusted === false} <span class="warn-text">(needs a review)</span>{/if}{:else}<span class="warn-text">Loop missing</span>{/if}
             · {modelName(a.model)}
           </div>
           <div class="faint xs mono a-ws" title={a.workspace.path}>{a.workspace.path}</div>

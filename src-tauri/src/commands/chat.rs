@@ -375,6 +375,13 @@ pub fn prepare(
             agent.name
         ),
     })?;
+    // Only reviewed (or built-in, or user-made) loops run.
+    if !state.trusted(&original) {
+        return Err(format!(
+            "The loop “{}” hasn't been reviewed, so it can't run. Open it in the loop editor to review it.",
+            original.name
+        ));
+    }
     // The agent's own block settings (Agent Loop Configuration).
     let (file, _missing) = original.with_overrides(&agent.overrides(id));
     let analysis = analyze(&file);

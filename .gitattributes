@@ -1,0 +1,2 @@
+# Chummy hashes these files at build time; keep them byte-for-byte as Chummy saves them.
+crates/flow/templates/*.chummy.json text eol=lf

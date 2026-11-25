@@ -75,7 +75,7 @@ the reason.
 - **Sandbox**: where tool calls run. **Native** (built in, WebAssembly, the
   default), **Container** (Docker or Podman, a fresh locked-down container
   per call, using the image you approve) or **NVIDIA OpenShell**. See
-  [../sandboxes.md](../sandboxes.md).
+  [Security and threat model → Sandboxes](../dev/security.md#sandboxes-where-tools-run).
 - The Chummy folder in use, and how it's protected.
 
 ## Logs

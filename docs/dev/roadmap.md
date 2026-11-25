@@ -1,10 +1,140 @@
-# chummyd: plan for the background job service
+# Roadmap
+
+Ideas we've discussed for Chummy but haven't built yet. Nothing here is
+promised or in a set order; it's a record of what's planned and why, so the
+reasoning isn't lost. When something here is built, move its description to
+the docs for that part of Chummy and take it out of this file.
+
+## Next: more data types and data sources
+
+- **More value types** in the loop editor beyond text, list and exchange:
+  number, yes/no, record (JSON, with an optional schema), table, file (a
+  reference to a file in the agent's folder), document (PDF, docx, epub),
+  web page, image, audio, date/time, event (what started a run) and a blob
+  escape hatch. A small fixed set defined in Rust; no user-defined types at
+  first.
+- **Values remember where they came from**: you, the model, a tool, or the
+  outside world. Outside data stays marked as untrusted through text blocks,
+  and untrusted text going into a prompt is fenced and labelled. A new
+  switch in Security and Privacy (like "ask before tools go online"): while
+  untrusted content is in a run, risky and online tools ask first.
+- **Big things by reference** (hash, type, size), kept in a run cache or the
+  agent's folder, never passed through the graph as bytes.
+- **Explicit converters, made easy.** Port kinds still have to match;
+  dragging a link between mismatched ports offers to insert the right
+  converter. Every type has a "Show as text" converter. Converters that
+  need a model (describe an image, transcribe audio) are model blocks that
+  take the new input type.
+- **Parsers of untrusted formats** run in the sandbox (WebAssembly by
+  default) or are pure Rust; never unchecked native code.
+- **Sources** (a data input module), defined once and used two ways:
+  *Watch*, a job trigger that starts a run with an event, and *Fetch*, a
+  block inside a loop. Built-ins: folder or file changed and schedule (both
+  exist today), web page changed (through the same internet checks, with a
+  selector and normalising so ads and timestamps don't fire it), RSS/Atom,
+  later IMAP. No webhooks for now (they'd need a listening port). Custom
+  sources would be sandboxed tool scripts with `poll(state)`; Chummy keeps
+  the state, drops duplicates by content hash, limits runs (30 an hour per
+  job) and caps payloads.
+
+## Sandboxes
+
+- Test OpenShell against a real gateway (so far only against a fake made
+  from its CLI's definitions), Podman, and Docker Desktop on macOS and
+  Windows.
+- A progress bar when downloading a container image, and the image's size
+  and date in the approval dialog.
+- Maybe a sandbox per agent (today there's one for the whole app, by
+  choice).
+- Maybe an OS-native process sandbox (Landlock and seccomp, Seatbelt,
+  AppContainer), so real programs could run without installing Docker.
+
+## Security
+
+The threats behind these are in
+[Security and threat model → Known risks](security.md#known-risks-and-what-to-do-next).
+
+- Encrypt chat history and job history with the run log key.
+- Protect `settings.json` against malware running as you: a MAC keyed by a
+  keychain secret, with permissions reset to off when it doesn't match.
+- Log each web request a tool makes (address, method, status) in the run
+  log.
+- A one-click "undo this run" that snapshots files before a job changes
+  them.
+- Show where a model runs ("on this computer", "on your network", "in the
+  cloud") wherever a model is chosen.
+- On Linux, check for a tray host before offering "Keep running in tray".
+- Code signing and notarization, published checksums, and an updater that
+  checks signatures.
+- Budgets in money for providers with known prices.
+- Hard links already inside an agent's folder can point outside it (agents
+  can't create them); maybe refuse files with more than one link.
+- Linux without a Secret Service: an encrypted file, locked with a
+  passphrase, for API keys and the log key.
+
+## Sharing loops safely
+
+Loops from elsewhere are reviewed and then trusted by fingerprint (see
+[Security and threat model → Loops from elsewhere](security.md#loops-from-elsewhere-review-and-trusted-loops-after-v012)).
+Ideas for later:
+
+- **A curated library of reviewed loops** (the user's idea), like the
+  curated tools: loops submitted to a public repository, reviewed by people
+  (the scan as a first pass), and listed by fingerprint. Chummy would download
+  a loop, check its hash against the list, and show the review with a
+  "Reviewed in the Chummy library" badge before trusting it. What it needs to
+  be worth more than a hash check:
+  - **A signed list.** Sign the list of fingerprints with a key that ships in
+    the app (not just HTTPS), so a compromised server or mirror can't add a
+    loop to everyone's trust at once.
+  - **Revocations.** A signed list of fingerprints found harmful later, which
+    Chummy checks and uses to mark installed copies untrusted again.
+  - **People to review.** Every submission and every new version (a new hash)
+    needs a careful human look; "reviewed" should never read as "safe".
+  - **Not the only door.** Hand-shared loops keep the review path, so the
+    library is a trust signal, not a gate; and it works offline once a loop is
+    downloaded.
+  - **Context.** A loop's behaviour depends on the agent's tools and
+    permissions; the listing should say which tools it expects.
+- **Runtime checks where data leaves**, which also cover prompt injection:
+  the untrusted-content switch already planned above; per-agent lists of
+  allowed web addresses for web tools; tool approvals that show the full
+  request and highlight data that came from files, the chat or your answers.
+- **A per-loop permission** (app ∧ agent ∧ loop ∧ block) for tools and
+  internet, so an imported loop starts with only what the review showed and
+  the user granted.
+- **A rehearsal run** of an imported loop against stand-in tools that record
+  calls instead of running them, on a sample folder.
+- **Author signatures** (ed25519) on shared loops, shown in the review.
+- **Agent Loop Configuration edits** and editor test runs aren't reviewed
+  (they're the user's own); a hidden-character check while typing prompts
+  would still help when people paste text from elsewhere.
+
+## Other ideas
+
+- Try the assistant with real small models (Qwen 3 4B/8B, Llama 3.x 8B
+  through Ollama or llama.cpp) and tune its prompts.
+- Show each setting's effective default as placeholder text in the
+  inspector and in Agent Loop Configuration.
+- An official, curated tool library (tools still can't be installed from
+  any file).
+- Post job replies to the agent's chat.
+- Logs: delete or export one run's log from the window, and highlight
+  search matches.
+- Chat formatting: syntax highlighting for code blocks, copy buttons for
+  math, formatted text in the Logs window.
+- Built-in engine: test on a real GPU, faster backends.
+- Anthropic reasoning (thinking blocks carried through tool use), and
+  generation settings for the built-in engine.
+- Faster Logs timeline for very long runs.
+
+## chummyd: the background job service
 
 Status: **plan only.** Nothing here is built yet. Pass 5 built the parts of
-Chummy that chummyd will reuse. This document is the master plan for
+Chummy that chummyd will reuse. This section is the master plan for
 building chummyd, and the reference for keeping Chummy's code ready for it.
 
-## What chummyd is
+### What chummyd is
 
 chummyd is a headless service that runs agents' loops as jobs: on schedules,
 when files change, on request through an authenticated API, and in a queue.
@@ -31,7 +161,7 @@ chummyd is optional, installed separately, and configured from the app.
    installed (there's no default location), holds everything: config, agents'
    folders, jobs, history. Move the folder and chummyd moves with it.
 
-## Installing and running
+### Installing and running
 
 - **A separate install**, built from the same Rust workspace (`crates/chummyd`),
   with no webview and no Tauri. Packages:
@@ -62,7 +192,7 @@ chummyd is optional, installed separately, and configured from the app.
   - `keys list|revoke`: manage paired clients.
   - `export-audit`: write out the audit log.
 
-### Base folder layout
+#### Base folder layout
 
 ```text
 <base>/
@@ -87,7 +217,7 @@ backups and moving the folder trivial. Files to work on are copied in, or
 written there by other jobs; there are no links out (the jail refuses
 them anyway).
 
-## The master config: `chummyd.json`
+### The master config: `chummyd.json`
 
 One JSON file, `format: "chummyd.config"`, `version: 1`. It follows the same
 rules as the other formats: strict (unknown fields refused), versioned
@@ -137,7 +267,7 @@ validate. `chummyd check` runs the same validation without starting.
 }
 ```
 
-### Rules
+#### Rules
 
 - **The config is the root of trust.** Loop and job files are pinned by
   SHA-256. A file that doesn't match its hash stops start-up. This keeps a
@@ -158,7 +288,7 @@ validate. `chummyd check` runs the same validation without starting.
   whole new config is validated before any of it takes effect. Every change
   is recorded in the audit log with a diff.
 
-### Made by the Chummy app
+#### Made by the Chummy app
 
 The app gets an **Export for chummyd** flow (Settings → Background services):
 
@@ -181,7 +311,7 @@ The config is also plain JSON, so it can be written by hand or kept in
 version control. The app can open an existing one, edit it and export it
 again.
 
-## File formats
+### File formats
 
 chummyd reads the same files the app does, with the same code:
 
@@ -196,12 +326,12 @@ chummyd reads the same files the app does, with the same code:
 Any change to a shared format is made in its crate, documented in `docs/`,
 and versioned. Both programs refuse versions newer than they know.
 
-## Talking to chummyd
+### Talking to chummyd
 
 All clients use one protocol: the Chummy app, the CLI, shims, and the
 executor API.
 
-### Transport
+#### Transport
 
 - **Local (on by default):** a Unix domain socket at `run/chummyd.sock`
   (mode 0600, in a 0700 folder), or a Windows named pipe.
@@ -221,7 +351,7 @@ executor API.
 - **No browser can reach it.** There's no HTTP API on localhost, so a web page
   can't talk to chummyd (no DNS rebinding, no CSRF).
 
-### Authentication
+#### Authentication
 
 - **Pairing.** `chummyd pair --role operator` prints a one-time code (random,
   single use, expires in 10 minutes).
@@ -239,7 +369,7 @@ executor API.
 - **Keys are revocable** (`chummyd keys revoke`, or from the app), and
   revoking one ends that client's sessions at once.
 
-### Authorization
+#### Authorization
 
 | Role | May |
 |------|-----|
@@ -252,7 +382,7 @@ executor API.
 Roles can be limited to some agents. Every authenticated request is
 written to the audit log: who, what, which agent or job, and the result.
 
-### Protocol
+#### Protocol
 
 JSON-RPC 2.0 over length-prefixed frames on the socket or TLS stream:
 
@@ -273,7 +403,7 @@ JSON-RPC 2.0 over length-prefixed frames on the socket or TLS stream:
   - `config.apply` (admin; validated, diffed, audited)
   - `executor.run`
 
-### The executor API
+#### The executor API
 
 "Input a loop and its inputs":
 
@@ -288,7 +418,7 @@ JSON-RPC 2.0 over length-prefixed frames on the socket or TLS stream:
 - **Executor runs share the queue and limits** with jobs: one run per agent
   at a time, `max_runs`, and the daily model-call budget.
 
-## Questions for the user: waiting and answering
+### Questions for the user: waiting and answering
 
 Questions come from *Ask me* blocks and tool approvals, as in the app. They
 go through the same `AskBroker` from `chummy-scheduler`, with two additions
@@ -311,7 +441,7 @@ for a service that runs unattended for days:
      can come later, if it's needed; the engine's queues and values are
      already plain data.)
 
-### Where questions show up
+#### Where questions show up
 
 - **The Chummy app**, when connected: each instance's questions appear in
   the main window's *Waiting for you* list and as chat messages in that
@@ -321,7 +451,7 @@ for a service that runs unattended for days:
 - **Shims** (bridges to messaging apps, for answering away from your
   computer).
 
-### Shims
+#### Shims
 
 A shim is a small separate process that connects to chummyd over the local
 socket with its own key and the `asker` role. It relays questions out to a
@@ -358,7 +488,7 @@ written for Matrix, ntfy, email, Signal or Telegram.
   purpose, agent by agent. Questions from *Ask me* blocks can always be
   answered.
 
-## Connecting the Chummy app to chummyd
+### Connecting the Chummy app to chummyd
 
 - **Settings → Background services** lists paired instances.
   - **Add** asks for an instance: "On this computer" finds the local socket
@@ -383,7 +513,7 @@ written for Matrix, ntfy, email, Signal or Telegram.
     an instance, mapping its agent to one of the instance's agents.
   - **Bring back** copies a job from an instance into the app, switched off.
 
-## Hardening checklist
+### Hardening checklist
 
 **Code and supply chain**
 
@@ -439,7 +569,7 @@ written for Matrix, ntfy, email, Signal or Telegram.
 **Defaults:** remote access off, executor off, shims off, no paired clients,
 every tool off, internet off.
 
-## Code reuse and what to prepare first
+### Code reuse and what to prepare first
 
 Already shared (built in pass 5 with chummyd in mind):
 
@@ -459,7 +589,7 @@ To prepare before chummyd's first milestone:
    programs share it.
 2. Move `Agent`, `Permissions` and `ToolPref` out of the app's settings into a
    shared crate, and add per-agent tool lists (which the app should get
-   too; see `docs/security.md`).
+   too; see [Security and threat model](security.md)).
 3. Add an **interrupted** status to `RunRecord`, and a hook in `AskBroker` to
    persist and restore waiting questions.
 4. Add a run journal writer (each run's events to a file) behind a trait in
@@ -468,7 +598,7 @@ To prepare before chummyd's first milestone:
    the version handshake, so the app and chummyd build against the same
    definitions.
 
-## Milestones
+### Milestones
 
 1. **M0, preparation:** the refactors above, plus per-agent tool lists in
    the app.
@@ -495,7 +625,7 @@ To prepare before chummyd's first milestone:
 8. **M7, packaging and service hardening:** the hardening checklist, signing
    and release.
 
-## Open questions
+### Open questions
 
 - Should a stopped or restarted chummyd be able to **resume** a waiting run
   (saving the engine's state), or is "interrupted, run again" enough?

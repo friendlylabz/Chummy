@@ -10,7 +10,7 @@
 //! incoming links queues their values in arrival order, so a block in a cycle
 //! runs again each time new input arrives.
 //!
-//! See `docs/loop-format.md` for the file format.
+//! See `docs/dev/file-formats.md` (Loops) for the file format.
 
 mod blocks;
 mod config;
@@ -20,6 +20,11 @@ mod format;
 pub mod log;
 pub mod outline;
 pub mod prompted;
+mod review;
+pub use review::{
+    AuthorText, BlockRef, Capability, Flag, FlagLevel, Flow, FlowInput, FlowStep, HiddenChar,
+    LoopReview, ModelReview, Origin, review,
+};
 mod templates;
 mod text;
 pub use text::strip_thinking;
@@ -44,7 +49,7 @@ pub use format::{
     Position, VERSION,
 };
 pub use log::{LoggedValue, ModelLog, PortLog, StepLog, StepStatus};
-pub use templates::{ASSISTANT, TERMINAL, Template, templates};
+pub use templates::{ASSISTANT, TERMINAL, Template, builtin_prints, fingerprint, templates};
 pub use validate::{Analysis, BlockPorts, FunctionPorts, Issue, Severity, analyze};
 
 #[derive(Debug, thiserror::Error)]

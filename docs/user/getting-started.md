@@ -90,7 +90,8 @@ Chummy assistant reads it at the start of every message.
 | Windows | `%LOCALAPPDATA%\com.friendlylabz.chummy`                |
 
 It holds `settings.json` (versioned, written atomically, with a `.bak`
-backup), `loops/` (your loops, one JSON file each), `chats/` (a folder per
+backup), `loops/` (your loops, one JSON file each), `trusted-loops.json` (the
+loops that may run without a review, signed with a key in your keychain), `chats/` (a folder per
 agent with an index and one file per chat), `jobs/` (scheduled jobs, their
 state and run history), `usage.json` (tokens used per model per day, kept
 31 days), `logs/system/` (the system log, one file a day), `logs/runs/` (one

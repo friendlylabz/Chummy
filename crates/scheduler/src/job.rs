@@ -4,7 +4,7 @@
 //! same file works in the Chummy app and in chummyd: it names the agent by
 //! id, and the agent (its folder, model and permissions) comes from whoever
 //! runs the job. A job can never give itself more access than its agent has.
-//! Spec: `docs/job-format.md`.
+//! Spec: `docs/dev/file-formats.md` (Scheduled jobs).
 
 use jiff::Zoned;
 use serde::{Deserialize, Serialize};

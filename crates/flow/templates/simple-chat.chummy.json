@@ -1,0 +1,114 @@
+{
+  "format": "chummy.loop",
+  "version": 3,
+  "name": "Simple chat",
+  "description": "Answers each message with the recent conversation as context.",
+  "limits": {
+    "max_steps": 200,
+    "max_llm_calls": 20,
+    "max_tool_calls": 20
+  },
+  "blocks": [
+    {
+      "id": "history",
+      "type": "history",
+      "label": "Conversation",
+      "position": {
+        "x": 0.0,
+        "y": 0.0
+      },
+      "params": {
+        "max_messages": 10
+      }
+    },
+    {
+      "id": "message",
+      "type": "input",
+      "label": "Message",
+      "position": {
+        "x": 0.0,
+        "y": 180.0
+      },
+      "params": {}
+    },
+    {
+      "id": "context",
+      "type": "combine",
+      "label": "Context",
+      "position": {
+        "x": 300.0,
+        "y": 60.0
+      },
+      "params": {
+        "format": "Conversation so far:\n_INPUT1_\n\nThe user now says:\n_INPUT2_",
+        "inputs": 2
+      }
+    },
+    {
+      "id": "answer",
+      "type": "llm",
+      "label": "Answer",
+      "position": {
+        "x": 600.0,
+        "y": 60.0
+      },
+      "params": {
+        "prompt": "_INPUT_\n\nWrite the assistant's reply.",
+        "system": "You are a helpful assistant. Answer clearly and briefly.",
+        "tools": "off"
+      }
+    },
+    {
+      "id": "reply",
+      "type": "output",
+      "label": "Reply",
+      "position": {
+        "x": 900.0,
+        "y": 60.0
+      },
+      "params": {}
+    }
+  ],
+  "links": [
+    {
+      "from": {
+        "block": "history",
+        "port": "out"
+      },
+      "to": {
+        "block": "context",
+        "port": "in1"
+      }
+    },
+    {
+      "from": {
+        "block": "message",
+        "port": "out"
+      },
+      "to": {
+        "block": "context",
+        "port": "in2"
+      }
+    },
+    {
+      "from": {
+        "block": "context",
+        "port": "out"
+      },
+      "to": {
+        "block": "answer",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "block": "answer",
+        "port": "out"
+      },
+      "to": {
+        "block": "reply",
+        "port": "in"
+      }
+    }
+  ]
+}

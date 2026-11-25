@@ -2,9 +2,8 @@
 //! the user picks one.
 
 use serde::Serialize;
-use serde_json::json;
 
-use crate::format::{Block, Link, LoopFile, Position};
+use crate::format::LoopFile;
 
 /// The id of the template new agents get when nothing is configured.
 pub const ASSISTANT: &str = "assistant";
@@ -19,109 +18,116 @@ pub struct Template {
     pub file: LoopFile,
 }
 
-fn b(id: &str, kind: &str, label: &str, x: f64, y: f64, params: serde_json::Value) -> Block {
-    Block {
-        id: id.into(),
-        kind: kind.into(),
-        label: label.into(),
-        position: Position { x, y },
-        params,
-        comment: String::new(),
-    }
-}
+// The SHA-256 of each file below, worked out by build.rs at every build.
+include!(concat!(env!("OUT_DIR"), "/template_prints.rs"));
 
-fn l(a: &str, ap: &str, c: &str, cp: &str) -> Link {
-    Link::new((a, ap), (c, cp))
-}
-
-const CONTEXT_FORMAT: &str = "Conversation so far:\n_INPUT1_\n\nThe user now says:\n_INPUT2_";
+/// The built-in templates: id, file name in `templates/`, name, description
+/// and the file itself. The assistant and terminal files are written by
+/// `templates/make_templates.py` (from `assistant.py` and `terminal.py`);
+/// the other two are written by hand. Every file must be exactly what
+/// Chummy would save (a test checks), so its hash is its fingerprint.
+const FILES: &[(&str, &str, &str, &str, &str)] = &[
+    (
+        ASSISTANT,
+        "assistant.chummy.json",
+        "Chummy assistant",
+        "The default: one agent loop, like a coding agent's. The model works with tools, call after call, until it's done. It says what it's doing as it goes, keeps its own to-do list for bigger jobs, reads CHUMMY.md from the folder for your instructions, and summarises long conversations. Sent back to finish if it stops with steps unchecked.",
+        include_str!("../templates/assistant.chummy.json"),
+    ),
+    (
+        TERMINAL,
+        "terminal.chummy.json",
+        "Terminal assistant",
+        "The Chummy assistant, working only through the terminal: every tool is off except Run command (Chummy's own sandboxed shell), Run shell and Fetch page, and its prompts teach the shell's commands (grep, find, sed, awk, xargs, heredocs, python…) with examples. Each command it runs is shown in the run's pane.",
+        include_str!("../templates/terminal.chummy.json"),
+    ),
+    (
+        "blank",
+        "blank.chummy.json",
+        "Blank",
+        "A Message block and a Reply block.",
+        include_str!("../templates/blank.chummy.json"),
+    ),
+    (
+        "simple_chat",
+        "simple-chat.chummy.json",
+        "Simple chat",
+        "One model call with the conversation as context.",
+        include_str!("../templates/simple-chat.chummy.json"),
+    ),
+];
 
 pub fn templates() -> Vec<Template> {
-    let mut blank = LoopFile::new("New loop");
-    blank.blocks = vec![
-        b("message", "input", "Message", 0.0, 0.0, json!({})),
-        b("reply", "output", "Reply", 420.0, 0.0, json!({})),
-    ];
+    FILES
+        .iter()
+        .map(|(id, _, name, description, json)| Template {
+            id,
+            name,
+            description,
+            file: LoopFile::from_json(json)
+                .unwrap_or_else(|e| panic!("the built-in template “{id}” is broken: {e}")),
+        })
+        .collect()
+}
 
-    let mut chat = LoopFile::new("Simple chat");
-    chat.description = "Answers each message with the recent conversation as context.".into();
-    chat.blocks = vec![
-        b(
-            "history",
-            "history",
-            "Conversation",
-            0.0,
-            0.0,
-            json!({ "max_messages": 10 }),
-        ),
-        b("message", "input", "Message", 0.0, 180.0, json!({})),
-        b(
-            "context",
-            "combine",
-            "Context",
-            300.0,
-            60.0,
-            json!({ "inputs": 2, "format": CONTEXT_FORMAT }),
-        ),
-        b(
-            "answer",
-            "llm",
-            "Answer",
-            600.0,
-            60.0,
-            json!({
-                "prompt": "_INPUT_\n\nWrite the assistant's reply.",
-                "system": "You are a helpful assistant. Answer clearly and briefly.",
-                "tools": "off"
-            }),
-        ),
-        b("reply", "output", "Reply", 900.0, 60.0, json!({})),
-    ];
-    chat.links = vec![
-        l("history", "out", "context", "in1"),
-        l("message", "out", "context", "in2"),
-        l("context", "out", "answer", "in"),
-        l("answer", "out", "reply", "in"),
-    ];
+/// A loop's fingerprint: the SHA-256 (hex) of the file Chummy would save
+/// for it, always in the current format version. Two loops with the same
+/// blocks, links, text and layout have the same fingerprint, however their
+/// files were spaced or ordered.
+pub fn fingerprint(l: &LoopFile) -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+    let json = if l.version == crate::VERSION {
+        l.to_json()
+    } else {
+        let mut c = l.clone();
+        c.version = crate::VERSION;
+        c.to_json()
+    };
+    Sha256::digest(json.as_bytes())
+        .iter()
+        .fold(String::new(), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        })
+}
 
-    // Written by templates/make_templates.py from templates/assistant.py
-    // and templates/terminal.py.
-    let assistant = LoopFile::from_json(include_str!("../templates/assistant.chummy.json"))
-        .expect("the built-in assistant template is a valid loop file");
-    let terminal = LoopFile::from_json(include_str!("../templates/terminal.chummy.json"))
-        .expect("the built-in terminal template is a valid loop file");
-
-    vec![
-        Template {
-            id: ASSISTANT,
-            name: "Chummy assistant",
-            description: "The default: one agent loop, like a coding agent's. The model works with tools, call after call, until it's done. It says what it's doing as it goes, keeps its own to-do list for bigger jobs, reads CHUMMY.md from the folder for your instructions, and summarises long conversations. Sent back to finish if it stops with steps unchecked.",
-            file: assistant,
-        },
-        Template {
-            id: TERMINAL,
-            name: "Terminal assistant",
-            description: "The Chummy assistant, working only through the terminal: every tool is off except Run command (Chummy's own sandboxed shell), Run shell and Fetch page, and its prompts teach the shell's commands (grep, find, sed, awk, xargs, heredocs, python…) with examples. Each command it runs is shown in the run's pane.",
-            file: terminal,
-        },
-        Template {
-            id: "blank",
-            name: "Blank",
-            description: "A Message block and a Reply block.",
-            file: blank,
-        },
-        Template {
-            id: "simple_chat",
-            name: "Simple chat",
-            description: "One model call with the conversation as context.",
-            file: chat,
-        },
-    ]
+/// Fingerprints of the built-in templates, worked out at build time.
+/// Chummy always trusts these.
+pub fn builtin_prints() -> impl Iterator<Item = &'static str> {
+    TEMPLATE_PRINTS.iter().map(|(_, p)| *p)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::format::Block;
+
+    #[test]
+    fn every_template_file_is_hashed_at_build_time_and_is_its_fingerprint() {
+        assert_eq!(
+            TEMPLATE_PRINTS.len(),
+            FILES.len(),
+            "a file in templates/ isn't listed in FILES, or the other way round"
+        );
+        for (id, file, _, _, json) in FILES {
+            let parsed = LoopFile::from_json(json).unwrap();
+            assert_eq!(
+                parsed.to_json(),
+                *json,
+                "{file} isn't written exactly as Chummy saves loops; run make_templates.py (or save it from Chummy)"
+            );
+            let print = TEMPLATE_PRINTS
+                .iter()
+                .find(|(f, _)| f == file)
+                .map(|(_, p)| *p);
+            assert_eq!(print, Some(fingerprint(&parsed).as_str()), "{id}");
+        }
+        let prints: Vec<_> = builtin_prints().collect();
+        for t in templates() {
+            assert!(prints.contains(&fingerprint(&t.file).as_str()), "{}", t.id);
+        }
+    }
     use crate::validate::analyze;
 
     use crate::engine::{Host, LlmAnswer, LlmCall, RunInputs, RunStatus, ToolOutput, run};

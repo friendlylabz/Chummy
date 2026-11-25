@@ -6,6 +6,7 @@ use chummy_flow::{
 use tauri::{AppHandle, Emitter, State, WebviewWindow};
 
 use super::CmdResult;
+use super::review;
 use crate::dialogs;
 use crate::events;
 use crate::library::LoopSummary;
@@ -15,7 +16,7 @@ use crate::state::AppState;
 const MAX_IMPORT_BYTES: u64 = 2 * 1024 * 1024;
 
 fn changed(app: &AppHandle, state: &AppState) {
-    let _ = app.emit(events::LOOPS_CHANGED, state.library.list());
+    let _ = app.emit(events::LOOPS_CHANGED, state.loops());
     state.broadcast_setup(app);
 }
 
@@ -31,12 +32,14 @@ pub fn loop_templates() -> Vec<Template> {
 
 #[tauri::command]
 pub fn list_loops(state: State<'_, AppState>) -> Vec<LoopSummary> {
-    state.library.list()
+    state.loops()
 }
 
+/// Opens a loop for the editor. Loops that aren't trusted are refused: they
+/// get a review first (see `review_library_loop`).
 #[tauri::command]
 pub fn load_loop(state: State<'_, AppState>, id: String) -> CmdResult<LoopFile> {
-    state.library.load(&id)
+    state.trusted_loop(&id)
 }
 
 /// Checks a loop and returns every block's ports. The editor calls this on
@@ -46,7 +49,13 @@ pub fn analyze_loop(file: LoopFile) -> Analysis {
     analyze(&file)
 }
 
-/// Saves a loop. With no `id`, a new one is made from the loop's name.
+/// Saves a loop from the editor. With no `id`, a new one is made from the
+/// loop's name.
+///
+/// What the editor holds came from a trusted loop (the editor can only open
+/// trusted loops), a template or a blank canvas, plus the user's own edits,
+/// so the saved version is trusted too, unless it replaces a loop in the
+/// library that isn't trusted (then it stays that way until reviewed).
 #[tauri::command]
 pub fn save_loop(
     app: AppHandle,
@@ -60,7 +69,12 @@ pub fn save_loop(
     let id = id
         .filter(|i| !i.is_empty())
         .unwrap_or_else(|| state.library.new_id(&file.name));
+    let replaces_untrusted = state.library.list().iter().any(|l| l.id == id)
+        && !state.library.load(&id).is_ok_and(|old| state.trusted(&old));
     state.library.save(&id, &file)?;
+    if !replaces_untrusted {
+        state.trust.trust(&chummy_flow::fingerprint(&file));
+    }
     changed(&app, &state);
     Ok(id)
 }
@@ -136,7 +150,9 @@ pub async fn delete_loop(
     Ok(true)
 }
 
-/// Imports a loop file chosen in a native dialog. Returns the new loop's id.
+/// Imports a loop file chosen in a native dialog. Returns the new loop's id,
+/// or none if it was cancelled or the loop needs a review first (the Review
+/// window opens; trusting the loop there imports it).
 #[tauri::command]
 pub async fn import_loop(
     app: AppHandle,
@@ -167,10 +183,25 @@ pub async fn import_loop(
             return Ok(None);
         }
     };
-    let id = state.library.new_id(&file.name);
-    state.library.save(&id, &file)?;
-    changed(&app, &state);
-    Ok(Some(id))
+    // A loop Chummy already trusts (one exported from here, say) comes
+    // straight in; anything else is reviewed first, in its own window.
+    if state.trusted(&file) {
+        let id = state.library.new_id(&file.name);
+        state.library.save(&id, &file)?;
+        changed(&app, &state);
+        return Ok(Some(id));
+    }
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    review::start(
+        &app,
+        &state,
+        file,
+        review::ReviewSource::Import { file_name },
+    );
+    Ok(None)
 }
 
 /// Exports a loop to a file chosen in a native dialog.

@@ -11,7 +11,7 @@ use chummy_flow::{BlockKind, LoopConfig, LoopFile, Overrides, analyze, find_bloc
 use serde::Serialize;
 use tauri::{AppHandle, State, WebviewWindow};
 
-use super::{CmdResult, err};
+use super::{CmdResult, err, review};
 use crate::dialogs;
 use crate::state::AppState;
 
@@ -306,6 +306,26 @@ pub async fn import_agent_loop_config(
     }
     let n = overrides.len();
     let loop_id = agent.loop_id.clone();
+    // New settings can rewrite a loop's prompts, so unless the loop they
+    // make is one Chummy already trusts, they're reviewed first.
+    let (effective, _) = file.with_overrides(&overrides);
+    if n > 0 && !state.trusted(&effective) {
+        let changes = review::config_changes(&file, &overrides);
+        review::start(
+            &app,
+            &state,
+            effective,
+            review::ReviewSource::LoopConfig {
+                agent_id: agent_id.clone(),
+                agent_name: agent.name.clone(),
+                loop_id: loop_id.clone(),
+                changes,
+                base_print: chummy_flow::fingerprint(&file),
+                overrides,
+            },
+        );
+        return Ok(None);
+    }
     state.update(&app, |s| {
         if let Some(a) = s.agents.iter_mut().find(|a| a.id == agent_id) {
             a.loop_config.insert(loop_id, overrides);

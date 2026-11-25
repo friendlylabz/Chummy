@@ -68,6 +68,7 @@
     "allow-log-key-status",
     "allow-export-log-key",
     "allow-import-log-key",
-    "allow-open-link"
+    "allow-open-link",
+    "allow-review-library-loop"
   ]
 }

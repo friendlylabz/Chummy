@@ -184,6 +184,12 @@
 
   async function openLoop(id: string) {
     try {
+      // Loops that aren't trusted get a review (in its own window) first.
+      const summary = (await commands.listLoops()).find((l) => l.id === id);
+      if (summary && !summary.trusted) {
+        await commands.reviewLibraryLoop(id);
+        return;
+      }
       load(await commands.loadLoop(id), id);
     } catch (e) {
       notice = errorText(e);

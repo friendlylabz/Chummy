@@ -4,8 +4,12 @@
    how a message travels through them.
 2. [Building and testing](building.md): prerequisites, commands, CI and
    releases.
-3. [Security features](security.md): the protections in the code and where
-   each one lives.
+3. [Security and threat model](security.md): the threat model, the
+   protections in the code and where each one lives, the sandboxes tools run
+   in, and the audits.
+4. [File formats](file-formats.md): loops, tools and scheduled jobs.
+5. [Roadmap](roadmap.md): ideas discussed but not built yet, including the
+   chummyd plan.
 
 Two rules shape everything else:
 
@@ -15,9 +19,8 @@ Two rules shape everything else:
 - **Rust decides.** Every permission, path and confirmation check happens in
   Rust. The UI shows things and asks; it never grants.
 
-The file formats are described in [../loop-format.md](../loop-format.md),
-[../tool-format.md](../tool-format.md) and
-[../job-format.md](../job-format.md).
+The file formats (loops, tools, scheduled jobs) are described in
+[file-formats.md](file-formats.md).
 
 ## Development
 

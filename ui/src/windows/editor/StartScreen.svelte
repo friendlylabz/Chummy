@@ -22,6 +22,7 @@
       <div>
         <h1>Loops</h1>
         <p class="sub">A loop is how an agent thinks: blocks that pass text to each other, from your message to its reply.</p>
+        <p class="sub">Loops from elsewhere are programs: Chummy shows you a review of each one before it can run. Only import loops from people you trust.</p>
       </div>
       <Button icon="import" onclick={onimport}>Import…</Button>
     </header>
@@ -31,10 +32,10 @@
       <div class="list">
         {#each loops.list as l (l.id)}
           <div class="row">
-            <button class="open" type="button" onclick={() => onopen(l.id)}>
-              <span class="icon"><Icon name="flow" size={17} /></span>
+            <button class="open" type="button" onclick={() => onopen(l.id)} title={l.trusted ? undefined : "Not on your list of trusted loops: review it before it can run or be edited"}>
+              <span class="icon" class:untrusted={!l.trusted}><Icon name={l.trusted ? "flow" : "shield"} size={17} /></span>
               <span class="text">
-                <span class="name">{l.name} {#if !l.ok}<span class="badge warn">Has problems</span>{/if}</span>
+                <span class="name">{l.name} {#if !l.trusted}<span class="badge warn">Needs a review</span>{:else if !l.ok}<span class="badge warn">Has problems</span>{/if}</span>
                 <span class="meta">{l.description || `${l.blocks} blocks`} · edited {date(l.modified)}</span>
               </span>
             </button>
@@ -130,6 +131,10 @@
     border-radius: var(--radius-md);
     background: var(--accent-soft);
     color: var(--accent);
+  }
+  .icon.untrusted {
+    background: color-mix(in srgb, var(--warn) 16%, transparent);
+    color: var(--warn);
   }
   .text {
     display: grid;

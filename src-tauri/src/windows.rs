@@ -1,5 +1,5 @@
 //! Secondary windows. The main window is declared in `tauri.conf.json`; the
-//! editor, settings, scheduler and logs windows are created on demand. Each is a
+//! editor, settings, scheduler, logs and review windows are created on demand. Each is a
 //! singleton: opening one that already exists focuses it.
 
 use serde::Deserialize;
@@ -12,6 +12,8 @@ pub enum AppWindow {
     Settings,
     Scheduler,
     Logs,
+    /// Reviewing a loop before it's trusted.
+    Review,
 }
 
 impl AppWindow {
@@ -22,6 +24,7 @@ impl AppWindow {
             AppWindow::Settings => "settings",
             AppWindow::Scheduler => "scheduler",
             AppWindow::Logs => "logs",
+            AppWindow::Review => "review",
         }
     }
 
@@ -31,6 +34,7 @@ impl AppWindow {
             AppWindow::Settings => "settings.html",
             AppWindow::Scheduler => "scheduler.html",
             AppWindow::Logs => "logs.html",
+            AppWindow::Review => "review.html",
         }
     }
 
@@ -40,6 +44,7 @@ impl AppWindow {
             AppWindow::Settings => "Chummy — Settings",
             AppWindow::Scheduler => "Chummy — Scheduler",
             AppWindow::Logs => "Chummy — Logs",
+            AppWindow::Review => "Chummy — Review a loop",
         }
     }
 
@@ -50,6 +55,7 @@ impl AppWindow {
             AppWindow::Settings => (860.0, 600.0, 640.0, 440.0),
             AppWindow::Scheduler => (1000.0, 680.0, 720.0, 480.0),
             AppWindow::Logs => (1180.0, 760.0, 760.0, 480.0),
+            AppWindow::Review => (1120.0, 800.0, 720.0, 520.0),
         }
     }
 }

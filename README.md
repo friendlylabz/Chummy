@@ -33,12 +33,9 @@ until you say so.
 
 - [Using Chummy](docs/user/README.md): [getting started](docs/user/getting-started.md),
   [loops and the loop editor](docs/user/loop-editor.md), [settings](docs/user/settings.md)
-- [Developing Chummy](docs/dev/README.md): building, architecture,
-  [modules](docs/dev/modules.md), [security features](docs/dev/security.md)
-- File formats: [loops](docs/loop-format.md), [tools](docs/tool-format.md),
-  [scheduled jobs](docs/job-format.md)
-- Design notes: [sandboxes](docs/sandboxes.md), [security and threat model](docs/security.md),
-  [chummyd plan](docs/chummyd-plan.md)
+- [Developing Chummy](docs/dev/README.md): [modules](docs/dev/modules.md),
+  [security and threat model](docs/dev/security.md), [file formats](docs/dev/file-formats.md),
+  [roadmap](docs/dev/roadmap.md)
 
 ## Features
 
@@ -98,11 +95,16 @@ until you say so.
   only handle text, call models and work inside the agent's folder. Your
   message coming in, tools and output going out are the only ways a loop
   touches the world.
+- **Loops from elsewhere are reviewed first.** Only loops on a signed list
+  of trusted loops run: the built-in ones, the ones you make, and the ones
+  you've reviewed. Anything else opens a review that shows what the loop can
+  do, every prompt it sends, where its data flows, and flags for risky
+  patterns, before you decide.
 - **Secrets stay in the system keychain**, never in files. **Run logs are
   encrypted** (XChaCha20-Poly1305, key in the keychain, exportable under a
   passphrase), and the system log never records message text, files or keys.
 
-See [docs/security.md](docs/security.md) for the threat model and audits.
+See [security and threat model](docs/dev/security.md) for the threat model, the sandboxes and the audits.
 
 ## License
 

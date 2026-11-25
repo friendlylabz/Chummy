@@ -19,6 +19,7 @@
     "allow-save-loop",
     "allow-delete-loop",
     "allow-import-loop",
+    "allow-review-library-loop",
     "allow-export-loop",
     "allow-test-run",
     "allow-stop-run",

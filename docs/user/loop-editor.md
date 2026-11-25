@@ -33,7 +33,39 @@ The blocks you'll use most:
 | **Final chat output** | Adds its input to the response and ends the run. Use it for the final answer. |
 | **Pane output** | Adds its input as a line in the run's pane (Sessions → the run's text button), newest first. Good for "what am I doing now" notes that shouldn't go in the reply. |
 
-Every block and parameter is listed in [../loop-format.md](../loop-format.md).
+Every block and parameter is listed in [File formats → Loops](../dev/file-formats.md#loops).
+
+
+## Loops from elsewhere
+
+A loop is a program: it runs with everything its agent may do (its folder,
+its tools, its model). So Chummy keeps a list of **trusted loops**: the
+built-in ones, the ones you make or change in the editor, and the ones you've
+reviewed. Only those run or open in the editor.
+
+When you **import** a loop that isn't on the list, or open one marked
+**Needs a review** (say, one copied into Chummy's folder by hand), Chummy
+opens a **review** instead:
+
+- **Flags**: patterns that are risky, or that a harmless loop rarely needs.
+  The most serious: tool calls the loop puts together itself, with no model
+  deciding (it could read a file and send it to a website), hidden
+  characters, questions asking for a password or key, reading files that
+  usually hold secrets, and writing files that can run code.
+- **What it can do**: models, tools, internet, files, questions, chat
+  history, replies.
+- **Prompts**: every model block's system message, prompt and reminder,
+  what it can see, and the loop's other text that can reach it.
+- **Where data flows**: each block that acts, with everything that can feed
+  it, step by step backwards.
+- **All its text**, with hidden characters shown as `[U+…]`.
+
+A review that finds nothing isn't a guarantee, and a harmless loop can raise
+flags. **Only import loops from people you trust.** If you trust it, choose
+**Import and trust** (or **Trust this loop**); with serious flags you tick a
+box first, and Chummy asks once more. Imported **loop settings** for an agent
+(Agent Loop Configuration → Import) are reviewed the same way, with a list of
+what they change.
 
 ## The editor
 
@@ -124,4 +156,4 @@ For a fixed task (summarise every file dropped in a folder, a daily
 report), build a loop that does just that task, step by step, with fixed
 prompts, and run it from a **scheduled job** (main menu → Scheduler). A job
 runs as an agent, with exactly that agent's folder, model and permissions.
-See [../job-format.md](../job-format.md).
+See [File formats → Scheduled jobs](../dev/file-formats.md#scheduled-jobs).

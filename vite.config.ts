@@ -12,6 +12,7 @@ const pages = {
   settings: resolve(ui, "settings.html"),
   scheduler: resolve(ui, "scheduler.html"),
   logs: resolve(ui, "logs.html"),
+  review: resolve(ui, "review.html"),
 };
 
 export default defineConfig({

@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "review",
+  "description": "Review window: shows the scan of a loop before it's trusted, and trusts it or not (Rust asks natively before trusting).",
+  "windows": [
+    "review"
+  ],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-get-settings",
+    "allow-open-window",
+    "allow-get-review",
+    "allow-accept-review",
+    "allow-discard-review"
+  ]
+}

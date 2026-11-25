@@ -128,6 +128,20 @@
       error = errorText(e);
     }
   }
+  // Imported settings that change the loop are reviewed first, in the
+  // Review window; when they're accepted there, the agent's settings change.
+  let reviewing = false;
+  const saved = $derived(JSON.stringify(agent.loop_config?.[agent.loop_id] ?? {}));
+  $effect(() => {
+    void saved;
+    untrack(() => {
+      if (!reviewing) return;
+      reviewing = false;
+      notice = "Loaded the reviewed settings.";
+      reload();
+    });
+  });
+
   async function importConfig() {
     notice = "";
     try {
@@ -135,6 +149,8 @@
       if (n !== null) {
         notice = `Loaded settings for ${n} block${n === 1 ? "" : "s"}.`;
         await reload();
+      } else {
+        reviewing = true;
       }
     } catch (e) {
       error = errorText(e);

@@ -15,7 +15,7 @@ export type { Generation, ModelOverrides } from "./generation";
 // ---------------------------------------------------------------- types
 
 export type Theme = "system" | "dark" | "light";
-export type AppWindow = "editor" | "settings" | "scheduler" | "logs";
+export type AppWindow = "editor" | "settings" | "scheduler" | "logs" | "review";
 export type ProviderKind =
   | "open_ai_compatible"
   | "open_ai"
@@ -441,6 +441,101 @@ export interface LoopSummary {
   blocks: number;
   ok: boolean;
   modified: number;
+  /** SHA-256 of the loop as Chummy saves it (empty if it can't be opened). */
+  fingerprint: string;
+  /** On the list of trusted loops: may run and open without a review. */
+  trusted: boolean;
+}
+
+// ---- loop reviews (mirror chummy_flow::review and commands/review.rs)
+
+export type Origin = "you" | "history" | "author" | "model" | "files" | "tools" | "answers" | "errors";
+export type FlagLevel = "serious" | "warning" | "note";
+
+export interface ReviewBlock {
+  id: string;
+  label: string;
+  kind: string;
+  kind_label: string;
+  function: string | null;
+  comment: string;
+}
+export interface ReviewFlag {
+  level: FlagLevel;
+  kind: string;
+  title: string;
+  detail: string;
+  blocks: number[];
+  texts: number[];
+}
+export interface ReviewText {
+  block: number | null;
+  what: string;
+  /** Hidden characters are shown as [U+…]. */
+  text: string;
+  flows: boolean;
+  hidden: { at: number; code: string; name: string }[];
+  urls: string[];
+}
+export interface ReviewCapability {
+  key: string;
+  title: string;
+  detail: string;
+  active: boolean;
+}
+export interface ReviewModel {
+  block: number;
+  system: string;
+  prompt: string;
+  reminder: string;
+  model: string | null;
+  tools: string;
+  calls_tools: boolean;
+  online: boolean;
+  sees: Origin[];
+  texts: number[];
+  memory: string[];
+}
+export interface FlowStep {
+  block: number;
+  port: string;
+  origins: Origin[];
+  inputs: { port: string; label: string; from: number[] }[];
+}
+export interface LoopReview {
+  name: string;
+  description: string;
+  fingerprint: string;
+  block_count: number;
+  function_count: number;
+  max_steps: number;
+  max_llm_calls: number;
+  max_tool_calls: number;
+  blocks: ReviewBlock[];
+  flags: ReviewFlag[];
+  capabilities: ReviewCapability[];
+  models: ReviewModel[];
+  texts: ReviewText[];
+  flows: { title: string; step: number }[];
+  steps: FlowStep[];
+  complete: boolean;
+}
+export interface ConfigChange {
+  block: string;
+  label: string;
+  param: string;
+  from: string | null;
+  to: string | null;
+}
+export type ReviewSource =
+  | { kind: "import"; file_name: string }
+  | { kind: "library"; id: string }
+  | { kind: "loop_config"; agent_id: string; agent_name: string; loop_id: string; changes: ConfigChange[] };
+export interface ReviewView {
+  token: string;
+  source: ReviewSource;
+  review: LoopReview;
+  models: { id: string; name: string | null; base_url: string | null }[];
 }
 
 // ---- chat and runs
@@ -929,7 +1024,15 @@ export const commands = {
   /** Adds the recommended loop (Chummy assistant), or finds it. Returns its id. */
   addRecommendedLoop: () => call<string>("add_recommended_loop", undefined, () => "chummy-assistant"),
   deleteLoop: (id: string) => call<boolean>("delete_loop", { id }),
+  /** The new loop's id; null if cancelled, or if the loop opened in the Review window first. */
   importLoop: () => call<string | null>("import_loop", undefined, () => null),
+  /** Opens the Review window on a loop in the library that isn't trusted. */
+  reviewLibraryLoop: (id: string) => call<void>("review_library_loop", { id }),
+  getReview: (token: string) => call<ReviewView>("get_review", { token }),
+  /** Asks natively, then trusts; closes the window. False if the user said no. */
+  acceptReview: (token: string) => call<boolean>("accept_review", { token }, () => false),
+  /** Drops the review and closes the window. */
+  discardReview: (token: string) => call<void>("discard_review", { token }, () => undefined),
   exportLoop: (id: string) => call<boolean>("export_loop", { id }),
 
   listChats: (agentId: string) =>

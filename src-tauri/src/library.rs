@@ -14,6 +14,10 @@ pub struct LoopSummary {
     /// No validation errors.
     pub ok: bool,
     pub modified: u64,
+    /// The loop's fingerprint (empty if it can't be opened).
+    pub fingerprint: String,
+    /// On the list of trusted loops (filled in by [`crate::state::AppState::loops`]).
+    pub trusted: bool,
 }
 
 pub struct Library {
@@ -51,14 +55,7 @@ const RETIRED: &[&str] = &[
     "c30129b768a18af72fbdf1a8aa8f0cb126c6443774d564ad9876003d1a6d5e9a",
 ];
 
-/// A loop's content as a SHA-256 hex string.
-pub fn fingerprint(l: &LoopFile) -> String {
-    use sha2::{Digest, Sha256};
-    Sha256::digest(l.to_json().as_bytes())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
+pub use chummy_flow::fingerprint;
 
 impl Library {
     pub fn new(dir: &Path) -> Self {
@@ -144,6 +141,8 @@ impl Library {
                 Ok(l) => out.push(LoopSummary {
                     id: id.into(),
                     ok: analyze(&l).ok,
+                    fingerprint: fingerprint(&l),
+                    trusted: false,
                     blocks: l.blocks.len(),
                     name: l.name,
                     description: l.description,
@@ -156,11 +155,22 @@ impl Library {
                     blocks: 0,
                     ok: false,
                     modified,
+                    fingerprint: String::new(),
+                    trusted: false,
                 }),
             }
         }
         out.sort_by_key(|a| a.name.to_lowercase());
         out
+    }
+
+    /// Fingerprints of every loop in the library that can be opened.
+    pub fn prints(&self) -> Vec<String> {
+        self.list()
+            .into_iter()
+            .map(|l| l.fingerprint)
+            .filter(|p| !p.is_empty())
+            .collect()
     }
 
     pub fn load(&self, id: &str) -> Result<LoopFile, String> {

@@ -22,8 +22,10 @@ use tauri::{AppHandle, Emitter};
 
 use crate::commands::jobs::AppJobs;
 use crate::events;
-use crate::library::Library;
+use crate::library::{Library, LoopSummary};
 use crate::settings::{self, Settings};
+use crate::trust::TrustStore;
+use chummy_flow::LoopFile;
 
 /// Keychain service name for all of Chummy's secrets.
 pub const KEYCHAIN_SERVICE: &str = "com.friendlylabz.chummy";
@@ -95,6 +97,10 @@ pub struct AppState {
     pub runtime: RuntimePaths,
     pub engine: Engine,
     pub library: Library,
+    /// The loops that may run and be opened without a review.
+    pub trust: TrustStore,
+    /// Loops waiting in the Review window, by token.
+    reviews: Mutex<crate::commands::review::Reviews>,
     settings: Mutex<Settings>,
     doc: JsonDoc<Settings>,
     /// Set if settings had to be recovered at startup.
@@ -202,9 +208,17 @@ impl AppState {
         let engine = Engine::new(&runtime.python, &runtime.engine_dir);
         let library = Library::new(&dirs.loops);
         library.upgrade_builtins();
+        let secrets: Box<dyn SecretStore> = Box::new(Keychain::new(KEYCHAIN_SERVICE));
+        let trust = TrustStore::open(
+            &dirs.root.join("trusted-loops.json"),
+            secrets.as_ref(),
+            || library.prints(),
+        );
         Ok(Self {
-            secrets: Box::new(Keychain::new(KEYCHAIN_SERVICE)),
+            secrets,
             library,
+            trust,
+            reviews: Mutex::new(HashMap::new()),
             engine,
             runtime,
             protected,
@@ -237,6 +251,36 @@ impl AppState {
 
     pub fn settings(&self) -> Settings {
         lock(&self.settings).clone()
+    }
+
+    /// The loop library, with whether each loop is trusted.
+    pub fn loops(&self) -> Vec<LoopSummary> {
+        let mut list = self.library.list();
+        for l in &mut list {
+            l.trusted = !l.fingerprint.is_empty() && self.trust.is_trusted(&l.fingerprint);
+        }
+        list
+    }
+
+    pub fn lock_reviews(&self) -> std::sync::MutexGuard<'_, crate::commands::review::Reviews> {
+        lock(&self.reviews)
+    }
+
+    /// Whether a loop may run and be opened without a review.
+    pub fn trusted(&self, file: &LoopFile) -> bool {
+        self.trust.is_trusted(&chummy_flow::fingerprint(file))
+    }
+
+    /// A library loop, refused if it isn't trusted.
+    pub fn trusted_loop(&self, id: &str) -> Result<LoopFile, String> {
+        let file = self.library.load(id)?;
+        if !self.trusted(&file) {
+            return Err(format!(
+                "“{}” hasn't been reviewed, so it can't run or be edited yet. Open the loop editor and review it first.",
+                file.name
+            ));
+        }
+        Ok(file)
     }
 
     /// Applies `f` to the settings, saves them atomically, and tells every window.

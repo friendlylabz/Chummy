@@ -13,6 +13,7 @@ pub mod local;
 pub mod logs;
 pub mod loops;
 pub mod providers;
+pub mod review;
 pub mod sandbox;
 pub mod tools;
 

@@ -1,4 +1,14 @@
-# The Chummy loop format (`chummy.loop`, version 3)
+# File formats
+
+The three files Chummy reads and writes that people may share or edit:
+
+- [Loops](#loops) (`chummy.loop`, version 3)
+- [Tools](#tools) (one PEP 723 Python file)
+- [Scheduled jobs](#scheduled-jobs) (`chummy.job`, version 1)
+
+## Loops
+
+The loop format: `chummy.loop`, version 3.
 
 A loop is how an agent thinks: a directed graph of **blocks** that pass text
 (and conversations with the model) to each other along **links**, from the
@@ -6,7 +16,7 @@ user's message to the agent's reply.
 Loops are saved as JSON files. Every object rejects unknown fields, so a valid
 file means exactly one thing.
 
-## File
+### File
 
 ```json
 {
@@ -34,7 +44,7 @@ file means exactly one thing.
 | `functions`   | array  | no       | Block functions used in this loop (see below). Omitted when empty. |
 | `notes`       | array  | no       | Notes on the canvas (see below). Omitted when empty. |
 
-### Limits
+#### Limits
 
 | Field           | Default | Range     | Meaning |
 |-----------------|---------|-----------|---------|
@@ -46,7 +56,7 @@ Blocks inside functions count toward the same limits.
 
 A run that reaches either limit stops and reports it, so a cycle can't run forever.
 
-### Block
+#### Block
 
 ```json
 { "id": "answer", "type": "llm", "label": "Answer",
@@ -63,7 +73,7 @@ A run that reaches either limit stops and reports it, so a cycle can't run forev
 | `params`   | object | no       | Type-specific parameters. Unknown keys are errors; missing keys take their defaults. |
 | `comment`  | string | no       | A note for people, shown on the block. Never sent to the model. Omitted when empty. |
 
-### Link
+#### Link
 
 ```json
 { "from": { "block": "answer", "port": "out" }, "to": { "block": "reply", "port": "in" } }
@@ -75,7 +85,7 @@ A link carries **every** value an output port produces to one input port. The
 same link can't appear twice. An output can feed any number of inputs, and an
 input can receive from any number of outputs.
 
-### Note
+#### Note
 
 ```json
 { "id": "note-1", "text": "Failures don't stop the run…", "position": { "x": 0, "y": 400 },
@@ -85,7 +95,7 @@ input can receive from any number of outputs.
 Free-standing text on the canvas, for people. `width` and `height` are
 optional. Notes, comments and labels never change what a loop does.
 
-## How a loop runs
+### How a loop runs
 
 - **Values** are *text*, a *list* of texts, or an *exchange* (a conversation
   with the model; see below). Each port declares which it carries: `text`,
@@ -112,7 +122,7 @@ optional. Notes, comments and labels never change what a loop does.
 - At the end, blocks still holding some but not all of their inputs are
   reported as *waiting*, which usually means a link is missing.
 
-## Exchanges and tools
+### Exchanges and tools
 
 An **exchange** is a list of messages, each with a role (`system`, `user`,
 `assistant`, `tool`). Assistant messages may carry tool calls; tool messages
@@ -152,7 +162,7 @@ A model block (`llm`) with tools works like this:
    the tool's own internet switch is on; then the block's `network` decides
    (`inherit`, the default, uses the agent's internet switch).
 
-### Tool switches
+#### Tool switches
 
 Two switches decide which tools a block offers: the **app-wide** one (tools
 on in Security and Privacy, and the tool on in Settings → Tools) and the
@@ -191,7 +201,7 @@ text ─▶ Ask the model ──────────────────
                     └─ Answer ─▶ Reply
 ```
 
-## Failed outputs
+### Failed outputs
 
 Blocks that can fail have an output called `error` (**Failed** in the
 editor): `llm`, `run_tool`, `ask_user`, `read_file`, `write_file` and
@@ -209,7 +219,7 @@ failure. Give it to a model to explain what went wrong, and use **Drop last
 messages** (`drop_last`) to take the failure back out before trying again
 (the Chummy assistant's *Report what went wrong* does both).
 
-## Chat output
+### Chat output
 
 Each run is **one response** in the chat: everything **Add to chat output**
 blocks (`output`) send, in order, with any question the run asked and your
@@ -219,7 +229,7 @@ chat output** (`final`) adds its input and ends the run as completed: blocks
 still waiting don't run. Use it for the final answer and *Add to chat
 output* for anything said along the way.
 
-## Memory
+### Memory
 
 A **Save to memory** block (`store`) keeps its input under a name for the
 rest of the run (function calls included) and passes it on. Any prompt,
@@ -229,7 +239,7 @@ empty text. **Read memory** (`recall`) sends the saved text out when its
 input fires. Names are letters, digits and `_`. Text in memory is the model's
 own working notes, so it is never trusted for anything but text.
 
-### Plan outline
+#### Plan outline
 
 A **Plan outline** block (`outline`) keeps a whole plan as a tree of tasks
 for the rest of the run, by memory name (`key`, default `plan`), and sends it
@@ -254,7 +264,7 @@ text twice, the first unfinished one in working order (breadth-first) is
 used. A task that isn't in the outline is added at the top level. It's text
 handling only: nothing runs.
 
-## Run logs
+### Run logs
 
 Every run writes a log (see the Logs window): each block step with the
 values on its inputs and outputs, each model call (the conversation sent,
@@ -263,7 +273,7 @@ notices and replies. Values longer than 6,000 characters are cut in the
 middle (the log says how much was left out). Steps inside a function are
 named by path and come between the function's start and end.
 
-## Daily token limits
+### Daily token limits
 
 Each model connection has a daily token limit (set in Settings → Models).
 Before each call a model block checks it. When the day's tokens are used up,
@@ -271,7 +281,7 @@ Before each call a model block checks it. When the day's tokens are used up,
 mechanism as *Ask me*; refusing stops the run), `wait` (wait until midnight,
 then carry on) or `stop` (stop the run).
 
-## Context length and turn figures
+### Context length and turn figures
 
 Each model connection has a context length: the one the server reports
 (found when the connection is saved or tested; OpenAI's own API doesn't
@@ -291,9 +301,9 @@ the run took (start to finish, to a tenth of a second), shown first; while
 a run works, a timer shows next to the step it's on. Both work for any loop.
 
 How tools themselves are written, installed and sandboxed is described in
-[tool-format.md](tool-format.md).
+[Tools](#tools).
 
-## Block types
+### Block types
 
 Ports are written `name: kind`.
 
@@ -340,7 +350,7 @@ a pattern with `(?i)` to ignore case.
 File paths in workspace blocks are always relative to the agent's workspace.
 Absolute paths, `..`, and links that point outside the workspace are refused.
 
-## Asking the user
+### Asking the user
 
 Two things wait for the person using Chummy: an **Ask me** block, and a
 **Run tool** call that needs their OK. Both use the same mechanism: the
@@ -365,7 +375,7 @@ Every block is text handling, model calls, or work in the agent's folder.
 There is no script block: the only code a loop can run is a tool, and tools
 only ever run in the WebAssembly sandbox.
 
-## Functions
+### Functions
 
 A **function** is a group of blocks used as one block. Its blocks are linked
 to each other as usual; the ports left open become the function's ports.
@@ -407,7 +417,7 @@ inputs and outputs become the function's ports, and links from the rest of
 the loop are moved onto the new block. Run events name blocks inside a
 function by path: `<function block id>/<block id>`.
 
-## Agent loop configuration (`chummy.loopconfig`)
+### Agent loop configuration (`chummy.loopconfig`)
 
 An agent can change any block's parameters without changing the loop file.
 The changes are stored in the agent's settings, per loop, and applied when
@@ -432,12 +442,21 @@ skipped. Every change is checked against the block catalog and the whole
 loop is checked again before it's saved, so a configuration can't break a
 loop, add blocks, or turn on anything the app or the agent doesn't allow.
 
-## Size limits
+### Size limits
 
 A loop may have at most 5,000 blocks and 20,000 links (counting those inside
 functions) and 500 functions. Imported files are limited in size too.
 
-## Validation
+### Fingerprints and trusted loops
+
+A loop's **fingerprint** is the SHA-256 of the file Chummy would save for it
+(`LoopFile::to_json` with the current format version), so spacing and key
+order in a file don't change it, but any change to blocks, links, text,
+names, notes or positions does. Chummy runs and opens only loops whose
+fingerprint is trusted, and reviews any other before trusting it; see
+[Security and threat model → Loops from elsewhere](security.md#loops-from-elsewhere-review-and-trusted-loops-after-v012).
+
+### Validation
 
 Chummy checks a loop when it's opened, edited, imported or run.
 
@@ -451,7 +470,7 @@ or whose inputs or outputs name missing ports.
 input port with nothing connected, so its block never runs; a block that can't
 be reached from any starting block.
 
-## Example: draft and self-check
+### Example: draft and self-check
 
 A small loop you can build yourself (it used to ship as a template). It
 drafts a reply, asks the model to check it, and improves it until the check
@@ -465,9 +484,9 @@ Message ──────┘                  └─ Check ─ Branch.test
                                     └────────────────────────────┘
 ```
 
-## Example: Terminal assistant
+### Example: Terminal assistant
 
-[`terminal.chummy.json`](../crates/flow/templates/terminal.chummy.json)
+[`terminal.chummy.json`](../../crates/flow/templates/terminal.chummy.json)
 (written by `make_templates.py` from `terminal.py`) is the Chummy assistant
 below with other prompts and one difference in tools: its Work block's tools
 are a per-tool map that turns everything off except the shell tools,
@@ -480,9 +499,9 @@ and *Show what it says* also sends the first line of each `command` argument
 to a Pane output block (Read exchange's Calls output → Capture groups →
 Join → Combine `$ _INPUT1_`).
 
-## Example: Chummy assistant (the default)
+### Example: Chummy assistant (the default)
 
-[`assistant.chummy.json`](../crates/flow/templates/assistant.chummy.json)
+[`assistant.chummy.json`](../../crates/flow/templates/assistant.chummy.json)
 (written by `make_templates.py` from `assistant.py`) is the loop Chummy
 recommends: no separate judges or planners, just one model working with
 tools until it's done, the way a coding agent's core loop does (it's
@@ -556,3 +575,352 @@ a function with comments, labels and notes, so it reads well in the editor.
 The final answer goes to *Final chat output*, which ends the run. Limits
 are 10,000 steps, 400 model calls (most turns make a short *Decide what's
 next* call before *Work*) and 150 tool calls per run.
+
+
+## Tools
+
+A tool is **one Python file**. Chummy runs it in a WebAssembly sandbox: the
+official CPython build for WASI, under Wasmtime. There is no way to run a
+tool outside the sandbox.
+
+Chummy ships with a set of built-in tools, installed when you set up tools in
+Settings → Tools. After an update, Chummy installs new built-ins and
+reinstalls changed ones when it starts (switches are kept; new tools start
+off). Every tool is off until you switch it on, and the Tools
+permission must be on too. Installing tools from files isn't offered in the
+app yet; the installer below is what it will use.
+
+### The file
+
+```python
+# /// script
+# requires-python = ">=3.14"
+# dependencies = ["beautifulsoup4==4.13.4"]
+#
+# [tool.chummy]
+# name = "fetch_page"
+# title = "Fetch web page"
+# version = "1.0.0"
+# network = true
+# timeout = 60
+# ///
+"""Fetches a web page and returns its readable text."""
+
+from bs4 import BeautifulSoup
+
+import chummy
+
+
+@chummy.tool
+def fetch_page(url: str, max_chars: int = 20000) -> str:
+    """Get the readable text of a web page.
+
+    url: the full address, starting with https://
+    max_chars: stop after this many characters
+    """
+    r = chummy.http.get(url).raise_for_status()
+    ...
+```
+
+#### Header
+
+The header is a standard [PEP 723](https://peps.python.org/pep-0723/) inline
+metadata block. Chummy reads it **without running the file**, so everything
+you agree to is known before anything is installed.
+
+| Field | Meaning |
+|-------|---------|
+| `requires-python` | Standard. Must allow the sandbox's Python (3.14). |
+| `dependencies` | Standard. Plain PyPI requirements only: no URLs, paths or `pkg @ …` references. |
+| `[tool.chummy] name` | The name the model calls: starts with `a`–`z`, then `a`–`z`, `0`–`9`, `_`; 48 characters at most. |
+| `title` | Display name (defaults to the name). |
+| `version` | Shown in Settings. |
+| `network` | `true` if the tool needs the internet. It still can't go online until the user allows it. |
+| `timeout` | Seconds a call may run (default 30, at most 300). |
+| `needs` | What the tool needs from the sandbox beyond Python. `["programs"]` means it starts other programs (`subprocess`), so it only runs in the Container or OpenShell sandbox; in Native it's shown greyed out and never offered. Leave it out otherwise. See [Security and threat model → Sandboxes](security.md#sandboxes-where-tools-run). |
+| `risky` | `true` for a tool that can do a lot of damage inside the workspace in one call (like `run_command`). Settings shows it as **Potentially unsafe**, switching it on asks for confirmation, and it then asks before each use until you turn that off. It is still sandboxed like every other tool. |
+
+Unknown keys in `[tool.chummy]` are errors. Other tools' tables are ignored.
+The names of built-in tools are reserved.
+
+#### The function
+
+Exactly one function is marked `@chummy.tool`. The model sees:
+
+- **description**: the first paragraph of its docstring (keep it to one
+  sentence for small models);
+- **parameters**: from the signature. Types `str`, `int`, `float`, `bool`,
+  `list[...]` and `Literal[...]` are supported; parameters with defaults are
+  optional; `name: help` lines in the docstring become each parameter's help.
+
+The function returns text (or anything JSON can hold). Raise
+`chummy.ToolError("…")` with a short message when something's wrong ("File
+not found: notes.md"); the model sees it as the result and can correct
+itself. Other exceptions are reported as `TypeName: message`, without the
+traceback. What the tool prints goes to its log (the first 64 KB are kept),
+not to the model. Tool functions must be ordinary functions, not `async`,
+and must return rather than call `sys.exit()`.
+
+The model's arguments are checked against the parameters before the call:
+numbers and true/false written as text are converted, `null` for an
+optional parameter means its default, and anything else that doesn't fit is
+explained to the model so it can try again.
+
+#### The `chummy` module
+
+| Name | What it does |
+|------|--------------|
+| `@chummy.tool` | Marks the function the model calls. |
+| `chummy.ToolError` | An error message for the model. |
+| `chummy.workspace_path(p)` | Turns a path the model gave into one inside the workspace; refuses absolute paths and `..`. |
+| `chummy.WORKSPACE` | Where the workspace is (`/workspace`, or the copy's folder in OpenShell); also the current folder. |
+| `chummy.http.get(url, headers=None)`, `chummy.http.post(url, data=None, json=None, headers=None)` | Web requests made by the app on the tool's behalf. Return a `Response` with `status`, `url`, `headers`, `text`, `ok`, `json()`, `raise_for_status()`. |
+
+### The sandbox
+
+Tool calls run in the sandbox chosen in Security and Privacy: Native (below,
+the default), Container or OpenShell. Each one gives the tool the same view
+(the workspace, the tool, Chummy's runner, no network of its own); see
+[Security and threat model → Sandboxes](security.md#sandboxes-where-tools-run). Inside a sandbox that copies the workspace
+(OpenShell), `chummy.WORKSPACE` says where the copy is, so use it rather than
+writing `/workspace` yourself.
+
+In the **Native** sandbox each call gets a fresh WebAssembly instance that can
+see exactly:
+
+| Path | What | Access |
+|------|------|--------|
+| `/workspace` | the agent's workspace folder | read/write |
+| `/tool` | the tool file and its packages | read-only |
+| `/lib` | Python's standard library | read-only |
+| `/chummy` | Chummy's runner and helper module | read-only |
+
+Nothing else on the computer exists for it. It gets no environment variables
+from the computer (only `TZ`, the user's time zone). WASI preview 1 has no
+sockets, so a tool has no network of its own: `chummy.http` sends the request
+to the app, which makes it only if **all** of these hold:
+
+1. the tool's header says `network = true`;
+2. Internet access is on in Security and Privacy;
+3. the tool's own internet switch is on in Settings → Tools (turning it on
+   asks for confirmation);
+4. the address is `http`/`https` and doesn't point to this computer or the
+   local network (loopback, private, link-local, carrier-grade NAT and
+   similar ranges are refused, after resolving the name, and again at every
+   redirect). The connection then goes to the addresses that were checked,
+   so a second DNS answer can't point it somewhere else.
+
+Responses are cut at 2 MB. Each call has a time limit (the header's
+`timeout`) and a 512 MB memory limit.
+
+### Installing
+
+Installing a tool (built-in tools are installed this way):
+
+1. Read and check the header (no code runs).
+2. Check `requires-python` against the sandbox's Python.
+3. Resolve the dependencies to a lock: a standard
+   [PEP 751](https://peps.python.org/pep-0751/) `pylock.toml`. Built-in tools
+   ship with theirs; for others, Chummy asks `uv` to resolve them for a
+   WebAssembly platform, so only wheels without compiled code qualify.
+4. Download each wheel, check its SHA-256 against the lock, and unpack it.
+   Only pure-Python wheels (`…-none-any.whl`) are accepted, and files with
+   compiled code are refused even in a mislabelled wheel. Nothing from a
+   package runs while installing. A lock with environment markers, or for
+   another Python version, is refused: locks for the sandbox are resolved
+   for exactly one platform.
+5. Load the tool once **inside the sandbox** to read its description and
+   parameters.
+6. Write `manifest.json`. The new version replaces the old one only when
+   everything succeeded.
+
+Installed tools live in the Chummy folder under `tools/installed/<name>/`
+(`tool.py`, `pylock.toml`, `site-packages/`, `manifest.json`). Before every
+call Chummy checks `tool.py` still matches the checksum recorded when it was
+installed, and that it was installed for the current Python (after a Python
+update, tools are reinstalled). Installs run one at a time.
+
+### Built-in tools
+
+| Tool | What it does | Internet |
+|------|--------------|----------|
+| `read_file` | Reads a text file, numbered lines, in chunks: `line_number` (where to start, default 1) and `max_lines` (default 1000, at most 5000). Long lines are cut at 2,000 characters and a call returns at most 40,000; the result says how to read on. | no |
+| `write_file` | Creates or replaces a whole file (or appends with `append`). Says how many lines it wrote and what it replaced. | no |
+| `edit_file` | Changes part of a file: replaces `old_text`, copied exactly from the file, with `new_text`, like Claude Code's Edit tool. `old_text` must match once (or set `replace_all`); otherwise the error lists where it matched or the closest line. Forgives `read_file`'s line-number prefixes and trailing spaces, keeps Windows line endings, and shows the changed lines afterwards. | no |
+| `list_files` | Lists a workspace folder. | no |
+| `search_files` | Searches files' contents, like grep: plain text or a `regex`, `file_glob` (e.g. `*.py`), `ignore_case`, `context_lines`, `max_results` (default 200; at most 30,000 characters). Answers `file:line: text`. Skips `.git`, `node_modules`, build folders, hidden files and files over 2 MB. | no |
+| `find_files` | Finds files by name with a glob (`*.md`, `src/**/*.ts`), newest first, up to 1,000. | no |
+| `run_command` | **Potentially unsafe.** Runs a shell-style command line in the workspace (see below). | no |
+| `run_shell` | **Potentially unsafe.** Runs a real `sh -c` command in the workspace, with whatever programs the sandbox has. `needs = ["programs"]`: Container or OpenShell only. Output is cut to 30,000 characters and ends with the exit code; 110-second limit; no host environment. | no |
+| `calculator` | Works out arithmetic exactly (no `eval`). | no |
+| `current_time` | Today's date and the time, in any time zone (uses `tzdata`). | no |
+| `fetch_page` | Gets the readable text of a web page (uses `beautifulsoup4`). | yes |
+
+#### `run_command`
+
+Models are used to working in a shell, so Chummy has a command tool. It can't
+be a real bash: Chummy never runs anything outside the WebAssembly sandbox, and
+there's no shell inside it. Instead `run_command` is a small shell written in
+Python that runs in the same sandbox as every other tool, in the agent's
+workspace, with no network:
+
+- **Syntax:** quotes (with `\` escapes), globs (`*.py`, `**/*.md`), braces
+  (`{a,b}`, `{1..5}`), pipes `|`, `&&`, `||`, `;` or new lines between
+  commands, `\` at the end of a line, `#` comments, redirects `<`, `>`, `>>`,
+  `2>`, `2>>`, `2>&1`, `2>/dev/null`, `&>`, `>&2`, heredocs (`<<EOF`,
+  `<<'EOF'`, `<<-EOF`), here-strings (`<<<`), `$?`, `set -e`,
+  `set -o pipefail`, `exit N`. Not supported, with an error that says what to
+  use instead: variables, `$(…)`, backticks, `for`/`while`/`if`, functions,
+  `( )` subshells, `<(…)` and background jobs (`&`).
+- **Commands:** `ls`, `cat`, `head`, `tail`, `wc`, `grep`/`egrep`/`fgrep`
+  (with `-A/-B/-C`, `-o`, `-q`, `-m`, `-r --include`…), `find` (tests, `!`,
+  `-o`, `-exec … {} \;` / `{} +`, `-delete`), `sed` (s with flags and
+  `\1`/`&`/`\U`, d, p, q, a/i/c, y, =, n/N/D/P, hold space, labels and
+  branches, `{ }`, ranges, `-n`, `-E`, `-i`), `awk` (a POSIX awk interpreter:
+  fields, patterns and ranges, BEGIN/END, arrays, control flow, user
+  functions, printf, the string and math functions; no `getline`,
+  `system()` or pipes), `sort` (`-k`, `-t`, `-n`, `-h`, `-V`…), `uniq`,
+  `cut`, `tr` (classes like `[:upper:]`), `paste`, `column`, `nl`, `tac`,
+  `rev`, `diff`, `echo`, `printf`, `xargs` (runs this shell's commands),
+  `tee`, `seq`, `tree`, `du`, `mkdir`, `rmdir`, `rm`, `cp`, `mv`, `touch`,
+  `cd`, `pwd`, `basename`, `dirname`, `realpath`, `test`/`[`, `which`,
+  `type`, `command -v`, `md5sum`/`sha1sum`/`sha256sum`/`sha512sum`,
+  `base64`, `date`, `sleep`, `true`, `false`, `chmod` (does nothing),
+  `bash -c`/`sh -c`/`bash script.sh`/`./script.sh`, and `python`/`python3`
+  (a script, `-c`, `-m` or stdin), which runs in the sandbox's own Python.
+  `help` lists them and `help NAME` (or `NAME --help`) shows one's options.
+  An unknown command gets exit code 127 and a pointer to `help`; `curl`,
+  `wget`, `npm`, `jq`, `vim` and the like say what to use instead. `pip`
+  can't install anything, and `ln` is refused (a link could point outside).
+- **Paths** stay inside the workspace; anything else is refused. `rm -r` on
+  the workspace itself is refused.
+- **Result:** the output (stdout and stderr), cut to 30,000 characters
+  (beginning and end kept), then `[exit code N]`.
+
+It is marked `risky`: inside the workspace, one command can delete or change
+many files, so switching it on asks first and every call asks you by default.
+
+
+## Scheduled jobs
+
+The job format: `chummy.job`, version 1.
+
+A job runs one agent's loop, started with a message, on a schedule or when
+files change in the agent's folder. Jobs live in the Chummy folder as
+`jobs/<id>.json`, and can be exported and imported. The same file works in
+the Chummy app and in chummyd (see the [roadmap](roadmap.md#chummyd-the-background-job-service)).
+
+A job never grants anything. It names an agent, and runs with exactly that
+agent's folder, model and permissions; it can't do anything the agent can't.
+Imported jobs always arrive switched off.
+
+### File
+
+```json
+{
+  "format": "chummy.job",
+  "version": 1,
+  "id": "morning-digest",
+  "name": "Morning digest",
+  "description": "",
+  "enabled": true,
+  "agent": "agent-93285e48",
+  "loop": null,
+  "message": "Summarize what changed in notes/ since yesterday. Today is _NOW_.",
+  "file": null,
+  "triggers": [
+    { "kind": "daily", "time": "08:30", "days": ["mon", "tue", "wed", "thu", "fri"] },
+    { "kind": "folder", "path": "inbox" }
+  ],
+  "missed": "skip",
+  "time_limit_minutes": 30,
+  "save_reply_to": "reports/_DATE_.md",
+  "notify": "problems"
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `format`, `version` | Always `"chummy.job"` and `1`. Newer versions are refused; unknown fields are refused. |
+| `id` | Lowercase letters, digits, `-` and `_`, at most 64; it's the file name. `state` and `history` are reserved. |
+| `name` | Shown to people; at most 100 characters. |
+| `description` | Optional notes. |
+| `enabled` | Off: the job only runs when started by hand. |
+| `agent` | The id of the agent that runs it. |
+| `loop` | A loop id to use instead of the agent's own (optional). |
+| `message` | What the loop starts with, like a chat message. See *Placeholders*. At most 50,000 characters. |
+| `file` | A file in the agent's folder to include (optional; up to 256 KB of text). |
+| `triggers` | Up to 10; see below. None: runs only by hand. |
+| `missed` | `"skip"` (default) or `"run_once"`: what to do about scheduled times that passed while Chummy wasn't running or the computer slept. Several missed times still run once. |
+| `time_limit_minutes` | Stop a run after this long; 0 means no limit (at most 10,080). |
+| `save_reply_to` | Also write the reply to this file in the agent's folder (optional). `_DATE_` and `_TIME_` may be used in the name. |
+| `notify` | `"problems"` (default), `"always"` or `"never"`: when to show a notification after a run. Notifications never include the reply. |
+
+Paths are relative to the agent's folder. Absolute paths, `~`, drive letters
+and `..` are refused when the job is saved, and the folder jail checks again
+whenever a path is used.
+
+### Triggers
+
+| Trigger | Fires |
+|---------|-------|
+| `{ "kind": "daily", "time": "08:30", "days": ["mon", …] }` | At that local time (24-hour) on those days; no days means every day. |
+| `{ "kind": "every", "minutes": 60 }` | Repeatedly, that far apart (5 minutes to 4 weeks), counted from when the job was switched on or its schedule last changed. |
+| `{ "kind": "once", "at": "2026-12-01T09:00" }` | Once, at that local date and time. |
+| `{ "kind": "folder", "path": "inbox" }` | When a file directly in that folder of the agent's (`.` for the folder itself) is added or changed. Each file starts its own run. |
+
+Times use the computer's time zone (for chummyd, the one in its config). A
+time that doesn't exist on the day the clocks go forward runs just after the
+jump; a time that happens twice when they go back runs the first time.
+
+Folder triggers poll the folder through the agent's jail every 15 seconds. A
+file starts a run once it has stopped changing between two polls, so
+half-written files are skipped. Hidden files and temporary names (`.tmp`,
+`.part`, `.crdownload`, `~$…`, `…~`) are ignored, as are files the job wrote
+itself during a run. Each job starts at most 30 file runs an hour.
+
+### Placeholders
+
+| In `message` | Becomes |
+|--------------|---------|
+| `_NOW_` | The date and time, e.g. `Sunday 2026-11-22 13:28` |
+| `_DATE_`, `_TIME_` | `2026-11-22`, `13:28` |
+| `_FILE_` | The run's file: the one that triggered it (folder triggers), or the job's `file` |
+| `_FILE_TEXT_` | That file's text |
+
+Placeholders are filled in one pass, so text that came from a file is never
+searched for placeholders itself. If there's file text and the message uses
+neither `_FILE_` nor `_FILE_TEXT_`, the text is added after the message. A
+triggering file that isn't readable text is passed by path only; a job's own
+`file` that can't be read fails the run.
+
+### How jobs run
+
+- A job runs at most once at a time. A scheduled time that comes while it's
+  still running, or waiting to run, is skipped and noted in its history.
+- An agent does one thing at a time. A run waits while the agent is busy (a
+  chat, a test run, or another job), and a chat waits while a job uses the
+  agent.
+- At most *N* runs go at once (Settings → General, 1 by default).
+- A scheduled time noticed more than 10 minutes late counts as missed.
+- **Pause scheduled jobs** stops scheduled and folder runs; times that pass
+  while paused are skipped, not caught up. Runs started by hand still go.
+- A job that asks the user something (an *Ask me* block, or a tool call that
+  needs an OK) waits, shows the question in the agent's chat and the
+  Scheduler, and sends a notification.
+
+### State and history
+
+Next to the job files:
+
+```text
+jobs/
+  <id>.json            job definitions
+  state.json           per job: checked_until, anchor, last_run; and paused
+  history/<id>.json    the job's last 100 runs, newest last
+```
+
+A history record has `run_id`, `cause` (`schedule`, `catch_up`, `manual` or
+`file` with its path), `status` (`completed`, `failed`, `stopped`, `limit`,
+`missed` or `skipped`), `started_at`, `finished_at`, the `reply` (cut to 8,000
+characters), a `note`, and how many model and tool calls the run made.
