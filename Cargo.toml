@@ -1,6 +1,25 @@
 [workspace]
 resolver = "3"
 members = ["src-tauri", "crates/*"]
+# chummyd is built on request (`cargo build -p chummyd`); CI builds and tests
+# the whole workspace, chummyd included.
+default-members = [
+    "src-tauri",
+    "crates/agent",
+    "crates/bundle",
+    "crates/channel",
+    "crates/flow",
+    "crates/http",
+    "crates/llm",
+    "crates/local",
+    "crates/log",
+    "crates/runner",
+    "crates/sandbox",
+    "crates/scheduler",
+    "crates/session",
+    "crates/store",
+    "crates/tools",
+]
 
 [workspace.package]
 version = "0.1.3"
@@ -28,6 +47,10 @@ chummy-local = { path = "crates/local" }
 chummy-runner = { path = "crates/runner" }
 chummy-log = { path = "crates/log" }
 chummy-http = { path = "crates/http" }
+chummy-agent = { path = "crates/agent" }
+chummy-session = { path = "crates/session" }
+chummy-bundle = { path = "crates/bundle" }
+chummy-channel = { path = "crates/channel" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -45,6 +68,11 @@ strip = true
 
 # Compiling the WebAssembly Python is slow with an unoptimized compiler, so
 # optimize the compiler even in debug builds.
+# Bundles' Argon2id takes seconds without optimizing.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
 [profile.dev.package.cranelift-codegen]
 opt-level = 3
 [profile.dev.package.regalloc2]

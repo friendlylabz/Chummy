@@ -15,7 +15,7 @@ export type { Generation, ModelOverrides } from "./generation";
 // ---------------------------------------------------------------- types
 
 export type Theme = "system" | "dark" | "light";
-export type AppWindow = "editor" | "settings" | "automation" | "logs" | "review";
+export type AppWindow = "editor" | "settings" | "automation" | "chummyd" | "logs" | "review";
 export type ProviderKind =
   | "open_ai_compatible"
   | "open_ai"
@@ -933,6 +933,48 @@ export interface PickedWorkspace {
   path: string;
 }
 
+// ---- chummyd (mirror commands/chummyd.rs and chummy-bundle)
+
+export interface ChummydAgentSource {
+  id: string;
+  name: string;
+  loop_name: string;
+  model: string | null;
+  /** Its model is the built-in engine, which chummyd doesn't have. */
+  builtin_engine: boolean;
+  tools: string[];
+  network: boolean;
+}
+
+export interface ChummydSources {
+  agents: ChummydAgentSource[];
+  jobs: { id: string; name: string; agent: string }[];
+  time_zone: string;
+}
+
+export interface ChummydDraft {
+  name: string;
+  time_zone: string;
+  max_runs: number;
+  agents: string[];
+  approvals: string[];
+  jobs: string[];
+  terminal: boolean;
+  message_text: boolean;
+  /** An opened bundle this one replaces. */
+  base?: string | null;
+}
+
+export interface ChummydReport {
+  errors: string[];
+  warnings: string[];
+}
+
+export interface ChummydOpened {
+  draft: ChummydDraft;
+  missing: string[];
+}
+
 // ---------------------------------------------------------------- browser fallback
 
 const inTauri = isTauri();
@@ -1091,6 +1133,19 @@ export const commands = {
     call<LogKeyStatus>("log_key_status", undefined, () => ({ fingerprint: null, error: null })),
   exportLogKey: (passphrase: string) => call<boolean>("export_log_key", { passphrase }, () => false),
   importLogKey: (passphrase: string) => call<string | null>("import_log_key", { passphrase }, () => null),
+  chummydSources: () =>
+    call<ChummydSources>("chummyd_sources", undefined, () => ({ agents: [], jobs: [], time_zone: "UTC" })),
+  chummydCheck: (draft: ChummydDraft) =>
+    call<ChummydReport>("chummyd_check", { draft }, () => ({ errors: [], warnings: [] })),
+  chummydPasswordProblem: (password: string) =>
+    call<string | null>("chummyd_password_problem", { password }, () => null),
+  chummydGeneratePassword: () => call<string>("chummyd_generate_password", undefined, () => "abcde-fghij-kmnpq-rstuv-wxyz2"),
+  /** Picks a bundle and opens it with `password`; `null` if no file was picked. */
+  chummydOpenBundle: (password: string) =>
+    call<ChummydOpened | null>("chummyd_open_bundle", { password }, () => null),
+  /** Exports the bundle (Rust warns and asks where); its path, or `null` if stopped. */
+  chummydExport: (draft: ChummydDraft, password: string) =>
+    call<string | null>("chummyd_export", { draft, password }, () => null),
   /** Opens a link from a reply, after Rust asks. */
   openLink: (url: string) => call<void>("open_link", { url }),
   listRuns: () => call<RunInfo[]>("list_runs", undefined, () => []),

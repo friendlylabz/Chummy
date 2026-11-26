@@ -16,7 +16,8 @@ pub struct LoopSummary {
     pub modified: u64,
     /// The loop's fingerprint (empty if it can't be opened).
     pub fingerprint: String,
-    /// On the list of trusted loops (filled in by [`crate::state::AppState::loops`]).
+    /// On the list of trusted loops (the app fills this in; the library
+    /// itself doesn't know).
     pub trusted: bool,
 }
 

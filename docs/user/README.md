@@ -6,6 +6,8 @@
    editor works, and how to build loops that small models get right.
 3. [Settings](settings.md): every settings page, what it changes, and the
    safe defaults.
+4. [chummyd](chummyd.md): agents that run on their own, set up in the app and
+   run anywhere.
 
 Chummy assumes the model behind it may be small and easily confused. So
 every agent is locked to one folder you choose, tools and internet access

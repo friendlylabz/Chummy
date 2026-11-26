@@ -17,6 +17,7 @@
   const items: Item[] = [
     { label: "Loop editor", icon: "flow", run: () => commands.openWindow("editor") },
     { label: "Automation", icon: "clock", run: () => commands.openWindow("automation") },
+    { label: "Configure chummyd", icon: "cloud", run: () => commands.openWindow("chummyd") },
     { label: "Logs", icon: "history", run: () => commands.openWindow("logs") },
   ];
 

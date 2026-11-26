@@ -1,5 +1,5 @@
 //! Secondary windows. The main window is declared in `tauri.conf.json`; the
-//! editor, settings, automation, logs and review windows are created on demand. Each is a
+//! editor, settings, automation, chummyd, logs and review windows are created on demand. Each is a
 //! singleton: opening one that already exists focuses it.
 
 use serde::Deserialize;
@@ -11,6 +11,8 @@ pub enum AppWindow {
     Editor,
     Settings,
     Automation,
+    /// Configure chummyd: its configuration and the bundle export.
+    Chummyd,
     Logs,
     /// Reviewing a loop before it's trusted.
     Review,
@@ -23,6 +25,7 @@ impl AppWindow {
             AppWindow::Editor => "editor",
             AppWindow::Settings => "settings",
             AppWindow::Automation => "automation",
+            AppWindow::Chummyd => "chummyd",
             AppWindow::Logs => "logs",
             AppWindow::Review => "review",
         }
@@ -33,6 +36,7 @@ impl AppWindow {
             AppWindow::Editor => "editor.html",
             AppWindow::Settings => "settings.html",
             AppWindow::Automation => "automation.html",
+            AppWindow::Chummyd => "chummyd.html",
             AppWindow::Logs => "logs.html",
             AppWindow::Review => "review.html",
         }
@@ -43,6 +47,7 @@ impl AppWindow {
             AppWindow::Editor => "Chummy — Loop Editor",
             AppWindow::Settings => "Chummy — Settings",
             AppWindow::Automation => "Chummy — Automation",
+            AppWindow::Chummyd => "Chummy — Configure chummyd",
             AppWindow::Logs => "Chummy — Logs",
             AppWindow::Review => "Chummy — Review a loop",
         }
@@ -54,6 +59,7 @@ impl AppWindow {
             AppWindow::Editor => (1280.0, 800.0, 800.0, 520.0),
             AppWindow::Settings => (860.0, 600.0, 640.0, 440.0),
             AppWindow::Automation => (1000.0, 680.0, 720.0, 480.0),
+            AppWindow::Chummyd => (860.0, 760.0, 640.0, 480.0),
             AppWindow::Logs => (1180.0, 760.0, 760.0, 480.0),
             AppWindow::Review => (1120.0, 800.0, 720.0, 520.0),
         }

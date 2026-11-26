@@ -8,6 +8,11 @@ rust-version.workspace = true
 authors.workspace = true
 publish = false
 
+[features]
+# Embeds the WebAssembly Python that tools run on (see build.rs), for the
+# programs that ship it: the app and chummyd.
+bundled-python = []
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true

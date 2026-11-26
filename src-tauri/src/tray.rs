@@ -12,10 +12,10 @@ use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, Wry};
 
-use crate::commands::{CmdResult, chat, jobs};
+use crate::commands::{CmdResult, jobs};
 use crate::events;
 use crate::settings::CloseAction;
-use crate::state::{AppState, lock};
+use crate::state::AppState;
 use crate::windows::{self, AppWindow};
 
 const TRAY_ID: &str = "chummy";
@@ -113,8 +113,8 @@ pub fn activity(app: &AppHandle, reason: &'static str) -> Activity {
     let state = app.state::<AppState>();
     let (_, scheduled, paused) = jobs::summary(&state);
     Activity {
-        runs: lock(&state.runs).len(),
-        waiting: state.asks.pending().len(),
+        runs: state.session.run_count(),
+        waiting: state.session.asks.pending().len(),
         scheduled,
         paused,
         tray: state.tray_ready.load(Ordering::Relaxed),
@@ -200,7 +200,7 @@ pub fn quit(app: &AppHandle) {
     if let Some(m) = state.jobs.get() {
         m.stop_all();
     }
-    chat::stop_all_runs(&state);
+    state.session.stop_all();
     app.exit(0);
 }
 

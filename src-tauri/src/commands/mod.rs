@@ -7,6 +7,7 @@ pub mod agent_setup;
 pub mod agents;
 pub mod asks;
 pub mod chat;
+pub mod chummyd;
 pub mod general;
 pub mod jobs;
 pub mod local;

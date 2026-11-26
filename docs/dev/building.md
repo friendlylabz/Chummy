@@ -17,7 +17,13 @@ npm run tauri dev        # the app, with hot reload of the UI
 npm run dev              # the UI alone in a browser (IPC uses mocks)
 npm run tauri build      # installers: .msi/.exe, .dmg/.app, .deb/.rpm/.AppImage
 npm run icons            # app icons from assets/app-icon.png
+cargo build -p chummyd --release   # chummyd (not built by default)
 ```
+
+chummyd is in the workspace but not in `default-members`, so `cargo build`
+and the app's builds don't build it; `--workspace` (as CI uses) does. Its end
+to end tests (`crates/chummyd/tests/terminal.rs`) skip themselves when run as
+root or Administrator, which chummyd refuses.
 
 Checks (CI runs all of them, and so should you before committing):
 
@@ -71,7 +77,7 @@ answers. Add it in Settings → Models as "Other OpenAI-compatible server" at
 - **Built-in loop change:** edit the generator (`assistant.py` holds the
   shared agent loop and the Chummy assistant's prompts, `terminal.py` the
   Terminal assistant's), regenerate with `make_templates.py`, and add the
-  old version's fingerprint to `RETIRED` in `src-tauri/src/library.rs` so
+  old version's fingerprint to `RETIRED` in `crates/agent/src/library.rs` so
   unedited saved copies get upgraded. Every `templates/*.chummy.json` must be
   exactly what Chummy would save (the generator writes it that way; for the
   hand-written Blank and Simple chat, save them from Chummy or copy

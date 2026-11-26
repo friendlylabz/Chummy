@@ -1,6 +1,7 @@
 //! The WebAssembly Python that tools run on, built from python.org's signed
-//! source by `scripts/build-wasi-python.sh` and embedded at build time (see
-//! `build.rs`). Setting up tools unpacks it; nothing is downloaded.
+//! source by `scripts/build-wasi-python.sh` and embedded at build time with
+//! the `bundled-python` feature (see `build.rs`). Setting up tools unpacks
+//! it; nothing is downloaded. Without the feature (or the zip) there's none.
 
 use std::sync::OnceLock;
 
@@ -32,22 +33,22 @@ pub fn sha256() -> &'static str {
 }
 
 /// Whether the installed Python is the bundled one.
-pub fn is_installed(paths: &chummy_tools::ToolPaths) -> bool {
-    chummy_tools::python_status(paths).is_some_and(|i| i.sha256 == sha256())
+pub fn is_installed(paths: &crate::ToolPaths) -> bool {
+    crate::python_status(paths).is_some_and(|i| i.sha256 == sha256())
 }
 
 /// Unpacks the bundled Python unless it's already installed. Blocking.
-pub fn install(paths: &chummy_tools::ToolPaths) -> Result<(), String> {
+pub fn install(paths: &crate::ToolPaths) -> Result<(), String> {
     if is_installed(paths) {
         return Ok(());
     }
-    chummy_tools::install_python_from(paths, zip()?).map_err(|e| e.to_string())?;
+    crate::install_python_from(paths, zip()?).map_err(|e| e.to_string())?;
     Ok(())
 }
 
 /// Whether tools were set up before (so a new bundled Python can replace the
 /// old one without asking: it's part of the app, and nothing is downloaded).
-pub fn tools_were_set_up(paths: &chummy_tools::ToolPaths) -> bool {
+pub fn tools_were_set_up(paths: &crate::ToolPaths) -> bool {
     std::fs::read_dir(&paths.installed).is_ok_and(|mut d| d.next().is_some())
 }
 
@@ -62,7 +63,7 @@ mod tests {
             return;
         }
         let tmp = tempfile::tempdir().unwrap();
-        let paths = chummy_tools::ToolPaths::new(tmp.path());
+        let paths = crate::ToolPaths::new(tmp.path());
         assert!(!is_installed(&paths) && !tools_were_set_up(&paths));
         install(&paths).unwrap();
         assert!(is_installed(&paths));
@@ -76,7 +77,7 @@ mod tests {
 
         // A different Python (as after an update) is replaced.
         let ready = paths.python.join("ready.json");
-        let mut info: chummy_tools::PythonInfo =
+        let mut info: crate::PythonInfo =
             serde_json::from_slice(&std::fs::read(&ready).unwrap()).unwrap();
         info.sha256 = "0".repeat(64);
         std::fs::write(&ready, serde_json::to_vec(&info).unwrap()).unwrap();

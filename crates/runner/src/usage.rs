@@ -86,6 +86,22 @@ impl UsageLedger {
         }
     }
 
+    /// A ledger kept in memory, carrying on from `snapshot` (what
+    /// [`UsageLedger::snapshot`] gave). Something that doesn't read as one
+    /// starts empty.
+    pub fn from_snapshot(snapshot: serde_json::Value) -> Self {
+        Self {
+            doc: None,
+            inner: Mutex::new(serde_json::from_value(snapshot).unwrap_or_default()),
+        }
+    }
+
+    /// Everything recorded, to save elsewhere (chummyd's sealed state).
+    pub fn snapshot(&self) -> serde_json::Value {
+        let g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        serde_json::to_value(&*g).unwrap_or_default()
+    }
+
     fn with_today(&self, provider: &str, f: impl FnOnce(&mut DayUse)) {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let day = today();
@@ -164,6 +180,13 @@ mod tests {
         l.add("a", 50);
         assert_eq!(l.today("a").used, 110);
         assert_eq!(l.today("a").calls, 2);
+        // A snapshot carries everything over to a ledger in memory.
+        let copy = UsageLedger::from_snapshot(l.snapshot());
+        assert_eq!(copy.today("a"), l.today("a"));
+        assert_eq!(
+            UsageLedger::from_snapshot(serde_json::json!("junk")).today("a"),
+            DayUse::default()
+        );
         assert!(l.exhausted("a", Some(100)));
         assert!(!l.exhausted("a", None), "no limit");
         assert!(!l.exhausted("b", Some(100)), "per connection");

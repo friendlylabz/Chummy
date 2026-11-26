@@ -11,6 +11,7 @@ const pages = {
   editor: resolve(ui, "editor.html"),
   settings: resolve(ui, "settings.html"),
   automation: resolve(ui, "automation.html"),
+  chummyd: resolve(ui, "chummyd.html"),
   logs: resolve(ui, "logs.html"),
   review: resolve(ui, "review.html"),
 };

@@ -570,6 +570,7 @@ mod tests {
             resume,
             &cancel,
             Some(&host.pause),
+            None,
             |_| {},
         )
         .await

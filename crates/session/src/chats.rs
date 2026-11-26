@@ -1,6 +1,8 @@
 //! Chats: each agent has any number of them, saved as they happen.
 //!
-//! On disk, in the Chummy folder's `chats/`:
+//! The message types are shared; where chats are kept is the program's
+//! choice (see [`crate::ChatStore`]). [`FileChats`] keeps them as files, the
+//! way the app does. In the Chummy folder's `chats/`:
 //! - `<agent id>/index.json`: the chats (id, title, times, message count)
 //!   and which one is open;
 //! - `<agent id>/<chat id>.json`: one chat's messages.
@@ -12,6 +14,7 @@
 //! (which may finish at the same moment) never lose each other's updates to
 //! the index.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -125,7 +128,7 @@ fn new_id() -> String {
 }
 
 fn valid(id: &str) -> Result<(), String> {
-    if crate::library::valid_id(id) {
+    if chummy_agent::library::valid_id(id) {
         Ok(())
     } else {
         Err("Invalid id.".into())
@@ -444,6 +447,249 @@ pub fn delete_agent(root: &Path, agent: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Chats kept as files under one folder (see the top of this module).
+#[derive(Debug, Clone)]
+pub struct FileChats {
+    pub root: PathBuf,
+}
+
+impl FileChats {
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+}
+
+impl crate::ChatStore for FileChats {
+    fn index(&self, agent: &str) -> Result<ChatIndex, String> {
+        index(&self.root, agent)
+    }
+
+    fn load(&self, agent: &str, chat: &str) -> Result<Vec<ChatMessage>, String> {
+        load(&self.root, agent, chat)
+    }
+
+    fn append(&self, agent: &str, chat: &str, message: &ChatMessage) -> Result<ChatIndex, String> {
+        append(&self.root, agent, chat, message)
+    }
+
+    fn delete_message(
+        &self,
+        agent: &str,
+        chat: &str,
+        message: &str,
+    ) -> Result<(ChatIndex, ChatMessage, usize), String> {
+        delete_message(&self.root, agent, chat, message)
+    }
+
+    fn set_run_summary(
+        &self,
+        agent: &str,
+        chat: &str,
+        summary: &RunSummary,
+    ) -> Result<bool, String> {
+        set_run_summary(&self.root, agent, chat, summary)
+    }
+}
+
+/// Chats kept in memory, to be saved elsewhere as a whole (chummyd seals
+/// them in its state): [`MemoryChats::snapshot`] and
+/// [`MemoryChats::from_snapshot`]. Each chat keeps at most `max_messages`,
+/// and each agent at most `max_chats` (the least recently used go first).
+pub struct MemoryChats {
+    agents: Mutex<BTreeMap<String, AgentChats>>,
+    max_messages: usize,
+    max_chats: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct AgentChats {
+    index: ChatIndex,
+    chats: BTreeMap<String, Vec<ChatMessage>>,
+}
+
+impl MemoryChats {
+    pub fn new(max_messages: usize, max_chats: usize) -> Self {
+        Self {
+            agents: Mutex::new(BTreeMap::new()),
+            max_messages: max_messages.max(1),
+            max_chats: max_chats.max(1),
+        }
+    }
+
+    /// Chats from a snapshot; something that doesn't read as one starts
+    /// empty.
+    pub fn from_snapshot(
+        snapshot: serde_json::Value,
+        max_messages: usize,
+        max_chats: usize,
+    ) -> Self {
+        let c = Self::new(max_messages, max_chats);
+        if let Ok(a) = serde_json::from_value(snapshot) {
+            *c.lock() = a;
+        }
+        c
+    }
+
+    pub fn snapshot(&self) -> serde_json::Value {
+        serde_json::to_value(&*self.lock()).unwrap_or_default()
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, AgentChats>> {
+        self.agents.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Makes sure an agent has the chat `chat` (making it, with `title`, if
+    /// not). Returns whether it was made.
+    pub fn ensure(&self, agent: &str, chat: &str, title: &str) -> Result<bool, String> {
+        valid(agent)?;
+        valid(chat)?;
+        let mut all = self.lock();
+        let a = all.entry(agent.to_string()).or_default();
+        if a.index.chats.iter().any(|c| c.id == chat) {
+            return Ok(false);
+        }
+        let mut meta = blank(chat.to_string());
+        meta.title = title.to_string();
+        a.index.chats.push(meta);
+        a.chats.insert(chat.to_string(), vec![]);
+        a.index.active.get_or_insert_with(|| chat.to_string());
+        self.prune(a);
+        Ok(true)
+    }
+
+    /// Empties a chat (a fresh conversation in the same place).
+    pub fn clear(&self, agent: &str, chat: &str) -> Result<(), String> {
+        let mut all = self.lock();
+        let a = all.get_mut(agent).ok_or("That chat no longer exists.")?;
+        let meta = a
+            .index
+            .chats
+            .iter_mut()
+            .find(|c| c.id == chat)
+            .ok_or("That chat no longer exists.")?;
+        meta.messages = 0;
+        meta.title = NEW_CHAT.into();
+        meta.updated_at = now();
+        a.chats.insert(chat.to_string(), vec![]);
+        Ok(())
+    }
+
+    fn prune(&self, a: &mut AgentChats) {
+        while a.index.chats.len() > self.max_chats {
+            let Some(oldest) = a
+                .index
+                .chats
+                .iter()
+                .min_by_key(|c| c.updated_at)
+                .map(|c| c.id.clone())
+            else {
+                break;
+            };
+            a.index.chats.retain(|c| c.id != oldest);
+            a.chats.remove(&oldest);
+            if a.index.active.as_deref() == Some(oldest.as_str()) {
+                a.index.active = a.index.chats.first().map(|c| c.id.clone());
+            }
+        }
+    }
+
+    fn with_chat<R>(
+        &self,
+        agent: &str,
+        chat: &str,
+        f: impl FnOnce(&mut ChatMeta, &mut Vec<ChatMessage>) -> R,
+    ) -> Result<(R, ChatIndex), String> {
+        let mut all = self.lock();
+        let a = all.get_mut(agent).ok_or("That chat no longer exists.")?;
+        let meta = a
+            .index
+            .chats
+            .iter_mut()
+            .find(|c| c.id == chat)
+            .ok_or("That chat no longer exists.")?;
+        let msgs = a.chats.entry(chat.to_string()).or_default();
+        let r = f(meta, msgs);
+        Ok((r, a.index.clone()))
+    }
+}
+
+impl crate::ChatStore for MemoryChats {
+    fn index(&self, agent: &str) -> Result<ChatIndex, String> {
+        valid(agent)?;
+        Ok(self
+            .lock()
+            .get(agent)
+            .map(|a| a.index.clone())
+            .unwrap_or_default())
+    }
+
+    fn load(&self, agent: &str, chat: &str) -> Result<Vec<ChatMessage>, String> {
+        Ok(self.with_chat(agent, chat, |_, m| m.clone())?.0)
+    }
+
+    fn append(&self, agent: &str, chat: &str, message: &ChatMessage) -> Result<ChatIndex, String> {
+        let max = self.max_messages;
+        Ok(self
+            .with_chat(agent, chat, |meta, msgs| {
+                msgs.push(message.clone());
+                if msgs.len() > max {
+                    let extra = msgs.len() - max;
+                    msgs.drain(..extra);
+                }
+                if meta.title == NEW_CHAT && message.role == "user" {
+                    meta.title = title_from(&message.text);
+                }
+                meta.updated_at = now();
+                meta.messages = msgs.len() as u32;
+            })?
+            .1)
+    }
+
+    fn delete_message(
+        &self,
+        agent: &str,
+        chat: &str,
+        message: &str,
+    ) -> Result<(ChatIndex, ChatMessage, usize), String> {
+        let ((removed, pos), ix) = self
+            .with_chat(agent, chat, |meta, msgs| {
+                let pos = msgs.iter().position(|m| m.id == message)?;
+                let removed = msgs.remove(pos);
+                meta.messages = msgs.len() as u32;
+                Some((removed, pos))
+            })
+            .and_then(|(r, ix)| {
+                r.map(|r| (r, ix))
+                    .ok_or_else(|| "That message is already gone.".to_string())
+            })?;
+        Ok((ix, removed, pos))
+    }
+
+    fn set_run_summary(
+        &self,
+        agent: &str,
+        chat: &str,
+        summary: &RunSummary,
+    ) -> Result<bool, String> {
+        Ok(self
+            .with_chat(agent, chat, |_, msgs| {
+                let mut changed = false;
+                for m in msgs.iter_mut() {
+                    if let Some(r) = m.run.as_mut()
+                        && r.run_id == summary.run_id
+                        && r != summary
+                    {
+                        *r = summary.clone();
+                        changed = true;
+                    }
+                }
+                changed
+            })?
+            .0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -573,6 +819,53 @@ mod tests {
             assert_eq!(load(&root, "a1", &c).unwrap(), vec![a, b]);
             std::fs::remove_dir_all(root).unwrap();
         }
+    }
+
+    #[test]
+    fn chats_in_memory_carry_over_in_a_snapshot() {
+        use crate::ChatStore;
+        let c = MemoryChats::new(3, 2);
+        assert!(c.index("a1").unwrap().chats.is_empty());
+        assert!(
+            c.append("a1", "c-1", &msg("user", "x")).is_err(),
+            "no such chat"
+        );
+        assert!(c.ensure("a1", "c-1", NEW_CHAT).unwrap());
+        assert!(!c.ensure("a1", "c-1", NEW_CHAT).unwrap(), "only once");
+        assert!(c.ensure("../a", "c-1", NEW_CHAT).is_err());
+        for t in ["one", "two", "three", "four"] {
+            c.append("a1", "c-1", &msg("user", t)).unwrap();
+        }
+        let m = c.load("a1", "c-1").unwrap();
+        assert_eq!(m.len(), 3, "capped");
+        assert_eq!(c.index("a1").unwrap().chats[0].title, "one");
+        let (_, gone, pos) = c.delete_message("a1", "c-1", &m[0].id).unwrap();
+        assert_eq!((gone.text.as_str(), pos), ("two", 0));
+
+        let again = MemoryChats::from_snapshot(c.snapshot(), 3, 2);
+        assert_eq!(again.load("a1", "c-1").unwrap().len(), 2);
+        again.clear("a1", "c-1").unwrap();
+        assert!(again.load("a1", "c-1").unwrap().is_empty());
+        // The least recently used chat goes past the limit.
+        again.ensure("a1", "c-2", NEW_CHAT).unwrap();
+        again.append("a1", "c-2", &msg("user", "hi")).unwrap();
+        again.ensure("a1", "c-3", NEW_CHAT).unwrap();
+        let ids: Vec<String> = again
+            .index("a1")
+            .unwrap()
+            .chats
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&"c-3".to_string()));
+        assert!(
+            MemoryChats::from_snapshot(serde_json::json!(5), 3, 2)
+                .snapshot()
+                .as_object()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

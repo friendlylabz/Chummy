@@ -349,7 +349,7 @@ pub struct UsageView {
 #[tauri::command]
 pub fn usage_today(state: State<'_, AppState>) -> Vec<UsageView> {
     let s = state.settings();
-    let today = state.usage.all_today();
+    let today = state.session.usage.all_today();
     s.providers
         .iter()
         .map(|p| {

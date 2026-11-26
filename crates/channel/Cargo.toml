@@ -1,0 +1,16 @@
+[package]
+name = "chummy-channel"
+description = "What every chummyd channel shares: commands, and showing a run as a message."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+chummy-flow.workspace = true
+chummy-session.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,49 @@
+[package]
+name = "chummyd"
+description = "Runs Chummy agents unattended, as configured in the Chummy app: jobs, and conversations through channels."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "chummyd"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["signal"] }
+reqwest.workspace = true
+jiff = "1"
+base64 = "0.23"
+chacha20poly1305 = "0.11"
+getrandom = "0.4"
+zeroize = "1"
+rpassword = "7"
+chummy-agent.workspace = true
+chummy-bundle.workspace = true
+chummy-channel.workspace = true
+chummy-flow.workspace = true
+chummy-http.workspace = true
+chummy-llm.workspace = true
+chummy-log.workspace = true
+chummy-runner.workspace = true
+chummy-sandbox.workspace = true
+chummy-scheduler.workspace = true
+chummy-session.workspace = true
+chummy-tools = { workspace = true, features = ["bundled-python"] }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process"] }
+
+[target.'cfg(windows)'.dependencies]
+is_elevated = "0.1"
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

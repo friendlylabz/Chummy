@@ -32,7 +32,8 @@ until you say so.
 ## Documentation
 
 - [Using Chummy](docs/user/README.md): [getting started](docs/user/getting-started.md),
-  [loops and the loop editor](docs/user/loop-editor.md), [settings](docs/user/settings.md)
+  [loops and the loop editor](docs/user/loop-editor.md), [settings](docs/user/settings.md),
+  [chummyd](docs/user/chummyd.md)
 - [Developing Chummy](docs/dev/README.md): [modules](docs/dev/modules.md),
   [security and threat model](docs/dev/security.md), [file formats](docs/dev/file-formats.md),
   [roadmap](docs/dev/roadmap.md)

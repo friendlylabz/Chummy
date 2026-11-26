@@ -56,6 +56,9 @@ pub struct SystemLog {
     min: Mutex<Option<Level>>,
     /// Also print to stderr (for development).
     echo: bool,
+    /// Write day files in `dir` (off for a log that only goes to its
+    /// listener, as chummyd's does).
+    files: bool,
 }
 
 static GLOBAL: OnceLock<SystemLog> = OnceLock::new();
@@ -71,6 +74,21 @@ impl SystemLog {
             listener: Mutex::new(None),
             min: Mutex::new(Some(Level::Info)),
             echo: cfg!(debug_assertions),
+            files: true,
+        }
+    }
+
+    /// A log kept only in memory and given to its listener: nothing is
+    /// written to disk.
+    pub fn without_files() -> Self {
+        SystemLog {
+            dir: PathBuf::new(),
+            file: Mutex::new(None),
+            recent: Mutex::new(VecDeque::new()),
+            listener: Mutex::new(None),
+            min: Mutex::new(Some(Level::Info)),
+            echo: false,
+            files: false,
         }
     }
 
@@ -97,7 +115,9 @@ impl SystemLog {
             eprintln!("[{:?}] {}: {}", e.level, e.source, e.message);
         }
         let day = day_of(e.at);
-        if let Ok(line) = serde_json::to_string(&e) {
+        if self.files
+            && let Ok(line) = serde_json::to_string(&e)
+        {
             let mut f = self.file.lock().unwrap_or_else(|e| e.into_inner());
             if f.as_ref().is_none_or(|(d, _)| *d != day) {
                 *f = OpenOptions::new()
@@ -131,6 +151,9 @@ impl SystemLog {
 
     /// Days with a log, newest first.
     pub fn days(&self) -> Vec<String> {
+        if !self.files {
+            return vec![];
+        }
         let mut days: Vec<String> = std::fs::read_dir(&self.dir)
             .into_iter()
             .flatten()
@@ -182,6 +205,12 @@ impl SystemLog {
 /// Sets up the app-wide system log. Later calls are ignored.
 pub fn init(dir: impl Into<PathBuf>) -> &'static SystemLog {
     GLOBAL.get_or_init(|| SystemLog::new(dir))
+}
+
+/// Sets up a program-wide system log that writes no files (see
+/// [`SystemLog::without_files`]). Later calls are ignored.
+pub fn init_without_files() -> &'static SystemLog {
+    GLOBAL.get_or_init(SystemLog::without_files)
 }
 
 /// The app-wide system log, if [`init`] was called.

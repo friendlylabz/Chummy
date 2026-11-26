@@ -18,6 +18,13 @@ use std::sync::Arc;
 /// (If the OS verifier can't be set up, reqwest's own checks against the
 /// system's root certificates are used instead.)
 pub fn builder() -> reqwest::ClientBuilder {
+    // reqwest is built without a default TLS crypto provider: make sure the
+    // process has one, so a client made without the OS verifier (when it
+    // can't be set up) still works instead of panicking.
+    static PROVIDER: std::sync::Once = std::sync::Once::new();
+    PROVIDER.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
     let b = reqwest::Client::builder();
     match platform_tls() {
         Some(tls) => b.use_preconfigured_tls(tls),

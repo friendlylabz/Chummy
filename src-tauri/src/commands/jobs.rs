@@ -1,25 +1,22 @@
 //! Scheduled jobs: the app's side of `chummy-scheduler`.
 //!
-//! [`AppJobs`] is the app's [`JobRunner`]: it runs a job as its agent (same
-//! folder, model and permissions as chatting with it), shows the run like
-//! any other, and sends questions to the chat. The manager itself is shared
-//! with chummyd.
+//! [`AppJobs`] is the app's [`JobRunner`]: runs go through
+//! `chummy-session` (a job runs as its agent, with the same folder, model
+//! and permissions as chatting with it, and is shown like any other run);
+//! the app adds the tray, notifications and the Automation menu. The
+//! manager itself is shared with chummyd.
 
-use chummy_sandbox::Jail;
 use chummy_scheduler::{
-    Job, JobRunner, Origin, Overview, RecordStatus, RunKind, RunRecord, RunRequest, RunResult,
-    Snapshot,
+    Job, JobRunner, Overview, RecordStatus, RunRecord, RunRequest, RunResult, Snapshot,
 };
-use jiff::tz::TimeZone;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
-use super::chat::{self, RunFinished};
-use super::{CmdResult, err, now};
+use super::{CmdResult, err};
 use crate::dialogs;
 use crate::events;
-use crate::host::agent_host;
 use crate::notify;
-use crate::state::{AppState, RunInfo};
+use crate::platform::AppPlatform;
+use crate::state::AppState;
 
 /// Largest job file imported.
 const MAX_IMPORT_BYTES: u64 = 256 * 1024;
@@ -32,97 +29,15 @@ impl JobRunner for AppJobs {
     /// Jobs run alongside the agent's chats and other jobs, like a chat in
     /// the background; only a test run in the loop editor holds them back.
     fn agent_busy(&self, agent: &str) -> bool {
-        let state = self.app.state::<AppState>();
-        crate::state::lock(&state.runs)
-            .values()
-            .any(|r| r.agent_id.as_deref() == Some(agent) && r.source == "test")
+        !self.app.state::<AppState>().session.job_may_start(agent)
     }
 
     async fn run(&self, req: RunRequest) -> RunResult {
-        let app = &self.app;
-        let state = app.state::<AppState>();
-        let s = state.settings();
-        let job = &req.job;
-        let Some(agent) = s.agent(&job.agent).cloned() else {
-            return RunResult::failed(format!(
-                "The agent this job runs as no longer exists. Choose another for “{}”.",
-                job.name
-            ));
-        };
-        let (file, jail) = match chat::prepare(&state, &s, &agent, job.loop_id.as_deref()) {
-            Ok(x) => x,
-            Err(e) => return RunResult::failed(e),
-        };
-        let origin = Origin {
-            run_id: req.run_id.clone(),
-            kind: RunKind::Job,
-            agent_id: Some(agent.id.clone()),
-            chat_id: None,
-            job_id: Some(job.id.clone()),
-            title: job.name.clone(),
-        };
-        let host = agent_host(
-            app,
-            &s,
-            Some(&agent),
-            s.agent_model(&agent).cloned(),
-            Some(jail),
-            Some(origin),
-        );
-        let guard = chat::track(
-            app,
-            &state,
-            RunInfo {
-                run_id: req.run_id.clone(),
-                agent_id: Some(agent.id.clone()),
-                chat_id: None,
-                chat_title: None,
-                title: job.name.clone(),
-                source: "job",
-                job_id: Some(job.id.clone()),
-                started_at: now(),
-                cancel: req.cancel.clone(),
-                pause: None,
-                pausable: false,
-                resumed_ms: 0,
-                pane: Default::default(),
-                said: Default::default(),
-            },
-            chat::RunMeta {
-                agent_name: Some(agent.name.clone()),
-                loop_name: file.name.clone(),
-                model: s.agent_model(&agent).map(|m| m.name.clone()),
-                message: job.message.clone(),
-                resumed: false,
-            },
-        );
-        let tz = TimeZone::system();
-        let (result, outcome) =
-            chummy_runner::run_job(&req, &file, &host, &tz, chat::emitter(app, &guard)).await;
-        if let Some(outcome) = &outcome {
-            guard.finish(outcome);
-        }
-        if let Some(outcome) = outcome {
-            let _ = app.emit(
-                events::RUN_FINISHED,
-                RunFinished {
-                    run_id: req.run_id.clone(),
-                    agent_id: Some(agent.id.clone()),
-                    chat_id: None,
-                    outcome,
-                },
-            );
-        }
-        result
+        chummy_session::run_job(&AppPlatform::new(&self.app), &req).await
     }
 
     fn snapshot(&self, agent: &str, folder: &str) -> Result<Snapshot, String> {
-        let state = self.app.state::<AppState>();
-        let s = state.settings();
-        let agent = s.agent(agent).ok_or("the agent no longer exists")?;
-        // Opened (and checked) afresh every time, like any other access.
-        let jail = Jail::open(&agent.workspace.path, &state.protected).map_err(err)?;
-        chummy_runner::snapshot(&jail, folder)
+        chummy_session::snapshot(&AppPlatform::new(&self.app), agent, folder)
     }
 
     fn changed(&self, _job: Option<&str>) {

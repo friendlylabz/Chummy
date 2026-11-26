@@ -4,8 +4,7 @@
 //! - every field has a default (`#[serde(default)]`), so older files load;
 //! - renames or meaning changes bump [`VERSION`] and add a step to [`migrate`].
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::collections::BTreeMap;
 
 use chummy_llm::ProviderConfig;
 use serde::{Deserialize, Serialize};
@@ -21,76 +20,7 @@ pub enum Theme {
     Light,
 }
 
-/// The folder an agent is locked to.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Workspace {
-    /// Canonical path, validated when chosen and again whenever it is opened.
-    pub path: PathBuf,
-    /// Unix time the user confirmed it.
-    pub confirmed_at: u64,
-}
-
-/// An agent: a loop, a model, and a workspace folder. Agents may share a
-/// folder (or have one inside another's) after the user confirmed a warning.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Agent {
-    pub id: String,
-    pub name: String,
-    /// Loop id (file name in `loops/`).
-    pub loop_id: String,
-    /// Model connection id; `None` uses the default model.
-    #[serde(default)]
-    pub model: Option<String>,
-    pub workspace: Workspace,
-    pub created_at: u64,
-    /// Tools this agent may use (each also needs Tools on in Permissions and
-    /// the tool switched on in Settings → Tools).
-    #[serde(default)]
-    pub tools: BTreeSet<String>,
-    /// This agent's tools may use the internet (also needs Internet access
-    /// in Permissions and the tool's own internet switch).
-    #[serde(default)]
-    pub network: bool,
-    /// Changed block settings, per loop id (Agent Loop Configuration).
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub loop_config: BTreeMap<String, chummy_flow::Overrides>,
-    /// This agent's changes to its model's settings (temperature, longest
-    /// answer, reasoning effort, sampling…); anything not set inherits the
-    /// model connection's. Applies to every model call the agent makes; a
-    /// model block's own setting still wins.
-    #[serde(default, skip_serializing_if = "chummy_llm::ModelOverrides::is_empty")]
-    pub model_options: chummy_llm::ModelOverrides,
-}
-
-impl Agent {
-    /// This agent's changes to the loop `loop_id`.
-    pub fn overrides(&self, loop_id: &str) -> chummy_flow::Overrides {
-        self.loop_config.get(loop_id).cloned().unwrap_or_default()
-    }
-}
-
-/// Everything beyond the workspace is off until the user turns it on.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Permissions {
-    /// Agents and tools may use the internet.
-    pub network: bool,
-    /// Agents may run installed tools.
-    pub tools: bool,
-    /// Every call to a tool that can go online waits for the user's OK. On
-    /// unless the user turns it off (which asks for confirmation).
-    pub confirm_online_tools: bool,
-}
-
-impl Default for Permissions {
-    fn default() -> Self {
-        Self {
-            network: false,
-            tools: false,
-            confirm_online_tools: true,
-        }
-    }
-}
+pub use chummy_agent::{Agent, AgentConfig, Permissions, ToolPref, Workspace};
 
 /// What closing the main window does.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,19 +59,6 @@ impl Default for General {
             math: true,
         }
     }
-}
-
-/// A tool's switches. Both are off until the user turns them on, and both
-/// also need the matching permission (`tools`, `network`) to be on.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct ToolPref {
-    /// Agents may call this tool.
-    pub enabled: bool,
-    /// This tool may use the internet (only for tools that ask for it).
-    pub network: bool,
-    /// Ask before every call to this tool.
-    pub ask: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -267,42 +184,52 @@ impl Default for Settings {
     }
 }
 
+impl AgentConfig for Settings {
+    fn agents(&self) -> &[Agent] {
+        &self.agents
+    }
+    fn providers(&self) -> &[ProviderConfig] {
+        &self.providers
+    }
+    fn default_provider(&self) -> Option<&str> {
+        self.default_provider.as_deref()
+    }
+    fn permissions(&self) -> &Permissions {
+        &self.permissions
+    }
+    fn tool_prefs(&self) -> &BTreeMap<String, ToolPref> {
+        &self.tools
+    }
+}
+
+/// The shared rules (see [`AgentConfig`]), callable without importing it.
 impl Settings {
     pub fn provider(&self, id: &str) -> Option<&ProviderConfig> {
-        self.providers.iter().find(|p| p.id == id)
+        AgentConfig::provider(self, id)
     }
 
     pub fn agent(&self, id: &str) -> Option<&Agent> {
-        self.agents.iter().find(|a| a.id == id)
+        AgentConfig::agent(self, id)
     }
 
-    /// The default model: the chosen default if it still exists, else the first.
     pub fn default_model(&self) -> Option<&ProviderConfig> {
-        self.default_provider
-            .as_deref()
-            .and_then(|d| self.provider(d))
-            .or_else(|| self.providers.first())
+        AgentConfig::default_model(self)
     }
 
     pub fn tool(&self, name: &str) -> ToolPref {
-        self.tools.get(name).copied().unwrap_or_default()
+        AgentConfig::tool(self, name)
     }
 
-    /// The model an agent uses: its own choice if that still exists, else the default.
+    pub fn agent_model(&self, agent: &Agent) -> Option<&ProviderConfig> {
+        AgentConfig::agent_model(self, agent)
+    }
+
     /// The agent's model, if Chummy may use it for its own small jobs
     /// outside loops ("Use model within app", off by default). **Every model
     /// call that doesn't come from a loop must go through this** (see
     /// `crate::in_app`).
     pub fn in_app_model(&self, agent: &Agent) -> Option<&ProviderConfig> {
         self.agent_model(agent).filter(|p| p.use_in_app)
-    }
-
-    pub fn agent_model(&self, agent: &Agent) -> Option<&ProviderConfig> {
-        agent
-            .model
-            .as_deref()
-            .and_then(|m| self.provider(m))
-            .or_else(|| self.default_model())
     }
 }
 

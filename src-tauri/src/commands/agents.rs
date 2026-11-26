@@ -306,7 +306,7 @@ pub fn save_agent(
         }
     })?;
     // Every agent starts with a chat, ready to type into.
-    crate::chats::index(&state.dirs.chats, &id)?;
+    chummy_session::chats::index(&state.chats.root, &id)?;
     Ok(id)
 }
 
@@ -339,9 +339,9 @@ pub async fn delete_agent(
     {
         return Ok(false);
     }
-    crate::commands::chat::stop_agent_runs(&state, &id);
-    crate::paused::discard_agent(&app, &state, &id);
-    crate::chats::delete_agent(&state.dirs.chats, &id)?;
+    state.session.stop_agent(&id);
+    chummy_session::paused::discard_agent(&crate::platform::AppPlatform::new(&app), &id);
+    chummy_session::chats::delete_agent(&state.chats.root, &id)?;
     state.update(&app, |s| {
         s.agents.retain(|a| a.id != id);
         if s.active_agent.as_deref() == Some(id.as_str()) {

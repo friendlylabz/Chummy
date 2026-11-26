@@ -89,14 +89,21 @@ crates/          Pure Rust libraries, no Tauri dependency, tested on their own
     support/     The in-sandbox runner and the `chummy` helper module
   scheduler/     Jobs, triggers, the run planner, folder watching, history, questions
   runner/        Runs an agent: models, tools, jail, questions; shared with chummyd
+  agent/         Agents, their configuration and permissions, the loop library
+  session/       Conversations: chats, runs, pausing, jobs, questions (app and chummyd)
+  bundle/        chummyd's bundle: configuration, checks, password sealing
+  channel/       chummyd's channels: commands, runs shown as messages
+  chummyd/       The chummyd binary (cargo build -p chummyd; not built by default)
   log/           The system log and run logs (JSON lines), encryption, search and retention
-src-tauri/       Thin app shell: state, IPC commands, native dialogs, windows
+src-tauri/       Thin app shell: state, IPC commands, native dialogs, windows; the
+                 app's Platform for chummy-session
   capabilities/  One permission file per window
 ui/              Svelte 5 frontend, one Vite page per window
   index.html     Main window: chat, menu, sessions panel
   editor.html    Loop editor (xyflow)
   settings.html  Settings
   automation.html Automation menu: jobs, schedules, runs
+  chummyd.html   Configure chummyd: what it runs, the bundle export
   logs.html      Logs: run logs and the system log
   src/lib/ipc.ts The only file that talks to Rust
 ```
@@ -111,8 +118,9 @@ editor asks Rust for them (`analyze_loop`), so there's a single source of truth.
 **Job pipeline:** `chummy_scheduler::Manager` checks schedules and watched
 folders every few seconds, queues what's due (one run per job; an agent's jobs
 and chats run side by side; missed times skipped or caught up once), and starts runs through a
-`JobRunner`. The app's runner opens the agent's jail and runs the loop with
-`chummy_runner::run_job`, exactly as a chat would. Questions from any run go
+`JobRunner`. The app's runner hands the run to `chummy_session::run_job`, which
+opens the agent's jail and runs the loop with `chummy_runner::run_job`, exactly
+as a chat would. Questions from any run go
 through one `AskBroker` and are answered from the app's windows. None of this
 depends on Tauri, so chummyd can reuse it.
 

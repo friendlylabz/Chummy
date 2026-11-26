@@ -104,6 +104,15 @@ jobs:
           echo "CHUMMY_TEST_DOCKER_IMAGE=python:3.14-slim" >> "$GITHUB_ENV"
       - name: Test
         run: cargo test --workspace --locked
+      # chummyd runs agents with the app's own crates, but never with Tauri
+      # or a webview.
+      - name: chummyd doesn't depend on Tauri
+        if: runner.os == 'Linux'
+        run: |
+          if cargo tree -p chummyd -e normal --locked --prefix none | grep -iE '^(tauri|wry|webkit2gtk)'; then
+            echo "chummyd must not depend on Tauri" >&2
+            exit 1
+          fi
       # Real HTTPS to github.com and PyPI with the operating system checking
       # certificates (Windows fetches missing root certificates on demand).
       - name: HTTPS with the OS certificate verifier

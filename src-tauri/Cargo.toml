@@ -39,11 +39,14 @@ chummy-local.workspace = true
 chummy-sandbox.workspace = true
 chummy-llm.workspace = true
 chummy-flow.workspace = true
-chummy-tools.workspace = true
+chummy-tools = { workspace = true, features = ["bundled-python"] }
 chummy-scheduler.workspace = true
 chummy-runner.workspace = true
 chummy-log.workspace = true
 chummy-store.workspace = true
+chummy-agent.workspace = true
+chummy-session.workspace = true
+chummy-bundle.workspace = true
 
 [lints]
 workspace = true

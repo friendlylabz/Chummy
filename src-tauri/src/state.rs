@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use chummy_local::engine::Engine;
 use chummy_local::runtime::RuntimePaths;
 use chummy_sandbox::Protected;
-use chummy_scheduler::{AskBroker, Manager};
+use chummy_scheduler::Manager;
 use chummy_store::secrets::{Keychain, SecretStore};
 use chummy_store::{ChummyDirs, JsonDoc, Recovery};
 use chummy_tools::sandbox::{ContainerSandbox, NativeSandbox, OpenShellSandbox};
@@ -22,9 +22,9 @@ use tauri::{AppHandle, Emitter};
 
 use crate::commands::jobs::AppJobs;
 use crate::events;
-use crate::library::{Library, LoopSummary};
 use crate::settings::{self, Settings};
 use crate::trust::TrustStore;
+use chummy_agent::library::{Library, LoopSummary};
 use chummy_flow::LoopFile;
 
 /// Keychain service name for all of Chummy's secrets.
@@ -34,71 +34,7 @@ pub const LOG_KEY_SECRET: &str = "log-key";
 /// Keychain entry for the Hugging Face token.
 pub const HF_TOKEN_KEY: &str = "huggingface";
 
-/// A loop run in progress.
-#[derive(Debug, Clone, Serialize)]
-pub struct RunInfo {
-    pub run_id: String,
-    pub agent_id: Option<String>,
-    /// The chat a chat run belongs to, and its title.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub chat_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub chat_title: Option<String>,
-    pub title: String,
-    /// "chat", "test" or "job".
-    pub source: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub job_id: Option<String>,
-    pub started_at: u64,
-    #[serde(skip)]
-    pub cancel: Arc<AtomicBool>,
-    /// Set to pause the run after its current block; only chat runs can
-    /// pause.
-    #[serde(skip)]
-    pub pause: Option<Arc<AtomicBool>>,
-    /// Whether it can pause (chat runs).
-    pub pausable: bool,
-    /// For a resumed run: how long it had already worked before it paused,
-    /// in ms (the timer goes on from there).
-    #[serde(default)]
-    pub resumed_ms: u64,
-    /// What the run's Pane output blocks have shown, oldest first (at most
-    /// [`PANE_LINES`]); read with `run_pane`.
-    #[serde(skip)]
-    pub pane: Arc<Mutex<std::collections::VecDeque<String>>>,
-    /// What a chat run has said and been told, in order: its replies (one
-    /// part per stretch of replies), and questions with their answers.
-    /// Saved to the chat as one response when the run ends.
-    #[serde(skip)]
-    pub said: Arc<Mutex<Vec<Said>>>,
-}
-
-/// One part of a chat run's response.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Said {
-    /// "assistant", "question" or "answer" (as chat message roles).
-    pub role: String,
-    pub text: String,
-}
-
-impl Said {
-    /// Adds a part, joining it to the last one when both are replies.
-    pub fn push(parts: &mut Vec<Said>, role: &str, text: &str) {
-        match parts.last_mut() {
-            Some(last) if role == "assistant" && last.role == "assistant" => {
-                last.text.push_str("\n\n");
-                last.text.push_str(text);
-            }
-            _ => parts.push(Said {
-                role: role.into(),
-                text: text.into(),
-            }),
-        }
-    }
-}
-
-/// Lines a run's pane keeps; older ones are dropped.
-pub const PANE_LINES: usize = 500;
+pub use chummy_session::RunInfo;
 
 pub struct AppState {
     pub dirs: ChummyDirs,
@@ -122,12 +58,13 @@ pub struct AppState {
     /// Folders the user picked and confirmed, waiting to be attached to an
     /// agent, by one-time token. The UI only ever holds the token.
     pub picked_workspaces: Mutex<HashMap<String, PathBuf>>,
-    /// Runs in progress, by run id.
-    pub runs: Mutex<HashMap<String, RunInfo>>,
-    /// Paused chat runs, sealed in `paused/` (see [`crate::paused`]).
+    /// Runs, paused runs, questions and the day's model use (shared with
+    /// chummyd's way of running agents; see [`crate::platform`]).
+    pub session: chummy_session::Session,
+    /// Every agent's chats, in `chats/`.
+    pub chats: chummy_session::FileChats,
+    /// Paused chat runs, sealed in `paused/` (see [`chummy_store::paused`]).
     pub vault: chummy_store::paused::PauseVault,
-    /// Every paused chat run, by (agent, chat).
-    pub paused: Mutex<crate::paused::Paused>,
     pub tool_paths: ToolPaths,
     /// The tool sandbox, created (Python compiled) on first use.
     tool_host: tokio::sync::Mutex<Option<Arc<ToolHost>>>,
@@ -142,10 +79,6 @@ pub struct AppState {
     sandbox_health: Mutex<Option<(SandboxSettings, Health)>>,
     /// Set while a sandbox check runs.
     pub sandbox_checking: AtomicBool,
-    /// Questions and tool approvals waiting for the user, from every run.
-    pub asks: AskBroker,
-    /// Tokens used per model connection per day, for daily limits.
-    pub usage: Arc<chummy_runner::usage::UsageLedger>,
     /// `logs/runs`: one log per run of a loop.
     pub run_logs: PathBuf,
     /// The run log key, once read from (or made in) the keychain.
@@ -242,19 +175,17 @@ impl AppState {
             downloads: Mutex::new(HashMap::new()),
             runtime_install: Mutex::new(None),
             picked_workspaces: Mutex::new(HashMap::new()),
-            runs: Mutex::new(HashMap::new()),
+            session: chummy_session::Session::new(Arc::new(
+                chummy_runner::usage::UsageLedger::open(&dirs.root.join("usage.json")),
+            )),
+            chats: chummy_session::FileChats::new(&dirs.chats),
             vault: chummy_store::paused::PauseVault::new(&dirs.paused),
-            paused: Mutex::new(HashMap::new()),
             tool_paths: ToolPaths::new(&dirs.tools),
             tool_host: tokio::sync::Mutex::new(None),
             tools_installing: Mutex::new(false),
             sandbox: Mutex::new(None),
             sandbox_health: Mutex::new(None),
             sandbox_checking: AtomicBool::new(false),
-            asks: AskBroker::new(),
-            usage: Arc::new(chummy_runner::usage::UsageLedger::open(
-                &dirs.root.join("usage.json"),
-            )),
             run_logs: dirs.logs.join("runs"),
             log_key: Mutex::new(None),
             jobs: OnceLock::new(),
@@ -342,7 +273,7 @@ impl AppState {
         if let Some(h) = guard.as_ref() {
             return Ok(h.clone());
         }
-        if !crate::bundled_python::tools_were_set_up(&self.tool_paths)
+        if !chummy_tools::bundled::tools_were_set_up(&self.tool_paths)
             && chummy_tools::python_status(&self.tool_paths).is_none()
         {
             return Err("Tools aren't set up yet. Set them up in Settings → Tools.".into());
@@ -350,7 +281,7 @@ impl AppState {
         let paths = self.tool_paths.clone();
         let host = tokio::task::spawn_blocking(move || {
             // After an update, the app's own (newer) Python replaces the old one.
-            crate::bundled_python::install(&paths)?;
+            chummy_tools::bundled::install(&paths)?;
             ToolHost::new(&paths, tools_http())
                 .map_err(|e| format!("The tool sandbox couldn't start: {e}"))
         })
@@ -518,6 +449,51 @@ impl AppState {
             None
         };
         Some(LogOptions { detail, key })
+    }
+}
+
+/// Paused chat runs are sealed in `paused/` with a key per run that only the
+/// OS keychain holds.
+impl chummy_session::PausedStore for AppState {
+    fn seal(&self, agent: &str, chat: &str, bytes: &[u8]) -> Result<(), String> {
+        self.vault
+            .seal(self.secrets.as_ref(), agent, chat, bytes)
+            .map_err(|e| e.to_string())
+    }
+
+    fn open(
+        &self,
+        agent: &str,
+        chat: &str,
+    ) -> Result<Option<zeroize::Zeroizing<Vec<u8>>>, chummy_session::PausedOpenError> {
+        use chummy_session::PausedOpenError;
+        use chummy_store::paused::PauseError;
+        self.vault
+            .open(self.secrets.as_ref(), agent, chat)
+            .map_err(|e| match e {
+                PauseError::Untrusted(why) => PausedOpenError::Untrusted(why),
+                e => PausedOpenError::Unavailable(e.to_string()),
+            })
+    }
+
+    fn take(&self, agent: &str, chat: &str) -> Result<Option<zeroize::Zeroizing<Vec<u8>>>, String> {
+        self.vault
+            .take(self.secrets.as_ref(), agent, chat)
+            .map_err(|e| e.to_string())
+    }
+
+    fn discard(&self, agent: &str, chat: &str) -> Result<(), String> {
+        self.vault
+            .discard(self.secrets.as_ref(), agent, chat)
+            .map_err(|e| e.to_string())
+    }
+
+    fn discard_agent(&self, agent: &str) {
+        self.vault.discard_agent(self.secrets.as_ref(), agent);
+    }
+
+    fn list(&self) -> Vec<(String, String)> {
+        self.vault.list()
     }
 }
 

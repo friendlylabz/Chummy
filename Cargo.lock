@@ -675,6 +675,8 @@ dependencies = [
 name = "chummy"
 version = "0.1.3"
 dependencies = [
+ "chummy-agent",
+ "chummy-bundle",
  "chummy-flow",
  "chummy-http",
  "chummy-llm",
@@ -683,6 +685,7 @@ dependencies = [
  "chummy-runner",
  "chummy-sandbox",
  "chummy-scheduler",
+ "chummy-session",
  "chummy-store",
  "chummy-tools",
  "getrandom 0.4.3",
@@ -703,6 +706,45 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "zeroize",
+]
+
+[[package]]
+name = "chummy-agent"
+version = "0.1.3"
+dependencies = [
+ "chummy-flow",
+ "chummy-llm",
+ "chummy-runner",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "chummy-bundle"
+version = "0.1.3"
+dependencies = [
+ "argon2",
+ "base64 0.23.1",
+ "chacha20poly1305",
+ "chummy-agent",
+ "chummy-flow",
+ "chummy-llm",
+ "chummy-scheduler",
+ "getrandom 0.4.3",
+ "jiff 1.0.3",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "zeroize",
+]
+
+[[package]]
+name = "chummy-channel"
+version = "0.1.3"
+dependencies = [
+ "chummy-flow",
+ "chummy-session",
 ]
 
 [[package]]
@@ -826,6 +868,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "chummy-session"
+version = "0.1.3"
+dependencies = [
+ "chummy-agent",
+ "chummy-flow",
+ "chummy-llm",
+ "chummy-log",
+ "chummy-runner",
+ "chummy-sandbox",
+ "chummy-scheduler",
+ "chummy-store",
+ "chummy-tools",
+ "jiff 1.0.3",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
 name = "chummy-store"
 version = "0.1.3"
 dependencies = [
@@ -861,6 +924,37 @@ dependencies = [
  "wasmtime",
  "wasmtime-wasi",
  "zip",
+]
+
+[[package]]
+name = "chummyd"
+version = "0.1.3"
+dependencies = [
+ "base64 0.23.1",
+ "chacha20poly1305",
+ "chummy-agent",
+ "chummy-bundle",
+ "chummy-channel",
+ "chummy-flow",
+ "chummy-http",
+ "chummy-llm",
+ "chummy-log",
+ "chummy-runner",
+ "chummy-sandbox",
+ "chummy-scheduler",
+ "chummy-session",
+ "chummy-tools",
+ "getrandom 0.4.3",
+ "is_elevated",
+ "jiff 1.0.3",
+ "reqwest",
+ "rpassword",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "zeroize",
 ]
 
 [[package]]
@@ -2677,6 +2771,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "is_elevated"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5299060ff5db63e788015dcb9525ad9b84f4fd9717ed2cbdeba5018cbf42f9b5"
+dependencies = [
+ "winapi",
+]
+
+[[package]]
 name = "itertools"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4273,6 +4376,27 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rpassword"
+version = "7.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fa2c5d9304b618df61ff17f3d3485c6e1854a3d94902a49abbb8d43dfbe0464"
+dependencies = [
+ "libc",
+ "rtoolbox",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "rtoolbox"
+version = "0.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a1efe12a1469752d0e6ff5ebec0b6ef4924cc5c4c71046b0ec730040535819d"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

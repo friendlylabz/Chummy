@@ -66,7 +66,7 @@ A short map of the protections and where they live in the code.
 | **Per-window permissions** | Each window may call only the commands it needs. | `src-tauri/capabilities/*.json` |
 | **Private data folder** | The Chummy folder is made private to the user (700/600 on macOS and Linux) at every start. | `crates/store` |
 | **Strict files** | Loop, job and config files are strict (`deny_unknown_fields`), versioned and size-limited; imported jobs arrive switched off. | `crates/flow/src/format.rs`, `validate.rs`, `crates/scheduler` |
-| **Paused runs only from Chummy** | A paused chat run is sealed (XChaCha20-Poly1305) with a fresh key per pause that only the keychain holds, bound to its agent and chat, and taken (key deleted) when resumed. No file Chummy didn't seal, no older copy and no other chat's file can be resumed; files that don't open are deleted. | `crates/store/src/paused.rs`, `src-tauri/src/paused.rs` |
+| **Paused runs only from Chummy** | A paused chat run is sealed (XChaCha20-Poly1305) with a fresh key per pause that only the keychain holds, bound to its agent and chat, and taken (key deleted) when resumed. No file Chummy didn't seal, no older copy and no other chat's file can be resumed; files that don't open are deleted. | `crates/store/src/paused.rs`, `crates/session/src/paused.rs` |
 | **Loop review and trusted loops** | Only loops on the trusted list run or open in the editor: built-in templates (hashed at build time), loops saved from trusted ones, and loops the user reviewed and trusted. Anything else (an import, a file copied into the folder, imported loop settings) gets a scan and the Review window first. The list carries an HMAC keyed in the keychain. | `crates/flow/src/review.rs`, `crates/flow/build.rs`, `src-tauri/src/trust.rs`, `commands/review.rs`, `ui/src/windows/review/` |
 
 When a change touches permissions, secrets or untrusted content, think
@@ -725,7 +725,7 @@ must never come from anywhere but Chummy itself.
   state: they get a list (agent, chat, title, when, why), and `resume_run`
   / `discard_paused` take only ids.
 
-**What resuming checks** (`commands/chat.rs::resume_run`): the agent still
+**What resuming checks** (`chummy_session::resume_run`, `crates/session/src/run.rs`): the agent still
 exists and isn't in a test run; its workspace is the same folder
 the run started in (otherwise it can't carry on); the folder still opens as
 a jail; a model is connected. Tools, internet access and approvals come
@@ -788,6 +788,21 @@ In rough order of importance:
    encrypted since pass 8). *Next:* encrypt chat and job history with the
    same key. Full-disk encryption is recommended.
 
-chummyd, the planned background service, raises the stakes (a listening
-API, remote answers, unattended hosts). Its own security design is in
+**chummyd** (M1): the bundle is sealed with Argon2id + XChaCha20-Poly1305 and
+a checked-strong password (the export warns that bundle + password = the API
+keys); the password is never on the command line and is wiped once used; the
+configuration can't change while it runs; the jail dir is checked apart from
+the bundle, the password file and the state folder (and those, with chummyd's
+own folder, are protected places for every agent's jail); the state is
+sealed and bound to the instance, and one that doesn't open stops chummyd; it
+refuses root and Administrator; it listens on nothing; channel commands are
+parsed before anything reaches a model and only come from what people type;
+approvals over channels are off per agent and refused automatically; logs go
+to standard error with no message text unless the bundle allows it.
+
+chummyd, the background service being built, raises the stakes
+(unattended hosts, answers from messaging apps). Its design keeps it
+narrow: no listening API (only outgoing channel connections), a
+configuration that can't change while it runs, and jails kept apart from
+its bundle and state. Its security design is in the
 [roadmap](roadmap.md#chummyd-the-background-job-service).

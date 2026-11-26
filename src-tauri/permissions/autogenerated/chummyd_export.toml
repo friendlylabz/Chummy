@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-chummyd-export"
+description = "Enables the chummyd_export command without any pre-configured scope."
+commands.allow = ["chummyd_export"]
+
+[[permission]]
+identifier = "deny-chummyd-export"
+description = "Denies the chummyd_export command without any pre-configured scope."
+commands.deny = ["chummyd_export"]

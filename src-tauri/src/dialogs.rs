@@ -104,6 +104,17 @@ pub async fn pick_json_file(
     title: &str,
     kind: &str,
 ) -> Option<PathBuf> {
+    pick_file(app, window, title, kind, "json").await
+}
+
+/// Lets the user pick a file whose name ends in `.<ext>`.
+pub async fn pick_file(
+    app: &AppHandle,
+    window: &str,
+    title: &str,
+    kind: &str,
+    ext: &'static str,
+) -> Option<PathBuf> {
     let app = app.clone();
     let (window, title, kind) = (window.to_string(), title.to_string(), kind.to_string());
     tauri::async_runtime::spawn_blocking(move || {
@@ -111,7 +122,7 @@ pub async fn pick_json_file(
             .dialog()
             .file()
             .set_title(title)
-            .add_filter(kind, &["json"]);
+            .add_filter(kind, &[ext]);
         if let Some(w) = parent(&app, &window) {
             d = d.set_parent(&w);
         }
@@ -130,6 +141,18 @@ pub async fn save_json_file(
     kind: &str,
     suggested: &str,
 ) -> Option<PathBuf> {
+    save_file(app, window, title, kind, suggested, "json").await
+}
+
+/// Asks where to save a file whose name ends in `.<ext>`.
+pub async fn save_file(
+    app: &AppHandle,
+    window: &str,
+    title: &str,
+    kind: &str,
+    suggested: &str,
+    ext: &'static str,
+) -> Option<PathBuf> {
     let app = app.clone();
     let (window, title, kind, suggested) = (
         window.to_string(),
@@ -143,7 +166,7 @@ pub async fn save_json_file(
             .file()
             .set_title(title)
             .set_file_name(suggested)
-            .add_filter(kind, &["json"]);
+            .add_filter(kind, &[ext]);
         if let Some(w) = parent(&app, &window) {
             d = d.set_parent(&w);
         }

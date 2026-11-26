@@ -2,10 +2,11 @@
 //!
 //! Pausing a chat run (or a model it couldn't reach) ends the run with its
 //! whole state, which is kept here until the chat resumes or discards it:
-//! sealed in the Chummy folder with a key only the OS keychain holds (see
-//! [`chummy_store::paused`]), so it survives quitting and restarting, and
-//! nothing Chummy didn't seal itself can ever be resumed. Without a
-//! keychain, a paused run is held in memory only, until Chummy quits.
+//! sealed by the program's [`PausedStore`] (the app: in the Chummy folder
+//! with a key only the OS keychain holds, see [`chummy_store::paused`]), so
+//! it survives quitting and restarting, and nothing the program didn't seal
+//! itself can ever be resumed. If it can't be sealed (no keychain), it's
+//! held in memory only, until the program quits.
 //!
 //! A paused run carries on with the loop exactly as it ran (with the
 //! agent's settings at the time), in the same workspace, and with the
@@ -14,14 +15,15 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use chummy_agent::AgentConfig;
 use chummy_flow::{LoopFile, RunInputs, RunState};
 use chummy_log::system::{self as syslog, Level};
-use chummy_store::paused::PauseError;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
 
-use crate::events;
-use crate::state::{AppState, lock};
+use crate::chats::ChatMessage;
+use crate::platform::{Platform, Update};
+use crate::store::PausedOpenError;
+use crate::{Session, lock, now};
 
 const FORMAT: &str = "chummy.paused-run";
 const VERSION: u32 = 1;
@@ -84,7 +86,7 @@ impl PausedRun {
             file,
             inputs,
             state,
-            paused_at: crate::commands::now(),
+            paused_at: now(),
             reason,
             first,
             model,
@@ -110,14 +112,14 @@ pub struct PausedInfo {
     pub saved: bool,
 }
 
-/// A paused run Chummy knows of.
-pub struct Entry {
+/// A paused run the session knows of.
+pub(crate) struct Entry {
     pub info: PausedInfo,
     /// The run itself when it's held in memory only.
     held: Option<Box<PausedRun>>,
 }
 
-pub type Paused = HashMap<(String, String), Entry>;
+pub(crate) type Paused = HashMap<(String, String), Entry>;
 
 fn info(run: &PausedRun, saved: bool) -> PausedInfo {
     PausedInfo {
@@ -146,40 +148,40 @@ fn decode(bytes: &[u8], agent: &str, chat: &str) -> Result<PausedRun, String> {
 
 /// Tells a chat its paused run was removed, so the chat doesn't still say
 /// it can be resumed. (Nothing happens if there's no such chat.)
-fn note_removed(state: &AppState, agent: &str, chat: &str, why: &str) {
-    let _ = crate::chats::append(
-        &state.dirs.chats,
+fn note_removed<P: Platform>(p: &P, agent: &str, chat: &str, why: &str) {
+    let _ = p.chats().append(
         agent,
         chat,
-        &crate::chats::ChatMessage {
+        &ChatMessage {
             id: chummy_store::random_id(6),
             role: "notice".into(),
             text: format!(
                 "The paused run couldn't be opened ({why}), so it was removed. Send the message again to start over."
             ),
-            at: crate::commands::now(),
+            at: now(),
             from: None,
             run: None,
         },
     );
 }
 
-/// Finds the paused runs kept in the Chummy folder (at startup). Files that
-/// don't open, or whose agent is gone, are removed.
-pub fn load(state: &AppState) {
-    let settings = state.settings();
+/// Finds the paused runs kept by the store (at startup). Ones that don't
+/// open, or whose agent is gone, are removed.
+pub fn load<P: Platform>(p: &P) {
+    let config = p.config();
+    let store = p.paused_store();
     let mut found = Vec::new();
-    for (agent, chat) in state.vault.list() {
-        if settings.agent(&agent).is_none() {
-            let _ = state.vault.discard(state.secrets.as_ref(), &agent, &chat);
+    for (agent, chat) in store.list() {
+        if config.agent(&agent).is_none() {
+            let _ = store.discard(&agent, &chat);
             continue;
         }
-        match state.vault.open(state.secrets.as_ref(), &agent, &chat) {
+        match store.open(&agent, &chat) {
             Ok(Some(bytes)) => match decode(&bytes, &agent, &chat) {
                 Ok(run) => found.push(info(&run, true)),
                 Err(why) => {
-                    let _ = state.vault.discard(state.secrets.as_ref(), &agent, &chat);
-                    note_removed(state, &agent, &chat, &why);
+                    let _ = store.discard(&agent, &chat);
+                    note_removed(p, &agent, &chat, &why);
                     syslog::log(
                         Level::Warn,
                         "runs",
@@ -189,8 +191,8 @@ pub fn load(state: &AppState) {
                 }
             },
             Ok(None) => {}
-            Err(PauseError::Untrusted(why)) => {
-                note_removed(state, &agent, &chat, &why);
+            Err(PausedOpenError::Untrusted(why)) => {
+                note_removed(p, &agent, &chat, &why);
                 syslog::log(
                     Level::Warn,
                     "runs",
@@ -198,7 +200,7 @@ pub fn load(state: &AppState) {
                     &[("agent", &agent), ("chat", &chat)],
                 );
             }
-            // No keychain right now: left alone, for a later start.
+            // Can't be checked right now: left alone, for a later start.
             Err(e) => syslog::log(
                 Level::Warn,
                 "runs",
@@ -207,7 +209,7 @@ pub fn load(state: &AppState) {
             ),
         }
     }
-    let mut paused = lock(&state.paused);
+    let mut paused = lock(&p.session().paused);
     for i in found {
         paused.insert(
             (i.agent_id.clone(), i.chat_id.clone()),
@@ -219,36 +221,35 @@ pub fn load(state: &AppState) {
     }
 }
 
-/// Every paused run, oldest first.
-pub fn list(state: &AppState) -> Vec<PausedInfo> {
-    let mut l: Vec<PausedInfo> = lock(&state.paused)
-        .values()
-        .map(|e| e.info.clone())
-        .collect();
-    l.sort_by_key(|i| i.paused_at);
-    l
+impl Session {
+    /// Every paused run, oldest first.
+    pub fn paused(&self) -> Vec<PausedInfo> {
+        let mut l: Vec<PausedInfo> = lock(&self.paused)
+            .values()
+            .map(|e| e.info.clone())
+            .collect();
+        l.sort_by_key(|i| i.paused_at);
+        l
+    }
+
+    pub fn is_paused(&self, agent: &str, chat: &str) -> bool {
+        lock(&self.paused).contains_key(&(agent.to_string(), chat.to_string()))
+    }
 }
 
-fn changed(app: &AppHandle, state: &AppState) {
-    let _ = app.emit(events::PAUSED_CHANGED, list(state));
+fn changed<P: Platform>(p: &P) {
+    p.emit(Update::PausedChanged(p.session().paused()));
 }
 
-pub fn is_paused(state: &AppState, agent: &str, chat: &str) -> bool {
-    lock(&state.paused).contains_key(&(agent.to_string(), chat.to_string()))
-}
-
-/// Keeps a paused run: sealed in the Chummy folder, or in memory when there
-/// is no keychain. Returns whether it was saved.
-pub fn keep(app: &AppHandle, state: &AppState, run: PausedRun) -> bool {
+/// Keeps a paused run: sealed by the store, or in memory if it can't be.
+/// Returns whether it was saved.
+pub fn keep<P: Platform>(p: &P, run: PausedRun) -> bool {
     let key = (run.agent_id.clone(), run.chat_id.clone());
     let sealed = serde_json::to_vec(&run)
         .map_err(|e| e.to_string())
         .and_then(|bytes| {
             let bytes = zeroize::Zeroizing::new(bytes);
-            state
-                .vault
-                .seal(state.secrets.as_ref(), &run.agent_id, &run.chat_id, &bytes)
-                .map_err(|e| e.to_string())
+            p.paused_store().seal(&run.agent_id, &run.chat_id, &bytes)
         });
     let entry = match sealed {
         Ok(()) => Entry {
@@ -269,24 +270,26 @@ pub fn keep(app: &AppHandle, state: &AppState, run: PausedRun) -> bool {
         }
     };
     let saved = entry.held.is_none();
-    lock(&state.paused).insert(key, entry);
-    changed(app, state);
+    lock(&p.session().paused).insert(key, entry);
+    changed(p);
     saved
 }
 
 /// A chat's paused run, left where it is (to check it can carry on).
-pub fn peek(state: &AppState, agent: &str, chat: &str) -> Result<PausedRun, String> {
+pub fn peek<P: Platform>(p: &P, agent: &str, chat: &str) -> Result<PausedRun, String> {
     let key = (agent.to_string(), chat.to_string());
-    if let Some(run) = lock(&state.paused)
-        .get(&key)
-        .and_then(|e| e.held.as_deref())
     {
-        return Ok(run.clone());
+        let paused = lock(&p.session().paused);
+        match paused.get(&key) {
+            None => return Err("This chat has no paused run.".into()),
+            Some(e) => {
+                if let Some(run) = e.held.as_deref() {
+                    return Ok(run.clone());
+                }
+            }
+        }
     }
-    if !lock(&state.paused).contains_key(&key) {
-        return Err("This chat has no paused run.".into());
-    }
-    match state.vault.open(state.secrets.as_ref(), agent, chat) {
+    match p.paused_store().open(agent, chat) {
         Ok(Some(bytes)) => decode(&bytes, agent, chat).map_err(|why| {
             format!(
                 "The paused run can't be resumed: {why}. Discard it and send the message again."
@@ -299,15 +302,10 @@ pub fn peek(state: &AppState, agent: &str, chat: &str) -> Result<PausedRun, Stri
 
 /// Takes a chat's paused run to resume it: it's removed (its key first), so
 /// it can only be resumed this once.
-pub fn take(
-    app: &AppHandle,
-    state: &AppState,
-    agent: &str,
-    chat: &str,
-) -> Result<PausedRun, String> {
+pub fn take<P: Platform>(p: &P, agent: &str, chat: &str) -> Result<PausedRun, String> {
     let key = (agent.to_string(), chat.to_string());
     let held = {
-        let mut paused = lock(&state.paused);
+        let mut paused = lock(&p.session().paused);
         match paused.get(&key) {
             None => return Err("This chat has no paused run.".into()),
             Some(e) if e.held.is_some() => paused.remove(&key).and_then(|e| e.held),
@@ -317,42 +315,42 @@ pub fn take(
     let run = match held {
         Some(run) => *run,
         None => {
-            let bytes = state
-                .vault
-                .take(state.secrets.as_ref(), agent, chat)
+            let bytes = p
+                .paused_store()
+                .take(agent, chat)
                 .map_err(|e| format!("The paused run can't be opened: {e}."))?
                 .ok_or("The paused run is gone. Send the message again.")?;
-            lock(&state.paused).remove(&key);
+            lock(&p.session().paused).remove(&key);
             decode(&bytes, agent, chat)?
         }
     };
-    changed(app, state);
+    changed(p);
     Ok(run)
 }
 
 /// Removes a chat's paused run, if it has one.
-pub fn discard(app: &AppHandle, state: &AppState, agent: &str, chat: &str) -> Result<(), String> {
+pub fn discard<P: Platform>(p: &P, agent: &str, chat: &str) -> Result<(), String> {
     let key = (agent.to_string(), chat.to_string());
-    let Some(entry) = lock(&state.paused).remove(&key) else {
+    let Some(entry) = lock(&p.session().paused).remove(&key) else {
         return Ok(());
     };
     if entry.held.is_none()
-        && let Err(e) = state.vault.discard(state.secrets.as_ref(), agent, chat)
+        && let Err(e) = p.paused_store().discard(agent, chat)
     {
         // Still listed, so it can be discarded again.
-        lock(&state.paused).insert(key, entry);
-        changed(app, state);
+        lock(&p.session().paused).insert(key, entry);
+        changed(p);
         return Err(format!("The paused run couldn't be removed: {e}"));
     }
-    changed(app, state);
+    changed(p);
     Ok(())
 }
 
 /// Removes every paused run of an agent (when it's deleted).
-pub fn discard_agent(app: &AppHandle, state: &AppState, agent: &str) {
-    lock(&state.paused).retain(|(a, _), _| a != agent);
-    state.vault.discard_agent(state.secrets.as_ref(), agent);
-    changed(app, state);
+pub fn discard_agent<P: Platform>(p: &P, agent: &str) {
+    lock(&p.session().paused).retain(|(a, _), _| a != agent);
+    p.paused_store().discard_agent(agent);
+    changed(p);
 }
 
 #[cfg(test)]

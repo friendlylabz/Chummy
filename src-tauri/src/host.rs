@@ -5,13 +5,14 @@
 use std::sync::Arc;
 
 use chummy_llm::ProviderConfig;
-use chummy_runner::{AgentGrant, AgentHost, AgentSetup, Permissions, Services, ToolGrant};
+use chummy_runner::{AgentHost, Services};
 use chummy_sandbox::Jail;
 use chummy_scheduler::Origin;
 use chummy_tools::{SandboxBackend, ToolPaths};
 use tauri::{AppHandle, Manager};
 
 use crate::commands::local::start_engine_for;
+use crate::platform::AppPlatform;
 use crate::settings::{Agent, Settings};
 use crate::state::AppState;
 
@@ -46,7 +47,8 @@ impl Services for AppServices {
 
 pub type AppHost = AgentHost<AppServices>;
 
-/// A host for one run, with the permissions in `s` right now.
+/// A host for one run, with the permissions in `s` (see
+/// [`chummy_session::host`]).
 pub fn agent_host(
     app: &AppHandle,
     s: &Settings,
@@ -55,51 +57,5 @@ pub fn agent_host(
     jail: Option<Jail>,
     origin: Option<Origin>,
 ) -> AppHost {
-    let state = app.state::<AppState>();
-    // The agent's own model settings, over every connection it may call.
-    let (providers, model) = match agent.map(|a| &a.model_options) {
-        Some(o) if !o.is_empty() => (
-            s.providers.iter().map(|p| o.apply(p)).collect(),
-            model.map(|m| o.apply(&m)),
-        ),
-        _ => (s.providers.clone(), model),
-    };
-    let setup = AgentSetup {
-        providers,
-        model,
-        permissions: Permissions {
-            tools: s.permissions.tools,
-            network: s.permissions.network,
-            confirm_online_tools: s.permissions.confirm_online_tools,
-        },
-        tool_grants: s
-            .tools
-            .iter()
-            .map(|(name, p)| {
-                (
-                    name.clone(),
-                    ToolGrant {
-                        enabled: p.enabled,
-                        network: p.network,
-                        ask: p.ask,
-                    },
-                )
-            })
-            .collect(),
-        agent: agent.map(|a| AgentGrant {
-            tools: a.tools.clone(),
-            network: a.network,
-        }),
-        installed: if s.permissions.tools {
-            chummy_tools::installed(&state.tool_paths)
-        } else {
-            vec![]
-        },
-        sandbox: Some(state.sandbox_health(&s.sandbox)),
-        jail,
-        asks: origin.map(|o| (state.asks.clone(), o)),
-        time_zone: iana_time_zone::get_timezone().ok(),
-        usage: Some(state.usage.clone()),
-    };
-    AgentHost::new(Arc::new(AppServices { app: app.clone() }), setup)
+    chummy_session::host(&AppPlatform::new(app), s, agent, model, jail, origin)
 }

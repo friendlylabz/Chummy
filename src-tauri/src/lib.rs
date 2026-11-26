@@ -4,17 +4,14 @@
 //! windows. All real logic lives in the `chummy-*` crates, which have no Tauri
 //! dependency and are tested on their own.
 
-mod bundled_python;
-mod chats;
 mod cli;
 mod commands;
 mod dialogs;
 mod events;
 mod host;
 mod in_app;
-mod library;
 mod notify;
-mod paused;
+mod platform;
 mod settings;
 mod state;
 mod tray;
@@ -24,8 +21,8 @@ mod windows;
 use tauri::{Manager, RunEvent, WindowEvent};
 
 use commands::{
-    agent_setup, agents, asks, chat, general, jobs, local, logs, loops, providers, review, sandbox,
-    tools,
+    agent_setup, agents, asks, chat, chummyd, general, jobs, local, logs, loops, providers, review,
+    sandbox, tools,
 };
 use state::AppState;
 
@@ -88,8 +85,8 @@ pub fn run() {
             };
             let handle = app.handle().clone();
             logs::start(&handle, &state);
-            paused::load(&state);
             app.manage(state);
+            chummy_session::paused::load(&platform::AppPlatform::new(&handle));
             commands::tools::refresh_builtins(&handle);
             // Container and OpenShell are checked at start-up; until a check
             // passes, no tools are offered.
@@ -155,6 +152,12 @@ pub fn run() {
             chat::list_paused,
             chat::list_runs,
             chat::run_pane,
+            chummyd::chummyd_sources,
+            chummyd::chummyd_check,
+            chummyd::chummyd_password_problem,
+            chummyd::chummyd_generate_password,
+            chummyd::chummyd_open_bundle,
+            chummyd::chummyd_export,
             providers::list_presets,
             providers::save_provider,
             providers::delete_provider,

@@ -12,7 +12,7 @@ use super::CmdResult;
 use crate::dialogs;
 use crate::events;
 use crate::settings::Logging;
-use crate::state::{AppState, lock};
+use crate::state::AppState;
 
 /// Largest log key file read.
 const MAX_KEY_FILE: u64 = 64 * 1024;
@@ -40,7 +40,7 @@ pub fn start(app: &AppHandle, state: &AppState) {
 }
 
 fn running(state: &AppState) -> HashSet<String> {
-    lock(&state.runs).keys().cloned().collect()
+    state.session.run_ids().into_iter().collect()
 }
 
 #[derive(Serialize)]

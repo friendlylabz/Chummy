@@ -1,0 +1,31 @@
+[package]
+name = "chummy-session"
+description = "Chummy's conversations with agents: chats, runs, pausing, jobs and questions, shared by the app and chummyd."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+jiff = "1"
+zeroize = "1"
+chummy-agent.workspace = true
+chummy-flow.workspace = true
+chummy-llm.workspace = true
+chummy-log.workspace = true
+chummy-runner.workspace = true
+chummy-sandbox.workspace = true
+chummy-scheduler.workspace = true
+chummy-store.workspace = true
+chummy-tools.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

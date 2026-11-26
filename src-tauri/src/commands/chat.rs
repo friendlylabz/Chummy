@@ -1,47 +1,24 @@
-//! Chats and loop runs.
+//! Chats and loop runs: the app's commands over `chummy-session`, which
+//! holds how conversations behave (shared with chummyd).
 //!
 //! Sending a message runs the agent's loop with the agent's model, inside the
 //! agent's workspace. Progress streams to every window as `run:*` events; the
-//! reply is saved to the chat it was sent from (see [`crate::chats`]). Each
-//! chat runs one message at a time; an agent's chats can run at once.
+//! reply is saved to the chat it was sent from. Each chat runs one message at
+//! a time; an agent's chats can run at once.
 
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
-use chummy_flow::{
-    ChatTurn, Event, LoopFile, RunInputs, RunOutcome, RunState, RunStatus, analyze, run_with,
-};
-use chummy_log::runs::{RunEnd, RunHeader, RunLog};
-use chummy_log::system::{self as syslog, Level};
-use chummy_sandbox::Jail;
-use chummy_scheduler::{Origin, RunKind};
+use chummy_flow::LoopFile;
+use chummy_session::{self as session, chats};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
+use tauri::{AppHandle, Emitter, State, WebviewWindow};
 
-use super::{CmdResult, err, now};
-use crate::chats;
+use super::CmdResult;
 use crate::events;
-use crate::host::{AppHost, agent_host};
-use crate::paused::{self, PausedInfo, PausedRun};
-use crate::settings::{Agent, Settings};
-use crate::state::{AppState, PANE_LINES, RunInfo, Said, lock};
+use crate::platform::AppPlatform;
+use crate::state::{AppState, RunInfo, lock};
 
-pub use crate::chats::{ChatIndex, ChatMessage, ChatMeta, RunSummary};
-
-#[derive(Clone, Serialize)]
-pub struct ChatMessageEvent {
-    pub agent_id: String,
-    pub chat_id: String,
-    pub message: ChatMessage,
-}
-
-#[derive(Clone, Serialize)]
-pub struct ChatMessageDeleted {
-    pub agent_id: String,
-    pub chat_id: String,
-    pub message_id: String,
-}
+pub use chummy_session::{ChatIndex, ChatMessage, ChatMessageDeleted, ChatMeta, PausedInfo};
 
 #[derive(Clone, Serialize)]
 pub struct ChatMessageRestored {
@@ -63,73 +40,14 @@ struct Deleted {
 static DELETED: std::sync::Mutex<Vec<Deleted>> = std::sync::Mutex::new(Vec::new());
 const DELETED_KEPT: usize = 50;
 
-#[derive(Clone, Serialize)]
-pub struct ChatsChanged {
-    pub agent_id: String,
-    pub index: ChatIndex,
-}
-
-#[derive(Clone, Serialize)]
-pub struct RunEvent {
-    pub run_id: String,
-    pub event: Event,
-}
-
-#[derive(Clone, Serialize)]
-pub struct RunFinished {
-    pub run_id: String,
-    pub agent_id: Option<String>,
-    pub chat_id: Option<String>,
-    pub outcome: RunOutcome,
-}
-
 pub fn emit_index(app: &AppHandle, agent_id: &str, index: ChatIndex) {
-    let _ = app.emit(
-        events::CHATS_CHANGED,
-        ChatsChanged {
-            agent_id: agent_id.into(),
-            index,
-        },
-    );
-}
-
-/// Adds a message to one of an agent's chats and tells every window.
-pub fn append(
-    app: &AppHandle,
-    state: &AppState,
-    agent_id: &str,
-    chat_id: &str,
-    message: ChatMessage,
-) -> CmdResult<()> {
-    let index = chats::append(&state.dirs.chats, agent_id, chat_id, &message)?;
-    let _ = app.emit(
-        events::CHAT_MESSAGE,
-        ChatMessageEvent {
-            agent_id: agent_id.into(),
-            chat_id: chat_id.into(),
-            message,
-        },
-    );
-    emit_index(app, agent_id, index);
-    Ok(())
-}
-
-/// The chat open for an agent (for questions from jobs, which have no chat
-/// of their own).
-pub fn active_chat(state: &AppState, agent_id: &str) -> CmdResult<String> {
-    chats::index(&state.dirs.chats, agent_id)?
-        .active
-        .ok_or_else(|| "That agent has no chat.".into())
-}
-
-pub fn msg_id() -> String {
-    chummy_store::random_id(6)
+    session::emit_index(&AppPlatform::new(app), agent_id, index);
 }
 
 /// An agent's chats (at least one) and which is open.
 #[tauri::command]
 pub fn list_chats(state: State<'_, AppState>, agent_id: String) -> CmdResult<ChatIndex> {
-    chats::index(&state.dirs.chats, &agent_id)
+    chats::index(&state.chats.root, &agent_id)
 }
 
 /// Starts a new chat with an agent and opens it.
@@ -142,7 +60,7 @@ pub fn new_chat(
     if state.settings().agent(&agent_id).is_none() {
         return Err("That agent no longer exists.".into());
     }
-    let (chat, index) = chats::create(&state.dirs.chats, &agent_id)?;
+    let (chat, index) = chats::create(&state.chats.root, &agent_id)?;
     emit_index(&app, &agent_id, index);
     Ok(chat)
 }
@@ -155,7 +73,7 @@ pub fn set_active_chat(
     agent_id: String,
     chat_id: String,
 ) -> CmdResult<()> {
-    let index = chats::set_active(&state.dirs.chats, &agent_id, &chat_id)?;
+    let index = chats::set_active(&state.chats.root, &agent_id, &chat_id)?;
     emit_index(&app, &agent_id, index);
     Ok(())
 }
@@ -170,10 +88,10 @@ pub async fn delete_chat(
     agent_id: String,
     chat_id: String,
 ) -> CmdResult<bool> {
-    if chat_busy(&state, &chat_id) {
+    if state.session.chat_busy(&chat_id) {
         return Err("That chat is still working. Stop it first.".into());
     }
-    let index = chats::index(&state.dirs.chats, &agent_id)?;
+    let index = chats::index(&state.chats.root, &agent_id)?;
     let Some(chat) = index.chats.iter().find(|c| c.id == chat_id) else {
         return Ok(false);
     };
@@ -193,8 +111,8 @@ pub async fn delete_chat(
     {
         return Ok(false);
     }
-    paused::discard(&app, &state, &agent_id, &chat_id)?;
-    let index = chats::delete(&state.dirs.chats, &agent_id, &chat_id)?;
+    session::paused::discard(&AppPlatform::new(&app), &agent_id, &chat_id)?;
+    let index = chats::delete(&state.chats.root, &agent_id, &chat_id)?;
     emit_index(&app, &agent_id, index);
     Ok(true)
 }
@@ -211,11 +129,11 @@ pub fn delete_chat_message(
     chat_id: String,
     message_id: String,
 ) -> CmdResult<()> {
-    if chat_busy(&state, &chat_id) {
+    if state.session.chat_busy(&chat_id) {
         return Err("Wait until this chat is done, then delete the message.".into());
     }
     let (index, message, position) =
-        chats::delete_message(&state.dirs.chats, &agent_id, &chat_id, &message_id)?;
+        chats::delete_message(&state.chats.root, &agent_id, &chat_id, &message_id)?;
     {
         let mut kept = lock(&DELETED);
         kept.push(Deleted {
@@ -249,7 +167,7 @@ pub fn restore_chat_message(
     chat_id: String,
     message_id: String,
 ) -> CmdResult<()> {
-    if chat_busy(&state, &chat_id) {
+    if state.session.chat_busy(&chat_id) {
         return Err("Wait until this chat is done, then undo.".into());
     }
     let d = {
@@ -261,7 +179,7 @@ pub fn restore_chat_message(
         kept.remove(i)
     };
     let (index, position) = match chats::restore_message(
-        &state.dirs.chats,
+        &state.chats.root,
         &agent_id,
         &chat_id,
         d.message.clone(),
@@ -292,159 +210,45 @@ pub fn get_chat(
     agent_id: String,
     chat_id: String,
 ) -> CmdResult<Vec<ChatMessage>> {
-    chats::load(&state.dirs.chats, &agent_id, &chat_id)
+    chats::load(&state.chats.root, &agent_id, &chat_id)
 }
 
 #[tauri::command]
 pub fn list_runs(state: State<'_, AppState>) -> Vec<RunInfo> {
-    lock(&state.runs).values().cloned().collect()
+    state.session.runs()
 }
 
 /// What a running run's Pane output blocks have shown so far, newest first
 /// (empty for a run that has finished or never used one).
 #[tauri::command]
 pub fn run_pane(state: State<'_, AppState>, run_id: String) -> Vec<String> {
-    let pane = lock(&state.runs).get(&run_id).map(|r| r.pane.clone());
-    pane.map(|p| lock(&p).iter().rev().cloned().collect())
-        .unwrap_or_default()
+    state.session.pane(&run_id)
 }
 
 #[tauri::command]
 pub fn stop_run(state: State<'_, AppState>, run_id: String) {
-    if let Some(r) = lock(&state.runs).get(&run_id) {
-        r.cancel.store(true, Ordering::Relaxed);
-    }
-    state.asks.withdraw_run(&run_id);
-}
-
-#[derive(Clone, Serialize)]
-pub struct RunPausing {
-    pub run_id: String,
+    state.session.stop(&run_id);
 }
 
 /// Pauses a chat run after its current block (or right away while it
 /// waits on you, if it can run that block again). Its state is kept until
 /// the chat resumes or discards it.
 #[tauri::command]
-pub fn pause_run(app: AppHandle, state: State<'_, AppState>, run_id: String) -> CmdResult<()> {
-    let runs = lock(&state.runs);
-    let run = runs.get(&run_id).ok_or("That run has already finished.")?;
-    let flag = run.pause.as_ref().ok_or("Only chat runs can be paused.")?;
-    flag.store(true, Ordering::Relaxed);
-    let _ = app.emit(events::RUN_PAUSING, RunPausing { run_id });
-    Ok(())
+pub fn pause_run(app: AppHandle, run_id: String) -> CmdResult<()> {
+    session::pause_run(&AppPlatform::new(&app), &run_id)
 }
 
 /// Every paused chat run.
 #[tauri::command]
 pub fn list_paused(state: State<'_, AppState>) -> Vec<PausedInfo> {
-    paused::list(&state)
+    state.session.paused()
 }
 
-/// Carries on a chat's paused run, where it stopped. Returns the new run's
-/// id.
+/// Carries on a chat's paused run, where it stopped. Returns its id (the
+/// same run as before it paused).
 #[tauri::command]
-pub fn resume_run(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    agent_id: String,
-    chat_id: String,
-) -> CmdResult<String> {
-    let s = state.settings();
-    let agent = s
-        .agent(&agent_id)
-        .cloned()
-        .ok_or("That agent no longer exists.")?;
-    if chat_busy(&state, &chat_id) {
-        return Err("This chat is already working.".into());
-    }
-    if let Some(what) = agent_busy_with(&state, &agent_id, true) {
-        return Err(format!("{} is busy with {what}.", agent.name));
-    }
-    // Check everything before taking the run, so a run that can't carry on
-    // yet stays paused.
-    let run = paused::peek(&state, &agent_id, &chat_id)?;
-    if run.workspace != agent.workspace.path {
-        return Err(format!(
-            "“{}”'s workspace has changed since this run paused, so it can't carry on. Discard it and send the message again.",
-            agent.name
-        ));
-    }
-    let jail = Jail::open(&agent.workspace.path, &state.protected).map_err(|e| {
-        format!(
-            "“{}”'s workspace can't be used: {e}. Choose its folder again in Settings → Agents.",
-            agent.name
-        )
-    })?;
-    let model = s.agent_model(&agent).cloned();
-    if model.is_none() {
-        return Err("No model is connected. Add one in Settings → Models.".into());
-    }
-    // From here it's this run's alone: taken once, never again.
-    let run = paused::take(&app, &state, &agent_id, &chat_id)?;
-    // It carries on as if it never stopped: the "Paused" note goes, and it
-    // stays the same run (one response, one log).
-    for note in &run.notices {
-        if let Ok((index, _, _)) =
-            chats::delete_message(&state.dirs.chats, &agent_id, &chat_id, note)
-        {
-            let _ = app.emit(
-                events::CHAT_MESSAGE_DELETED,
-                ChatMessageDeleted {
-                    agent_id: agent_id.clone(),
-                    chat_id: chat_id.clone(),
-                    message_id: note.clone(),
-                },
-            );
-            emit_index(&app, &agent_id, index);
-        }
-    }
-    let title = chats::index(&state.dirs.chats, &agent_id)
-        .ok()
-        .and_then(|ix| ix.chats.into_iter().find(|c| c.id == chat_id))
-        .map(|c| c.title)
-        .unwrap_or(run.chat_title.clone());
-    let run_id = if run.run_id.is_empty() {
-        new_run_id()
-    } else {
-        run.run_id.clone()
-    };
-    let earlier = run.state.replies().len();
-    let origin = Origin {
-        run_id: run_id.clone(),
-        kind: RunKind::Chat,
-        agent_id: Some(agent.id.clone()),
-        chat_id: Some(chat_id.clone()),
-        job_id: None,
-        title: format!("{} · {title}", agent.name),
-    };
-    let model_name = model.as_ref().map(|m| m.name.clone());
-    let host = agent_host(&app, &s, Some(&agent), model, Some(jail), Some(origin));
-    syslog::log(
-        Level::Info,
-        "runs",
-        format!("Resuming a paused run: {} · {title}", agent.name),
-        &[("run", &run_id)],
-    );
-    start(
-        &app,
-        &state,
-        Launch {
-            run_id: run_id.clone(),
-            file: run.file,
-            host,
-            inputs: run.inputs,
-            agent: Some(agent),
-            chat: Some((chat_id, title)),
-            source: "chat",
-            model: model_name,
-            resume: Some(run.state),
-            first: run.first,
-            earlier_ms: run.elapsed_ms,
-            earlier,
-        },
-    );
-    Ok(run_id)
+pub fn resume_run(app: AppHandle, agent_id: String, chat_id: String) -> CmdResult<String> {
+    session::resume_run(&AppPlatform::new(&app), &agent_id, &chat_id)
 }
 
 /// Throws away a chat's paused run, after asking. Returns whether it did.
@@ -456,7 +260,7 @@ pub async fn discard_paused(
     agent_id: String,
     chat_id: String,
 ) -> CmdResult<bool> {
-    if !paused::is_paused(&state, &agent_id, &chat_id) {
+    if !state.session.is_paused(&agent_id, &chat_id) {
         return Ok(false);
     }
     if !crate::dialogs::confirm(
@@ -471,220 +275,19 @@ pub async fn discard_paused(
     {
         return Ok(false);
     }
-    paused::discard(&app, &state, &agent_id, &chat_id)?;
-    append(
-        &app,
-        &state,
-        &agent_id,
-        &chat_id,
-        ChatMessage {
-            id: msg_id(),
-            role: "notice".into(),
-            text: "The paused run was discarded.".into(),
-            at: now(),
-            from: None,
-            run: None,
-        },
-    )?;
+    session::discard_paused(&AppPlatform::new(&app), &agent_id, &chat_id)?;
     Ok(true)
-}
-
-pub fn stop_agent_runs(state: &AppState, agent_id: &str) {
-    for r in lock(&state.runs).values() {
-        if r.agent_id.as_deref() == Some(agent_id) {
-            r.cancel.store(true, Ordering::Relaxed);
-            state.asks.withdraw_run(&r.run_id);
-        }
-    }
-}
-
-/// Stops every run (when quitting).
-pub fn stop_all_runs(state: &AppState) {
-    for r in lock(&state.runs).values() {
-        r.cancel.store(true, Ordering::Relaxed);
-        state.asks.withdraw_run(&r.run_id);
-    }
-}
-
-/// What, if anything, is using an agent right now, in words. With
-/// `for_chat`, only a test run counts: an agent's chats and jobs run side by
-/// side (a job is like a chat in the background), but a test run in the loop
-/// editor has the agent to itself. Without it, any run counts (to start a
-/// test run).
-pub fn agent_busy_with(state: &AppState, agent_id: &str, for_chat: bool) -> Option<String> {
-    lock(&state.runs)
-        .values()
-        .filter(|r| !for_chat || r.source == "test")
-        .find(|r| r.agent_id.as_deref() == Some(agent_id))
-        .map(|r| match r.source {
-            "job" => format!("the job “{}”", r.title),
-            "test" => "a test run in the loop editor".to_string(),
-            _ => match &r.chat_title {
-                Some(t) => format!("the chat “{t}”"),
-                None => "a chat".to_string(),
-            },
-        })
-}
-
-/// Whether a chat is working on a message.
-pub fn chat_busy(state: &AppState, chat_id: &str) -> bool {
-    lock(&state.runs)
-        .values()
-        .any(|r| r.chat_id.as_deref() == Some(chat_id))
-}
-
-fn new_run_id() -> String {
-    format!("run-{}", msg_id())
-}
-
-/// Everything an agent needs to run: its loop (or `loop_id` instead) and
-/// its opened workspace.
-pub fn prepare(
-    state: &AppState,
-    s: &Settings,
-    agent: &Agent,
-    loop_id: Option<&str>,
-) -> CmdResult<(LoopFile, Jail)> {
-    let id = loop_id.unwrap_or(&agent.loop_id);
-    let original = state.library.load(id).map_err(|_| match loop_id {
-        Some(_) => format!("The loop “{id}” is missing. Choose another for the job."),
-        None => format!(
-            "“{}”'s loop is missing. Choose one in Settings → Agents.",
-            agent.name
-        ),
-    })?;
-    // Only reviewed (or built-in, or user-made) loops run.
-    if !state.trusted(&original) {
-        return Err(format!(
-            "The loop “{}” hasn't been reviewed, so it can't run. Open it in the loop editor to review it.",
-            original.name
-        ));
-    }
-    // The agent's own block settings (Agent Loop Configuration).
-    let (file, _missing) = original.with_overrides(&agent.overrides(id));
-    let analysis = analyze(&file);
-    if let Some(e) = analysis
-        .issues
-        .iter()
-        .find(|i| i.severity == chummy_flow::Severity::Error)
-    {
-        return Err(format!(
-            "The loop “{}” has a problem: {} Fix it in the loop editor.",
-            file.name, e.message
-        ));
-    }
-    let jail = Jail::open(&agent.workspace.path, &state.protected).map_err(|e| {
-        format!(
-            "“{}”'s workspace can't be used: {e}. Choose its folder again in Settings → Agents.",
-            agent.name
-        )
-    })?;
-    if s.agent_model(agent).is_none() {
-        return Err("No model is connected. Add one in Settings → Models.".into());
-    }
-    Ok((file, jail))
 }
 
 /// Sends a chat message to an agent and starts its loop. Returns the run id.
 #[tauri::command]
 pub fn send_message(
     app: AppHandle,
-    state: State<'_, AppState>,
     agent_id: String,
     chat_id: String,
     text: String,
 ) -> CmdResult<String> {
-    let text = text.trim().to_string();
-    if text.is_empty() {
-        return Err("Type a message first.".into());
-    }
-    let s = state.settings();
-    let agent = s
-        .agent(&agent_id)
-        .cloned()
-        .ok_or("That agent no longer exists.")?;
-    let index = chats::index(&state.dirs.chats, &agent_id)?;
-    let Some(chat) = index.chats.iter().find(|c| c.id == chat_id).cloned() else {
-        return Err("That chat no longer exists.".into());
-    };
-    if chat_busy(&state, &chat_id) {
-        return Err("This chat is still working on the last message.".into());
-    }
-    if paused::is_paused(&state, &agent_id, &chat_id) {
-        return Err("This chat has a paused run. Resume it or discard it first.".into());
-    }
-    if let Some(what) = agent_busy_with(&state, &agent_id, true) {
-        return Err(format!("{} is busy with {what}.", agent.name));
-    }
-    let (file, jail) = prepare(&state, &s, &agent, None)?;
-
-    let history: Vec<ChatTurn> = chats::load(&state.dirs.chats, &agent_id, &chat_id)?
-        .into_iter()
-        .filter(|m| m.role == "user" || m.role == "assistant")
-        .map(|m| ChatTurn {
-            role: m.role,
-            text: m.text,
-        })
-        .collect();
-    append(
-        &app,
-        &state,
-        &agent_id,
-        &chat_id,
-        ChatMessage {
-            id: msg_id(),
-            role: "user".into(),
-            text: text.clone(),
-            at: now(),
-            from: None,
-            run: None,
-        },
-    )?;
-
-    let title = if chat.title == chats::NEW_CHAT {
-        chats::title_from(&text)
-    } else {
-        chat.title.clone()
-    };
-    let inputs = RunInputs {
-        message: text,
-        history,
-        overrides: HashMap::new(),
-    };
-    let run_id = new_run_id();
-    let origin = Origin {
-        run_id: run_id.clone(),
-        kind: RunKind::Chat,
-        agent_id: Some(agent.id.clone()),
-        chat_id: Some(chat_id.clone()),
-        job_id: None,
-        title: format!("{} · {title}", agent.name),
-    };
-    let model = s.agent_model(&agent).cloned();
-    let model_name = model.as_ref().map(|m| m.name.clone());
-    let host = agent_host(&app, &s, Some(&agent), model, Some(jail), Some(origin));
-    // A chat's first message: once answered, the chat may be named by the
-    // model (only with "Use model within app" on; see crate::in_app).
-    let first = inputs.history.is_empty();
-    start(
-        &app,
-        &state,
-        Launch {
-            run_id: run_id.clone(),
-            file,
-            host,
-            inputs,
-            agent: Some(agent),
-            chat: Some((chat_id, title)),
-            source: "chat",
-            model: model_name,
-            resume: None,
-            first,
-            earlier_ms: 0,
-            earlier: 0,
-        },
-    );
-    Ok(run_id)
+    session::send_message(&AppPlatform::new(&app), &agent_id, &chat_id, &text)
 }
 
 /// Runs a loop from the editor without saving anything to chat. With an
@@ -693,662 +296,16 @@ pub fn send_message(
 #[tauri::command]
 pub fn test_run(
     app: AppHandle,
-    state: State<'_, AppState>,
     file: LoopFile,
     agent_id: Option<String>,
     message: String,
     overrides: HashMap<String, String>,
 ) -> CmdResult<String> {
-    let s = state.settings();
-    let (agent, jail, model) = match agent_id.filter(|a| !a.is_empty()) {
-        Some(id) => {
-            let agent = s
-                .agent(&id)
-                .cloned()
-                .ok_or("That agent no longer exists.")?;
-            if let Some(what) = agent_busy_with(&state, &id, false) {
-                return Err(format!(
-                    "{} is busy with {what}; test without an agent, or wait.",
-                    agent.name
-                ));
-            }
-            let jail = Jail::open(&agent.workspace.path, &state.protected).map_err(err)?;
-            let model = s.agent_model(&agent).cloned();
-            (Some(agent), Some(jail), model)
-        }
-        None => (None, None, s.default_model().cloned()),
-    };
-    if model.is_none() {
-        return Err("No model is connected. Add one in Settings → Models.".into());
-    }
-    let inputs = RunInputs {
-        message,
-        history: vec![],
-        overrides,
-    };
-    let run_id = new_run_id();
-    let origin = Origin {
-        run_id: run_id.clone(),
-        kind: RunKind::Test,
-        agent_id: agent.as_ref().map(|a| a.id.clone()),
-        chat_id: None,
-        job_id: None,
-        title: format!("Test: {}", file.name),
-    };
-    let model_name = model.as_ref().map(|m| m.name.clone());
-    let host = agent_host(&app, &s, agent.as_ref(), model, jail, Some(origin));
-    start(
-        &app,
-        &state,
-        Launch {
-            run_id: run_id.clone(),
-            file,
-            host,
-            inputs,
-            agent,
-            chat: None,
-            source: "test",
-            model: model_name,
-            resume: None,
-            first: false,
-            earlier_ms: 0,
-            earlier: 0,
-        },
-    );
-    Ok(run_id)
-}
-
-/// What a run log says about a run, beyond its [`RunInfo`].
-pub struct RunMeta {
-    pub agent_name: Option<String>,
-    pub loop_name: String,
-    pub model: Option<String>,
-    pub message: String,
-    /// A paused run carrying on: its log continues.
-    pub resumed: bool,
-}
-
-/// Adds a run to the run list, starts its log and tells every window. The
-/// guard takes it off again however the run ends.
-pub fn track(app: &AppHandle, state: &AppState, info: RunInfo, meta: RunMeta) -> RunGuard {
-    lock(&state.runs).insert(info.run_id.clone(), info.clone());
-    let started_at = chummy_log::now_ms();
-    let opts = state.run_log_options();
-    let log = opts
-        .and_then(|opts| {
-            if meta.resumed
-                && let Some(log) = RunLog::resume(&state.run_logs, &info.run_id, opts.clone())
-            {
-                return Some(log);
-            }
-            RunLog::create(
-                &state.run_logs,
-                RunHeader {
-                    run_id: info.run_id.clone(),
-                    title: info.title.clone(),
-                    source: info.source.into(),
-                    agent_id: info.agent_id.clone(),
-                    agent_name: meta.agent_name,
-                    job_id: info.job_id.clone(),
-                    loop_name: meta.loop_name.clone(),
-                    model: meta.model.clone(),
-                    message: meta.message,
-                    started_at,
-                },
-                opts,
-            )
-        })
-        .map(Arc::new);
-    syslog::log(
-        Level::Info,
-        "runs",
-        format!("Started a {} run: {}", info.source, info.title),
-        &[
-            ("run", &info.run_id),
-            ("loop", &meta.loop_name),
-            ("model", meta.model.as_deref().unwrap_or("none")),
-        ],
-    );
-    let guard = RunGuard {
-        app: app.clone(),
-        run_id: info.run_id.clone(),
-        log,
-        started_at,
-        title: info.title.clone(),
-        agent_id: info.agent_id.clone(),
-    };
-    let _ = app.emit(events::RUN_STARTED, info);
-    guard
-}
-
-/// Sends a run's progress to every window, and to its log.
-pub fn emitter(app: &AppHandle, guard: &RunGuard) -> impl FnMut(Event) + Send + use<> {
-    let app = app.clone();
-    let run_id = guard.run_id.clone();
-    let log = guard.log.clone();
-    let (pane, said) = match lock(&app.state::<AppState>().runs).get(&run_id) {
-        Some(r) => (Some(r.pane.clone()), Some(r.said.clone())),
-        None => (None, None),
-    };
-    move |event| {
-        if let Some(l) = &log {
-            l.event(&event);
-        }
-        if let (Event::Pane { text, .. }, Some(pane)) = (&event, &pane) {
-            let mut lines = lock(pane);
-            if lines.len() >= PANE_LINES {
-                lines.pop_front();
-            }
-            lines.push_back(text.clone());
-        }
-        if let (Event::Reply { text, .. }, Some(said)) = (&event, &said) {
-            Said::push(&mut lock(said), "assistant", text);
-        }
-        let _ = app.emit(
-            events::RUN_EVENT,
-            RunEvent {
-                run_id: run_id.clone(),
-                event,
-            },
-        );
-    }
-}
-
-/// A run to start.
-struct Launch {
-    run_id: String,
-    file: LoopFile,
-    host: AppHost,
-    inputs: RunInputs,
-    agent: Option<Agent>,
-    /// The chat a chat run belongs to, and its title. Only chat runs can
-    /// pause.
-    chat: Option<(String, String)>,
-    source: &'static str,
-    model: Option<String>,
-    /// A paused run to carry on (as the same run: `run_id` is its id).
-    resume: Option<RunState>,
-    /// For a resumed run: how long it worked before, in ms, and how many
-    /// replies it had already shown.
-    earlier_ms: u64,
-    earlier: usize,
-    /// The chat's first message: once answered, the chat may be named by
-    /// the model (only with "Use model within app" on; see crate::in_app).
-    first: bool,
-}
-
-fn start(app: &AppHandle, state: &AppState, launch: Launch) {
-    let Launch {
-        run_id,
+    session::test_run(
+        &AppPlatform::new(&app),
         file,
-        host,
-        inputs,
-        agent,
-        chat,
-        source,
-        model,
-        resume,
-        first,
-        earlier_ms,
-        earlier,
-    } = launch;
-    let cancel = Arc::new(AtomicBool::new(false));
-    let resumed = resume.is_some();
-    let pause = chat.is_some().then(|| Arc::new(AtomicBool::new(false)));
-    let (chat_id, chat_title) = chat.unzip();
-    let info = RunInfo {
-        run_id: run_id.clone(),
-        agent_id: agent.as_ref().map(|a| a.id.clone()),
-        chat_id: chat_id.clone(),
-        chat_title: chat_title.clone(),
-        title: agent
-            .as_ref()
-            .map(|a| a.name.clone())
-            .unwrap_or_else(|| format!("Test: {}", file.name)),
-        source,
-        job_id: None,
-        started_at: now(),
-        cancel: cancel.clone(),
-        pausable: pause.is_some(),
-        pause: pause.clone(),
-        resumed_ms: earlier_ms,
-        pane: Default::default(),
-        said: Default::default(),
-    };
-    // However the run ends (even by a panic), it leaves the run list, so
-    // the agent never stays "still working".
-    let meta = RunMeta {
-        agent_name: agent.as_ref().map(|a| a.name.clone()),
-        loop_name: file.name.clone(),
-        model: model.clone(),
-        message: if resumed {
-            format!("(Resumed) {}", inputs.message)
-        } else {
-            inputs.message.clone()
-        },
-        resumed,
-    };
-    let first_message = inputs.message.clone();
-    let guard = track(app, state, info, meta);
-    let app = app.clone();
-    let id = run_id;
-    tauri::async_runtime::spawn(async move {
-        let mut outcome = run_with(
-            &file,
-            &host,
-            &inputs,
-            resume,
-            &cancel,
-            pause.as_deref(),
-            emitter(&app, &guard),
-        )
-        .await;
-        let end = guard.finish(&outcome);
-
-        let state = app.state::<AppState>();
-        let said = lock(&state.runs)
-            .remove(&id)
-            .map(|r| lock(&r.said).clone())
-            .unwrap_or_default();
-        if let (Some(agent), Some(chat)) = (&agent, &chat_id) {
-            let replied = !outcome.replies.is_empty();
-            // The whole run's time, across pauses.
-            let ms = earlier_ms + end.ended_at.saturating_sub(guard.started_at);
-            let paused_state = outcome.paused.take();
-            let mut msgs = messages_for(&outcome, &id, &end, ms, said, earlier, Some(true));
-            // A resumed run is still one response: what it said before
-            // pausing gets the whole run's figures too.
-            if resumed {
-                let summary = summary_for(&outcome, &id, &end, ms);
-                set_run_summary(&app, &state, &agent.id, chat, summary);
-            }
-            // A paused run is kept for the chat to resume; what it said so
-            // far goes to the chat now, with a "Paused" note that goes away
-            // when it carries on.
-            if let (RunStatus::Paused { reason }, Some(st)) = (&outcome.status, paused_state) {
-                let mut run = PausedRun::new(
-                    agent.id.clone(),
-                    chat.clone(),
-                    chat_title.clone().unwrap_or_default(),
-                    agent.workspace.path.clone(),
-                    file.clone(),
-                    inputs.clone(),
-                    *st,
-                    reason.clone(),
-                    first && !replied,
-                    model.clone(),
-                );
-                run.run_id = id.clone();
-                run.elapsed_ms = ms;
-                run.notices = msgs
-                    .iter()
-                    .filter(|m| m.role == "notice")
-                    .map(|m| m.id.clone())
-                    .collect();
-                if !paused::keep(&app, &state, run) {
-                    for m in msgs.iter_mut().filter(|m| m.role == "notice") {
-                        m.text.push_str(NOT_SAVED);
-                    }
-                }
-            }
-            for m in msgs {
-                let _ = append(&app, &state, &agent.id, chat, m);
-            }
-            if first && replied {
-                tauri::async_runtime::spawn(crate::in_app::title_chat(
-                    app.clone(),
-                    agent.id.clone(),
-                    chat.clone(),
-                    first_message,
-                    outcome.replies.join("\n\n"),
-                ));
-            }
-        }
-        let _ = app.emit(
-            events::RUN_FINISHED,
-            RunFinished {
-                run_id: id,
-                agent_id: agent.map(|a| a.id),
-                chat_id,
-                outcome,
-            },
-        );
-        // A job may have been waiting for this agent.
-        if let Some(jobs) = state.jobs.get() {
-            jobs.wake();
-        }
-    });
-}
-
-pub struct RunGuard {
-    app: AppHandle,
-    run_id: String,
-    log: Option<Arc<RunLog>>,
-    started_at: u64,
-    title: String,
-    agent_id: Option<String>,
-}
-
-impl RunGuard {
-    /// Records how the run ended, in its log and the system log, and
-    /// returns that record (with today's use of the model).
-    pub fn finish(&self, o: &RunOutcome) -> RunEnd {
-        let mut end = RunEnd::from_outcome(o);
-        let state = self.app.state::<AppState>();
-        let settings = state.settings();
-        // The model the turn ended on: the block's, else the agent's, else the default.
-        let model = o
-            .usage
-            .model
-            .clone()
-            .or_else(|| {
-                self.agent_id
-                    .as_deref()
-                    .and_then(|a| settings.agent(a))
-                    .and_then(|a| a.model.clone())
-            })
-            .or_else(|| settings.default_provider.clone());
-        if let Some(p) = model.as_deref().and_then(|m| settings.provider(m)) {
-            (end.daily_used, end.daily_allowed) = state.usage.daily(p);
-        }
-        let secs = format!(
-            "{:.1}",
-            end.ended_at.saturating_sub(self.started_at) as f64 / 1000.0
-        );
-        let level = match end.status.as_str() {
-            "failed" => Level::Warn,
-            _ => Level::Info,
-        };
-        let mut fields = vec![
-            ("run", self.run_id.as_str()),
-            ("status", end.status.as_str()),
-            ("seconds", secs.as_str()),
-        ];
-        if let Some(e) = &end.error {
-            fields.push(("error", e.as_str()));
-        }
-        let steps = end.steps.to_string();
-        let calls = end.llm_calls.to_string();
-        fields.push(("steps", &steps));
-        fields.push(("model calls", &calls));
-        syslog::log(
-            level,
-            "runs",
-            format!(
-                "{} {}",
-                self.title,
-                match end.status.as_str() {
-                    "completed" => "finished",
-                    "stopped" => "was stopped",
-                    "failed" => "failed",
-                    "limit" => "hit a limit",
-                    "paused" => "was paused",
-                    _ => "ended",
-                }
-            ),
-            &fields,
-        );
-        if let Some(l) = &self.log {
-            l.end(end.clone());
-        }
-        end
-    }
-}
-
-impl Drop for RunGuard {
-    fn drop(&mut self) {
-        let state = self.app.state::<AppState>();
-        lock(&state.runs).remove(&self.run_id);
-        state.asks.withdraw_run(&self.run_id);
-    }
-}
-
-/// Chat messages that report a finished run.
-/// The chat messages a run leaves: its response in order (replies,
-/// questions, your answers) and any notice, all carrying the run's figures
-/// so the chat shows them as one response with one set of figures.
-/// Added to a "Paused" note when there's no keychain to seal the run with.
-const NOT_SAVED: &str =
-    " There's no system keychain to keep it safely, so it's only kept until Chummy quits.";
-
-#[derive(Clone, Serialize)]
-pub struct ChatRunUpdated {
-    pub agent_id: String,
-    pub chat_id: String,
-    pub summary: RunSummary,
-}
-
-/// Gives a run's earlier messages its latest figures, and tells windows.
-fn set_run_summary(
-    app: &AppHandle,
-    state: &AppState,
-    agent: &str,
-    chat: &str,
-    summary: RunSummary,
-) {
-    if let Ok(true) = chats::set_run_summary(&state.dirs.chats, agent, chat, &summary) {
-        let _ = app.emit(
-            events::CHAT_RUN_UPDATED,
-            ChatRunUpdated {
-                agent_id: agent.to_string(),
-                chat_id: chat.to_string(),
-                summary,
-            },
-        );
-    }
-}
-
-/// A run's figures, as its chat messages carry them.
-fn summary_for(o: &RunOutcome, run_id: &str, end: &RunEnd, ms: u64) -> RunSummary {
-    let status = match &o.status {
-        RunStatus::Paused { .. } => "paused",
-        RunStatus::Completed => "completed",
-        RunStatus::Stopped => "stopped",
-        RunStatus::LimitReached { .. } => "limit",
-        RunStatus::Failed { .. } => "failed",
-    };
-    RunSummary {
-        run_id: run_id.into(),
-        status: status.into(),
-        steps: o.steps,
-        llm_calls: o.llm_calls,
-        tool_calls: o.tool_calls,
-        ms,
-        tokens: end.tokens_added,
-        context_tokens: end.context_tokens,
-        context_window: end.context_window,
-        daily_used: end.daily_used,
-        daily_allowed: end.daily_allowed,
-    }
-}
-
-/// The chat messages a run (or the part of it since it last paused) adds:
-/// what it said, then a notice of how it ended if that needs saying.
-/// `earlier` replies were already shown before a pause.
-fn messages_for(
-    o: &RunOutcome,
-    run_id: &str,
-    end: &RunEnd,
-    ms: u64,
-    said: Vec<Said>,
-    earlier: usize,
-    // For a paused run: whether it was saved (or is held in memory only).
-    saved: Option<bool>,
-) -> Vec<ChatMessage> {
-    let (status, notice) = match &o.status {
-        RunStatus::Paused { reason } => {
-            let mut text = match reason {
-                Some(why) => format!(
-                    "Paused: {} Resume once the model is back.",
-                    chummy_flow::sentence(why)
-                ),
-                None => "Paused. Resume to carry on where it stopped.".to_string(),
-            };
-            if saved == Some(false) {
-                text.push_str(NOT_SAVED);
-            }
-            ("paused", Some(text))
-        }
-        RunStatus::Completed if o.replies.is_empty() => (
-            "completed",
-            Some(
-                "The loop finished without replying. Does it have a Reply block that gets input?"
-                    .to_string(),
-            ),
-        ),
-        RunStatus::Completed => ("completed", None),
-        RunStatus::Stopped => ("stopped", Some("Stopped.".to_string())),
-        RunStatus::LimitReached { message } => ("limit", Some(message.clone())),
-        // A loop that shows its own reason (like the Chummy assistant's
-        // "I couldn't finish") doesn't need it said twice.
-        RunStatus::Failed { error, .. }
-            if o.replies
-                .last()
-                .is_some_and(|r| !r.trim().is_empty() && error.contains(r.trim())) =>
-        {
-            ("failed", Some("The run ended with this error.".to_string()))
-        }
-        RunStatus::Failed { error, .. } => ("failed", Some(error.clone())),
-    };
-    let summary = summary_for(o, run_id, end, ms);
-    debug_assert_eq!(summary.status, status);
-    let mut parts = said;
-    let new_replies = o.replies.get(earlier..).unwrap_or_default();
-    if !parts.iter().any(|p| p.role == "assistant") && !new_replies.is_empty() {
-        Said::push(&mut parts, "assistant", &new_replies.join("\n\n"));
-    }
-    let mut out: Vec<ChatMessage> = parts
-        .into_iter()
-        .map(|p| ChatMessage {
-            id: msg_id(),
-            role: p.role,
-            text: p.text,
-            at: now(),
-            from: None,
-            run: Some(summary.clone()),
-        })
-        .collect();
-    if let Some(text) = notice {
-        out.push(ChatMessage {
-            id: msg_id(),
-            role: "notice".into(),
-            text,
-            at: now(),
-            from: None,
-            run: Some(summary),
-        });
-    }
-    out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chummy_flow::RunStatus;
-
-    fn outcome(status: RunStatus, replies: &[&str]) -> RunOutcome {
-        RunOutcome {
-            status,
-            replies: replies.iter().map(|s| s.to_string()).collect(),
-            steps: 3,
-            llm_calls: 1,
-            tool_calls: 0,
-            waiting: vec![],
-            usage: Default::default(),
-            paused: None,
-        }
-    }
-
-    #[test]
-    fn a_run_is_one_response_in_order() {
-        let mut said = Vec::new();
-        Said::push(&mut said, "assistant", "Looking.");
-        Said::push(&mut said, "assistant", "Found it.");
-        Said::push(&mut said, "question", "Which one?");
-        Said::push(&mut said, "answer", "The first");
-        Said::push(&mut said, "assistant", "Done.");
-        let o = outcome(
-            RunStatus::Failed {
-                error: "the model server failed".into(),
-                block: None,
-            },
-            &["Looking.", "Found it.", "Done."],
-        );
-        let m = messages_for(&o, "run1", &RunEnd::default(), 1500, said, 0, None);
-        let roles: Vec<&str> = m.iter().map(|m| m.role.as_str()).collect();
-        assert_eq!(
-            roles,
-            ["assistant", "question", "answer", "assistant", "notice"]
-        );
-        assert_eq!(m[0].text, "Looking.\n\nFound it.");
-        // Every part carries the run, so the chat shows one response with
-        // one set of figures and one delete.
-        assert!(m.iter().all(|m| m.run.as_ref().unwrap().run_id == "run1"));
-        assert_eq!(m[4].run.as_ref().unwrap().ms, 1500);
-    }
-
-    #[test]
-    fn a_resumed_run_carries_on_its_response() {
-        // Paused after one reply: what it said, then a "Paused" note (which
-        // goes when it carries on), all as the same run.
-        let mut said = Vec::new();
-        Said::push(&mut said, "assistant", "Looking.");
-        let o = outcome(RunStatus::Paused { reason: None }, &["Looking."]);
-        let m = messages_for(&o, "run1", &RunEnd::default(), 800, said, 0, Some(true));
-        assert_eq!(m.len(), 2);
-        assert_eq!(
-            (
-                m[1].role.as_str(),
-                m[1].run.as_ref().unwrap().status.as_str()
-            ),
-            ("notice", "paused")
-        );
-
-        // Resumed and done, without saying more: the reply from before the
-        // pause isn't repeated, and it doesn't count as "no reply".
-        let o = outcome(RunStatus::Completed, &["Looking."]);
-        let m = messages_for(&o, "run1", &RunEnd::default(), 2000, vec![], 1, None);
-        assert!(m.is_empty(), "{m:?}");
-        let summary = summary_for(&o, "run1", &RunEnd::default(), 2000);
-        assert_eq!((summary.status.as_str(), summary.ms), ("completed", 2000));
-
-        // Resumed and says more: only the new reply.
-        let o = outcome(RunStatus::Completed, &["Looking.", "Found it."]);
-        let m = messages_for(&o, "run1", &RunEnd::default(), 2000, vec![], 1, None);
-        assert_eq!(m.len(), 1);
-        assert_eq!(m[0].text, "Found it.");
-        assert_eq!(m[0].run.as_ref().unwrap().run_id, "run1");
-    }
-
-    #[test]
-    fn a_reason_already_shown_isnt_repeated() {
-        let why = "**I couldn't finish:** it failed 3 times";
-        let o = outcome(
-            RunStatus::Failed {
-                error: format!("Stop with error: {why}"),
-                block: None,
-            },
-            &[why],
-        );
-        let m = messages_for(&o, "r", &RunEnd::default(), 0, vec![], 0, None);
-        assert_eq!(m[1].text, "The run ended with this error.");
-        // Otherwise the error is the notice.
-        let o = outcome(
-            RunStatus::Failed {
-                error: "Work: the server is down".into(),
-                block: None,
-            },
-            &["Looking."],
-        );
-        let m = messages_for(&o, "r", &RunEnd::default(), 0, vec![], 0, None);
-        assert_eq!(m[1].text, "Work: the server is down");
-    }
-
-    #[test]
-    fn replies_are_kept_without_a_record() {
-        let o = outcome(RunStatus::Completed, &["a", "b"]);
-        let m = messages_for(&o, "r", &RunEnd::default(), 0, vec![], 0, None);
-        assert_eq!(m.len(), 1);
-        assert_eq!(m[0].text, "a\n\nb");
-    }
+        agent_id.as_deref(),
+        message,
+        overrides,
+    )
 }

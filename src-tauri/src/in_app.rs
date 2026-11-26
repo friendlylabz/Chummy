@@ -13,9 +13,9 @@ use chummy_flow::{Budget, ExMessage, Host, LlmCall, Role, ToolChoice, strip_thin
 use chummy_log::system::{self as syslog, Level};
 use tauri::{AppHandle, Manager};
 
-use crate::chats;
 use crate::host::agent_host;
 use crate::state::AppState;
+use chummy_session::chats;
 
 const TITLE_SYSTEM: &str = "You name conversations. Reply with only a short title (2 to 6 words), no quotes, no full stop.";
 
@@ -88,7 +88,7 @@ pub async fn title_chat(
     let Some(title) = clean_title(&answer.text) else {
         return;
     };
-    if let Ok(index) = chats::rename(&state.dirs.chats, &agent_id, &chat_id, &title) {
+    if let Ok(index) = chats::rename(&state.chats.root, &agent_id, &chat_id, &title) {
         crate::commands::chat::emit_index(&app, &agent_id, index);
         syslog::log(
             Level::Info,

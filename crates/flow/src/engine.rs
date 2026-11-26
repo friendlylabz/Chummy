@@ -875,6 +875,11 @@ struct Runner<'a, H: Host> {
     usage: TurnUsage,
     /// Set to pause at the next block boundary; `None`: this run can't pause.
     pause: Option<&'a AtomicBool>,
+    /// Set (with `pause`) to pause even partway through a model call (as
+    /// when the program shuts down): the call is dropped, uncounted, and the
+    /// block runs again on resuming. Only while nothing in the block would
+    /// happen twice.
+    hurry: Option<&'a AtomicBool>,
     /// A tool has run in the current block, so it can't be run again from
     /// its inputs: pausing waits for it to finish.
     acted: bool,
@@ -893,7 +898,7 @@ pub async fn run<H: Host>(
     cancel: &AtomicBool,
     on_event: impl FnMut(Event) + Send,
 ) -> RunOutcome {
-    run_with(l, host, inputs, None, cancel, None, on_event).await
+    run_with(l, host, inputs, None, cancel, None, None, on_event).await
 }
 
 fn ended(status: RunStatus) -> RunOutcome {
@@ -912,6 +917,8 @@ fn ended(status: RunStatus) -> RunOutcome {
 /// Runs `l`, or carries on the paused run `resume` of it, until it ends,
 /// is stopped (`cancel`) or pauses (`pause`, which also lets a run pause
 /// when its model can't be reached). Without `pause` the run can't pause.
+/// `hurry` (with `pause`) also cuts a model call short to pause.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_with<H: Host>(
     l: &LoopFile,
     host: &H,
@@ -919,6 +926,7 @@ pub async fn run_with<H: Host>(
     resume: Option<RunState>,
     cancel: &AtomicBool,
     pause: Option<&AtomicBool>,
+    hurry: Option<&AtomicBool>,
     mut on_event: impl FnMut(Event) + Send,
 ) -> RunOutcome {
     let analysis = analyze(l);
@@ -950,6 +958,7 @@ pub async fn run_with<H: Host>(
             tokens_added: 4 + crate::text::estimate_tokens(&inputs.message),
             ..Default::default()
         },
+        hurry: pause.and(hurry),
         pause,
         acted: false,
         resume: VecDeque::new(),
@@ -2572,11 +2581,15 @@ impl<'a, H: Host> Runner<'a, H> {
         };
         let fut = self.host.llm(call, &mut on_text);
         tokio::pin!(fut);
+        // Nothing in this block has happened that can't happen again: a
+        // hurried pause may drop the call (it's asked again on resuming).
+        let can_hurry = self.interruptible();
         let answer = loop {
             tokio::select! {
                 r = &mut fut => break r,
                 Some(t) = rx.recv() => on_event(Event::LlmText { block: block.clone(), text: t }),
                 _ = cancelled(self.cancel) => return Err(Stop::Cancelled.into()),
+                _ = pause_asked(self.hurry), if can_hurry => return Err(paused_here(None)),
             }
         };
         while let Ok(t) = rx.try_recv() {
@@ -2655,6 +2668,10 @@ mod tests {
         /// never), which is then answered only after a moment.
         pause_at_ask: usize,
         pause: std::sync::Arc<AtomicBool>,
+        /// The this-many'th model call (0: none) never answers, and asks for
+        /// a hurried pause, like a program shutting down mid-call.
+        hang_on_call: usize,
+        hurry: std::sync::Arc<AtomicBool>,
     }
 
     fn text(s: &str) -> LlmAnswer {
@@ -2714,6 +2731,11 @@ mod tests {
             }
             if self.pause_after_call == self.calls.lock().unwrap().len() {
                 self.pause.store(true, Ordering::Relaxed);
+            }
+            if self.hang_on_call == self.calls.lock().unwrap().len() {
+                self.pause.store(true, Ordering::Relaxed);
+                self.hurry.store(true, Ordering::Relaxed);
+                std::future::pending::<()>().await;
             }
             let a = self
                 .answers
@@ -4699,9 +4721,16 @@ mod tests {
             ..Default::default()
         };
         let cancel = AtomicBool::new(false);
-        let out = run_with(l, host, &inputs, resume, &cancel, Some(&host.pause), |e| {
-            ev.push(e)
-        })
+        let out = run_with(
+            l,
+            host,
+            &inputs,
+            resume,
+            &cancel,
+            Some(&host.pause),
+            Some(&host.hurry),
+            |e| ev.push(e),
+        )
         .await;
         (out, ev)
     }
@@ -4896,6 +4925,34 @@ mod tests {
         };
         let (o, _) = go(&l, &host, "hi").await;
         assert!(matches!(o.status, RunStatus::Failed { .. }), "{o:?}");
+    }
+
+    #[tokio::test]
+    async fn a_hurried_pause_drops_the_model_call_and_asks_again() {
+        let l = two_step_loop();
+        let host = Fake {
+            hang_on_call: 2,
+            ..Default::default()
+        };
+        let (o, _) = go_pausable(&l, &host, "hi", None).await;
+        assert_eq!(o.status, RunStatus::Paused { reason: None }, "{o:?}");
+        assert_eq!(o.llm_calls, 1, "the dropped call isn't counted");
+        let dropped = host.prompts.lock().unwrap()[1].clone();
+
+        let next = Fake::default();
+        let (o, _) = go_pausable(&l, &next, "hi", Some(saved(&o))).await;
+        assert_eq!(o.status, RunStatus::Completed, "{o:?}");
+        assert_eq!(next.prompts.lock().unwrap()[0], dropped, "asked again");
+        assert_eq!(o.llm_calls, 3);
+
+        // Without the hurry flag, a pause waits for the call to finish.
+        let host = Fake {
+            pause_after_call: 1,
+            ..Default::default()
+        };
+        let (o, _) = go_pausable(&l, &host, "hi", None).await;
+        assert_eq!(o.status, RunStatus::Paused { reason: None }, "{o:?}");
+        assert_eq!(o.llm_calls, 1);
     }
 
     #[tokio::test]

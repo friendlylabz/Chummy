@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-chummyd-open-bundle"
+description = "Enables the chummyd_open_bundle command without any pre-configured scope."
+commands.allow = ["chummyd_open_bundle"]
+
+[[permission]]
+identifier = "deny-chummyd-open-bundle"
+description = "Denies the chummyd_open_bundle command without any pre-configured scope."
+commands.deny = ["chummyd_open_bundle"]

@@ -973,3 +973,65 @@ A history record has `run_id`, `cause` (`schedule`, `catch_up`, `manual` or
 `file` with its path), `status` (`completed`, `failed`, `stopped`, `limit`,
 `missed` or `skipped`), `started_at`, `finished_at`, the `reply` (cut to 8,000
 characters), a `note`, and how many model and tool calls the run made.
+
+## chummyd
+
+### The bundle (`.chummyd`)
+
+chummyd's whole configuration, made by the app's Configure chummyd window
+and read by chummyd at start-up (`crates/bundle`). One file:
+
+```text
+"CHUMMYD\x01"         8 bytes
+header length         u32, little-endian (at most 4 KiB)
+header                JSON: format "chummyd.bundle", version 1, instance_id,
+                      kdf { name "argon2id", memory_kib, iterations, lanes, salt }
+nonce                 24 bytes
+ciphertext            XChaCha20-Poly1305 of the configuration's JSON
+```
+
+The key is Argon2id of the password with the header's settings (new bundles:
+64 MiB, 3 passes, 1 lane; settings outside 8 MiB–1 GiB, 1–10 passes or 1–8
+lanes are refused). The associated data is everything before the nonce, so
+the header can't be changed either. The password must pass a strength check
+(at least 12 characters and about 64 bits by a rough estimate); the app can
+generate one (five groups of five from a 32-character alphabet). Bundles are
+at most 64 MiB, and never extracted to disk.
+
+The configuration (`chummyd.config` v1, strict: unknown fields are refused):
+
+| Field | |
+|---|---|
+| `instance` | `id` (random; binds the state folder), `name`, `time_zone` (IANA) |
+| `limits` | `max_runs`: job runs at once, 1–8 |
+| `permissions`, `tools` | as in the app's settings |
+| `providers`, `default_provider` | model connections (never the built-in engine) |
+| `secrets` | by name, `provider:<id>` for a connection's key |
+| `agents` | `id`, `name`, `loop_id`, `model`, `tools`, `network`, `loop_config`, `model_options`, `channel_approvals` |
+| `loops` | the loops, by id: trusted because the bundle authenticates |
+| `jobs` | `chummy.job` documents |
+| `channels` | `terminal.enabled` |
+| `logging` | `message_text` |
+| `state_key` | 32 bytes, base64: seals the state folder |
+
+`Config::check()` gives errors (chummyd won't start; the app won't export)
+and warnings: no channel; a model connection without its key; an agent with
+tools that ask first but no approvals over channels (they'd always be
+refused).
+
+### The state folder (`<bundle>.state/`)
+
+```text
+lock            held while chummyd runs
+state.sealed    "CHUMMYD-STATE\x01", a 24-byte nonce, XChaCha20-Poly1305 of
+                the state's JSON with the state key; associated data: the
+                magic and the instance id
+tools/          the tools' Python and built-in tools (not secret)
+```
+
+The state (`chummyd.state` v1, strict): `instance_id`, `saved_at`, `chats`
+(conversations: each agent's chat index and messages, at most 500 messages a
+conversation and 50 conversations an agent), `paused` (paused runs by
+`agent/chat`, base64 of the session's `chummy.paused-run` document), `jobs`
+(job state and history) and `usage` (the day's model use). A state file that
+doesn't open stops chummyd; it's never replaced by a fresh one.

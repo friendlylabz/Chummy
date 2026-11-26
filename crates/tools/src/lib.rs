@@ -21,6 +21,7 @@
 //!
 //! There is no unsandboxed mode.
 
+pub mod bundled;
 pub mod host;
 pub mod install;
 pub mod lock;

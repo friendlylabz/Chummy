@@ -9,8 +9,8 @@ use super::CmdResult;
 use super::review;
 use crate::dialogs;
 use crate::events;
-use crate::library::LoopSummary;
 use crate::state::AppState;
+use chummy_agent::library::LoopSummary;
 
 /// Largest loop file Chummy will import.
 const MAX_IMPORT_BYTES: u64 = 2 * 1024 * 1024;

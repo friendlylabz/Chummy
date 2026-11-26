@@ -47,7 +47,7 @@ pub fn status(state: &AppState) -> ToolsStatus {
     ToolsStatus {
         runtime: chummy_tools::python_status(&state.tool_paths),
         python_version: chummy_tools::PYTHON_VERSION,
-        python_bundled: crate::bundled_python::zip().is_ok(),
+        python_bundled: chummy_tools::bundled::zip().is_ok(),
         installing: *lock(&state.tools_installing),
         tools: chummy_tools::installed(&state.tool_paths)
             .into_iter()
@@ -97,7 +97,7 @@ pub fn refresh_builtins(app: &AppHandle) {
     tauri::async_runtime::spawn(async move {
         let state = app.state::<AppState>();
         if chummy_tools::python_status(&state.tool_paths).is_none()
-            && !crate::bundled_python::tools_were_set_up(&state.tool_paths)
+            && !chummy_tools::bundled::tools_were_set_up(&state.tool_paths)
         {
             return;
         }
@@ -145,7 +145,7 @@ pub async fn setup_tools(
     if *lock(&state.tools_installing) {
         return Err("Tools are already being set up.".into());
     }
-    crate::bundled_python::zip()?;
+    chummy_tools::bundled::zip()?;
     let msg = format!(
         "Chummy will set up the Python {} for WebAssembly that comes with it, and download the few packages \
          its built-in tools need from PyPI (pinned, and checked against their hashes). Everything goes in the \
@@ -180,7 +180,7 @@ pub async fn setup_tools(
                 message: "Unpacking Python".into(),
             });
             let paths = state.tool_paths.clone();
-            tokio::task::spawn_blocking(move || crate::bundled_python::install(&paths))
+            tokio::task::spawn_blocking(move || chummy_tools::bundled::install(&paths))
                 .await
                 .map_err(|e| e.to_string())??;
             emit(ToolsProgress::Step {
