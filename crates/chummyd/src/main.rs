@@ -4,8 +4,8 @@
 //! - It reads one encrypted bundle (the whole configuration) when it starts
 //!   and runs that until it stops: nothing can reconfigure it while it runs.
 //! - It listens on nothing. People talk to agents through channels (the
-//!   terminal now; Matrix next), which can only start runs of an agent's
-//!   own loop or carry out commands.
+//!   terminal, and end-to-end encrypted Matrix rooms), which can only
+//!   start runs of an agent's own loop or carry out commands.
 //! - Agents work only in their own folders, `<jail dir>/<agent>/`, which
 //!   are kept apart from the bundle, the password file and the state.
 //! - How runs behave comes from the same crates as the app
@@ -14,6 +14,9 @@
 mod checks;
 mod cli;
 mod jobs;
+mod link;
+#[cfg(feature = "matrix")]
+mod matrix;
 mod password;
 mod platform;
 mod router;
@@ -140,14 +143,13 @@ fn check(a: CheckArgs) -> Result<(), String> {
         let jobs = c.jobs.iter().filter(|j| j.agent == ag.id).count();
         println!("  agent {} [{}]: {jobs} jobs", ag.name, ag.id);
     }
-    println!(
-        "  channels: {}",
-        if c.channels.terminal.enabled {
-            "terminal"
-        } else {
-            "none"
+    println!("  channels: {}", channel_names(&c));
+    if let Some(m) = &c.channels.matrix {
+        println!("  matrix: {} on {}", m.user_id, m.homeserver);
+        for (agent, users) in &m.users {
+            println!("    {agent}: {}", users.join(", "));
         }
-    );
+    }
     for w in &r.warnings {
         println!("  note: {w}");
     }
@@ -155,9 +157,30 @@ fn check(a: CheckArgs) -> Result<(), String> {
     Ok(())
 }
 
+fn channel_names(c: &chummy_bundle::Config) -> String {
+    let mut names = vec![];
+    if c.channels.terminal.enabled {
+        names.push("terminal");
+    }
+    if c.channels.matrix.is_some() {
+        names.push("matrix");
+    }
+    if names.is_empty() {
+        "none".into()
+    } else {
+        names.join(", ")
+    }
+}
+
 async fn run(a: RunArgs) -> Result<(), String> {
     checks::not_root()?;
     let config = Arc::new(open_bundle(&a.bundle, a.password_file.as_deref())?);
+    #[cfg(not(feature = "matrix"))]
+    if config.channels.matrix.is_some() {
+        return Err(
+            "the bundle has a Matrix channel, but this chummyd was built without Matrix".into(),
+        );
+    }
     for w in config.check().warnings {
         syslog::warn("app", w);
     }
@@ -178,9 +201,16 @@ async fn run(a: RunArgs) -> Result<(), String> {
     let key = config
         .state_key_bytes()
         .ok_or("the bundle's state key isn't valid")?;
+    #[cfg(feature = "matrix")]
+    let matrix_key = config
+        .state_key_bytes()
+        .ok_or("the bundle's state key isn't valid")?;
     let (state, saved) = StateDir::open(&paths.state, key, &config.instance.id)?;
     let saved = saved.unwrap_or_else(|| state.blank());
     let tool_paths = ToolPaths::new(state.dir.join("tools"));
+    #[cfg(feature = "matrix")]
+    let matrix_store = state.dir.join("matrix");
+    let matrix_kept: saver::MatrixKept = Arc::new(std::sync::Mutex::new(saved.matrix.clone()));
 
     let (inbox, mut rx) = tokio::sync::mpsc::unbounded_channel::<Input>();
     let p = DaemonPlatform(Arc::new(Inner {
@@ -217,7 +247,7 @@ async fn run(a: RunArgs) -> Result<(), String> {
         config.limits.max_runs as usize,
         tz,
     );
-    let saver = Arc::new(Saver::new(p.clone(), state, store));
+    let saver = Arc::new(Saver::new(p.clone(), state, store, matrix_kept.clone()));
     saver.save_now();
     let saving = saver.every();
     let scheduling = {
@@ -244,15 +274,40 @@ async fn run(a: RunArgs) -> Result<(), String> {
         });
     }
 
+    #[cfg(feature = "matrix")]
+    let to_matrix = config.channels.matrix.is_some().then(|| {
+        matrix::start(
+            p.clone(),
+            saver.clone(),
+            matrix_kept.clone(),
+            matrix_store,
+            matrix_key,
+            inbox.clone(),
+        )
+    });
+    #[cfg(not(feature = "matrix"))]
+    let to_matrix: Option<tokio::sync::mpsc::UnboundedSender<link::ToMatrix>> = {
+        let _ = &matrix_kept;
+        None
+    };
+
     let quit = Arc::new(tokio::sync::Notify::new());
-    let mut router = Router::new(p.clone(), manager.clone(), saver.clone(), quit.clone());
+    let mut router = Router::new(
+        p.clone(),
+        manager.clone(),
+        saver.clone(),
+        to_matrix.clone(),
+        quit.clone(),
+    );
     let routing = tokio::spawn(async move {
         router.greet();
         while let Some(input) = rx.recv().await {
             router.handle(input).await;
         }
     });
-    if config.channels.terminal.enabled {
+    // The terminal: a channel, or (with Matrix) where the operator
+    // confirms verifications.
+    if config.channels.terminal.enabled || to_matrix.is_some() {
         router::read_terminal(inbox.clone());
     }
     syslog::info(
@@ -263,11 +318,7 @@ async fn run(a: RunArgs) -> Result<(), String> {
             config.instance.name,
             config.agents.len(),
             config.jobs.len(),
-            if config.channels.terminal.enabled {
-                "terminal"
-            } else {
-                "none"
-            }
+            channel_names(&config)
         ),
     );
 
@@ -293,8 +344,14 @@ async fn run(a: RunArgs) -> Result<(), String> {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
-    // Let the router show what the runs said last.
+    // Let the router show what the runs said last, and Matrix send it.
     tokio::time::sleep(Duration::from_millis(300)).await;
+    if let Some(m) = &to_matrix {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if m.send(link::ToMatrix::Flush(tx)).is_ok() {
+            let _ = tokio::time::timeout(Duration::from_secs(10), rx).await;
+        }
+    }
     saving.abort();
     saver.save_now();
     routing.abort();

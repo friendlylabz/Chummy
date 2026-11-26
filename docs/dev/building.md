@@ -22,8 +22,17 @@ cargo build -p chummyd --release   # chummyd (not built by default)
 
 chummyd is in the workspace but not in `default-members`, so `cargo build`
 and the app's builds don't build it; `--workspace` (as CI uses) does. Its end
-to end tests (`crates/chummyd/tests/terminal.rs`) skip themselves when run as
-root or Administrator, which chummyd refuses.
+to end tests (`crates/chummyd/tests/`) skip themselves when run as root or
+Administrator, which chummyd refuses. The Matrix channel is the `matrix`
+feature, on by default (`--no-default-features` builds chummyd without it,
+and without matrix-sdk). Its end to end test runs against a real Synapse:
+
+```sh
+python3 -m venv /tmp/synapse && /tmp/synapse/bin/pip install matrix-synapse
+CHUMMY_TEST_SYNAPSE=/tmp/synapse/bin/python cargo test -p chummyd --test matrix
+```
+
+Without `CHUMMY_TEST_SYNAPSE` it's skipped.
 
 Checks (CI runs all of them, and so should you before committing):
 

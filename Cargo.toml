@@ -68,6 +68,11 @@ strip = true
 
 # Compiling the WebAssembly Python is slow with an unoptimized compiler, so
 # optimize the compiler even in debug builds.
+# Debug info for our own crates only: dependencies' (matrix-sdk's above all)
+# would take many gigabytes and slow every build.
+[profile.dev.package."*"]
+debug = false
+
 # Bundles' Argon2id takes seconds without optimizing.
 [profile.dev.package.argon2]
 opt-level = 3

@@ -800,6 +800,22 @@ parsed before anything reaches a model and only come from what people type;
 approvals over channels are off per agent and refused automatically; logs go
 to standard error with no message text unless the bundle allows it.
 
+**chummyd's Matrix channel** (M2): end-to-end encrypted rooms only, made by
+chummyd (invite-only, only chummyd can invite or change them); a message is
+acted on only if it's in one of those rooms, from that room's allowed person,
+encrypted, and from a session verified by cross-signing (a session started
+before the person verified is checked against the device's current trust,
+since the SDK keeps a session's first verdict). Verification takes both sides
+comparing emoji, chummyd's side confirmed by the operator in its terminal, and
+is accepted only from allowed people. Edits, reactions, redactions, other
+people, crowded rooms and messages older than ten minutes are ignored;
+invites are refused. The access token is in the sealed state; the SDK's keys
+are in SQLite stores encrypted with a passphrase from the state key; key
+backup is off. Uploads go through the agent's jail, with cleaned,
+de-duplicated names, under a size cap. *Known limits:* the bot password sits
+in the bundle (needed for cross-signing's password check); restoring an old
+state folder rolls the Matrix keys back (people may need to verify again).
+
 chummyd, the background service being built, raises the stakes
 (unattended hosts, answers from messaging apps). Its design keeps it
 narrow: no listening API (only outgoing channel connections), a

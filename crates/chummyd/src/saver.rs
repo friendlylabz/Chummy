@@ -3,6 +3,9 @@
 
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
+
+/// What the Matrix channel keeps in the state (its login and rooms).
+pub type MatrixKept = Arc<Mutex<Option<serde_json::Value>>>;
 use std::time::Duration;
 
 use chummy_scheduler::JobStore;
@@ -17,16 +20,18 @@ pub struct Saver {
     p: DaemonPlatform,
     state: StateDir,
     jobs: JobStore,
+    matrix: MatrixKept,
     /// One save at a time.
     busy: Mutex<()>,
 }
 
 impl Saver {
-    pub fn new(p: DaemonPlatform, state: StateDir, jobs: JobStore) -> Self {
+    pub fn new(p: DaemonPlatform, state: StateDir, jobs: JobStore, matrix: MatrixKept) -> Self {
         Self {
             p,
             state,
             jobs,
+            matrix,
             busy: Mutex::new(()),
         }
     }
@@ -42,6 +47,11 @@ impl Saver {
         s.paused = inner.paused.snapshot();
         s.jobs = self.jobs.snapshot();
         s.usage = inner.session.usage.snapshot();
+        s.matrix = self
+            .matrix
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         if let Err(e) = self.state.save(&s) {
             inner.dirty.store(true, Ordering::Relaxed);
             chummy_log::system::error("state", format!("Couldn't save the state: {e}"));

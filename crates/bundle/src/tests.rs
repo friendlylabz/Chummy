@@ -130,3 +130,57 @@ fn unknown_fields_and_other_instances_are_refused() {
     other.state_key = "short".into();
     assert!(!other.check().ok());
 }
+
+#[test]
+fn the_matrix_channel_is_checked() {
+    let mut c = config();
+    c.jobs.push({
+        let mut j = chummy_scheduler::Job::new("digest", "Digest", "helper");
+        j.message = "hi".into();
+        j
+    });
+    c.channels.matrix = Some(MatrixChannel {
+        homeserver: "https://matrix.example.org".into(),
+        user_id: "@chummyd:example.org".into(),
+        password: "bot password".into(),
+        users: [("helper".to_string(), vec!["@me:example.org".to_string()])].into(),
+        report_to: [("digest".to_string(), "@me:example.org".to_string())].into(),
+        upload_mb: 100,
+    });
+    let r = c.check();
+    assert!(r.ok() && r.warnings.is_empty(), "{r:?}");
+    // It seals and opens like the rest.
+    let sealed = seal(&c, PASSWORD).unwrap();
+    assert_eq!(open(&sealed, PASSWORD).unwrap(), c);
+
+    let m = c.channels.matrix.as_mut().unwrap();
+    m.homeserver = "http://matrix.example.org".into();
+    m.user_id = "chummyd".into();
+    m.users.insert(
+        "helper".into(),
+        vec!["@chummyd:example.org".into(), "@Me:x".into()],
+    );
+    m.report_to
+        .insert("digest".into(), "@stranger:example.org".into());
+    m.upload_mb = 0;
+    let r = c.check();
+    assert_eq!(r.errors.len(), 5, "{r:?}");
+    // Plain http is fine on the local network.
+    let m = c.channels.matrix.as_mut().unwrap();
+    m.homeserver = "http://127.0.0.1:8008".into();
+    assert!(!c.check().errors.iter().any(|e| e.contains("https")));
+
+    assert!(valid_matrix_id("@alice:localhost:8008"));
+    assert!(!valid_matrix_id("@:x") && !valid_matrix_id("alice:x") && !valid_matrix_id("@a b:x"));
+}
+
+#[test]
+fn version_1_bundles_still_open() {
+    let mut c = config();
+    c.version = 1;
+    assert!(c.check().ok());
+    let sealed = seal(&c, PASSWORD).unwrap();
+    assert_eq!(open(&sealed, PASSWORD).unwrap().version, 1);
+    c.version = 3;
+    assert!(!c.check().ok());
+}

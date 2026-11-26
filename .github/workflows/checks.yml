@@ -102,8 +102,18 @@ jobs:
         run: |
           docker pull python:3.14-slim
           echo "CHUMMY_TEST_DOCKER_IMAGE=python:3.14-slim" >> "$GITHUB_ENV"
+      # chummyd's Matrix channel end to end, against a real homeserver.
+      - name: Synapse for the Matrix test
+        if: runner.os == 'Linux'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/synapse"
+          "$RUNNER_TEMP/synapse/bin/pip" install --quiet matrix-synapse==1.166.0
+          echo "CHUMMY_TEST_SYNAPSE=$RUNNER_TEMP/synapse/bin/python" >> "$GITHUB_ENV"
       - name: Test
         run: cargo test --workspace --locked
+      - name: chummyd without Matrix
+        if: runner.os == 'Linux'
+        run: cargo clippy -p chummyd --all-targets --no-default-features --locked -- -D warnings
       # chummyd runs agents with the app's own crates, but never with Tauri
       # or a webview.
       - name: chummyd doesn't depend on Tauri

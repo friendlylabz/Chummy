@@ -960,9 +960,25 @@ export interface ChummydDraft {
   approvals: string[];
   jobs: string[];
   terminal: boolean;
+  /** The Matrix channel, if it's on. */
+  matrix?: ChummydMatrix | null;
   message_text: boolean;
   /** An opened bundle this one replaces. */
   base?: string | null;
+}
+
+export interface ChummydMatrix {
+  homeserver: string;
+  user_id: string;
+  /** Typed here; empty keeps the opened bundle's. Never sent back. */
+  password: string;
+  /** The opened bundle has one. */
+  has_password: boolean;
+  /** Who may talk to each agent (Matrix IDs), by agent id. */
+  users: Record<string, string[]>;
+  /** Who each job reports to, by job id. */
+  report_to: Record<string, string>;
+  upload_mb: number;
 }
 
 export interface ChummydReport {
@@ -1137,6 +1153,8 @@ export const commands = {
     call<ChummydSources>("chummyd_sources", undefined, () => ({ agents: [], jobs: [], time_zone: "UTC" })),
   chummydCheck: (draft: ChummydDraft) =>
     call<ChummydReport>("chummyd_check", { draft }, () => ({ errors: [], warnings: [] })),
+  chummydCheckHomeserver: (url: string) =>
+    call<string>("chummyd_check_homeserver", { url }, () => "The homeserver answers (Matrix v1.12)."),
   chummydPasswordProblem: (password: string) =>
     call<string | null>("chummyd_password_problem", { password }, () => null),
   chummydGeneratePassword: () => call<string>("chummyd_generate_password", undefined, () => "abcde-fghij-kmnpq-rstuv-wxyz2"),

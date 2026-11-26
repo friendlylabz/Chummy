@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-chummyd-check-homeserver"
+description = "Enables the chummyd_check_homeserver command without any pre-configured scope."
+commands.allow = ["chummyd_check_homeserver"]
+
+[[permission]]
+identifier = "deny-chummyd-check-homeserver"
+description = "Denies the chummyd_check_homeserver command without any pre-configured scope."
+commands.deny = ["chummyd_check_homeserver"]

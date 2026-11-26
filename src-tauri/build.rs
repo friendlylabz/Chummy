@@ -64,6 +64,7 @@ fn main() {
             "run_pane",
             "chummyd_sources",
             "chummyd_check",
+            "chummyd_check_homeserver",
             "chummyd_password_problem",
             "chummyd_generate_password",
             "chummyd_open_bundle",

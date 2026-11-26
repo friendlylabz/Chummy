@@ -7,6 +7,8 @@
 //!   state.sealed    "CHUMMYD-STATE\x01", a 24-byte nonce, then
 //!                   XChaCha20-Poly1305 of the saved state's JSON
 //!   tools/          the tools' Python and built-in tools (not secret)
+//!   matrix/         the Matrix channel's SQLite stores (its end-to-end
+//!                   keys), encrypted with a passphrase from the state key
 //! ```
 //!
 //! The associated data is the magic and the instance id, so a state file
@@ -50,6 +52,9 @@ pub struct Saved {
     /// The day's model use (`UsageLedger::snapshot`).
     #[serde(default)]
     pub usage: serde_json::Value,
+    /// The Matrix channel's login (access token, device) and rooms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matrix: Option<serde_json::Value>,
 }
 
 pub struct StateDir {

@@ -130,9 +130,9 @@ Ideas for later:
 
 ## chummyd: the background job service
 
-Status: **being built.** M0 (sharing the app's agent code) and M1 (the
+Status: **being built.** M0 (sharing the app's agent code), M1 (the
 headless runner with the terminal channel, and the Configure chummyd window)
-are done: see [chummyd](../user/chummyd.md) and the
+and M2 (the Matrix channel) are done: see [chummyd](../user/chummyd.md) and the
 [file formats](file-formats.md#chummyd). The rest is the plan agreed in
 November 2026. This section is the master plan for
 building chummyd, and the reference for keeping Chummy's code ready for it.
@@ -210,8 +210,8 @@ generated passphrase).
 - `state.sealed`, encrypted with the state key and bound to the instance:
   conversation histories, paused runs, waiting questions, job state and
   history, daily usage, channel positions.
-- The Matrix SDK's SQLite stores, their private data encrypted with the
-  state key as the passphrase.
+- The Matrix SDK's SQLite stores, their private data encrypted with a
+  passphrase derived from the state key.
 - **Saving:** the SDK commits its crypto changes itself; everything else is
   saved when changed (at most every ~30 s), after a run finishes or pauses,
   and on shutdown (temp file, flush, rename, flush the folder).
@@ -229,8 +229,13 @@ generated passphrase).
   in the bundle: conversations are one-to-one, even with several allowed
   users. Only allowed users, from verified devices. On first start chummyd
   sets up cross-signing for the bot; the user verifies it from Element with
-  the emoji comparison (chummyd prints the emoji in its log), and only
-  allowed users may verify.
+  the emoji comparison (chummyd prints the emoji in its terminal and the
+  operator confirms with `/verify`), and only allowed users may verify.
+  *Built (M2):* chummyd creates the rooms (encrypted, invite-only, direct,
+  only the bot may invite) and invites the users; questions are answered by
+  replying to them (or by the next message when only one waits); uploads go
+  to `<jail>/uploads/` (100 MB by default); jobs report to one chosen user's
+  room.
 - **Terminal.** Talk to agents in the terminal chummyd runs in (whoever has
   it already entered the password). Off unless the bundle turns it on.
 - **Telegram (later).** Long polling only, never webhooks; allowed user IDs;

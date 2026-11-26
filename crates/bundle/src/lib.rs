@@ -29,7 +29,7 @@ use zeroize::Zeroizing;
 
 pub use config::{
     BundleAgent, CONFIG_FORMAT, CONFIG_VERSION, Channels, Config, Instance, Limits, Logging,
-    MAX_RUNS, Report, TerminalChannel, valid_id,
+    MAX_RUNS, MAX_UPLOAD_MB, MatrixChannel, Report, TerminalChannel, valid_id, valid_matrix_id,
 };
 pub use password::{generate_password, password_problem};
 
@@ -222,7 +222,7 @@ pub fn open_unchecked(bytes: &[u8], password: &str) -> Result<Config, BundleErro
     let config: Config = serde_json::from_slice(&plain).map_err(|e| {
         BundleError::Invalid(vec![format!("Its configuration can't be read: {e}.")])
     })?;
-    if config.format != CONFIG_FORMAT || config.version != CONFIG_VERSION {
+    if config.format != CONFIG_FORMAT || !(1..=CONFIG_VERSION).contains(&config.version) {
         return Err(BundleError::Version);
     }
     if config.instance.id != header.instance_id {

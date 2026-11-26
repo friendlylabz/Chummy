@@ -126,6 +126,36 @@ impl RunView {
     }
 }
 
+/// Splits a message into parts of at most `max` bytes, at paragraph breaks
+/// where it can, else at line breaks or spaces, else anywhere (on a
+/// character boundary). For channels whose messages have a size limit.
+pub fn split(text: &str, max: usize) -> Vec<String> {
+    let max = max.max(16);
+    let mut out = vec![];
+    let mut rest = text;
+    while rest.len() > max {
+        let mut cut = max;
+        while !rest.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let head = &rest[..cut];
+        let at = ["\n\n", "\n", " "]
+            .iter()
+            .find_map(|sep| {
+                head.rfind(sep)
+                    .filter(|i| *i > max / 2)
+                    .map(|i| i + sep.len())
+            })
+            .unwrap_or(cut);
+        out.push(rest[..at].trim_end().to_string());
+        rest = rest[at..].trim_start_matches('\n');
+    }
+    if !rest.is_empty() || out.is_empty() {
+        out.push(rest.to_string());
+    }
+    out
+}
+
 /// A run's figures, worded as the app's chat words them.
 pub fn figures(r: &RunSummary) -> String {
     let n = |x: u64, one: &str| format!("{} {one}{}", group(x), if x == 1 { "" } else { "s" });
@@ -295,6 +325,31 @@ mod tests {
             [Line::Notice("Stopped.".into())]
         );
         assert_eq!(stopwatch(65_300), "1:05.3");
+    }
+
+    #[test]
+    fn long_messages_split_at_paragraphs() {
+        let text = format!(
+            "{}\n\n{}\n{}",
+            "a".repeat(30),
+            "b".repeat(30),
+            "c".repeat(30)
+        );
+        let parts = split(&text, 70);
+        assert_eq!(
+            parts,
+            [
+                format!("{}\n\n{}", "a".repeat(30), "b".repeat(30)),
+                "c".repeat(30)
+            ]
+        );
+        assert!(parts.iter().all(|p| p.len() <= 70));
+        // No break to use: cut on a character boundary.
+        let long = "é".repeat(50);
+        let parts = split(&long, 33);
+        assert!(parts.iter().all(|p| p.len() <= 33) && parts.concat() == long);
+        assert_eq!(split("short", 100), ["short"]);
+        assert_eq!(split("", 100), [""]);
         assert_eq!(stopwatch(3_725_000), "1:02:05.0");
     }
 }

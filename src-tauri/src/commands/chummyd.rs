@@ -7,10 +7,10 @@
 //! the sealed bundle. A bundle opened to change it is kept here (its
 //! instance, state key and keys), and the window only holds a token for it.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Mutex;
 
-use chummy_bundle::{BundleAgent, Config, Report};
+use chummy_bundle::{BundleAgent, Config, MatrixChannel, Report};
 use chummy_log::system::{self as syslog, Level};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State, WebviewWindow};
@@ -62,10 +62,34 @@ pub struct Draft {
     /// Job ids included.
     pub jobs: Vec<String>,
     pub terminal: bool,
+    /// The Matrix channel, if it's on.
+    #[serde(default)]
+    pub matrix: Option<MatrixDraft>,
     pub message_text: bool,
     /// An opened bundle this one replaces (its token).
     #[serde(default)]
     pub base: Option<String>,
+}
+
+/// The Matrix channel as the window edits it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MatrixDraft {
+    pub homeserver: String,
+    pub user_id: String,
+    /// Typed in the window; empty keeps the opened bundle's. Never sent
+    /// back to the window.
+    #[serde(default)]
+    pub password: String,
+    /// The opened bundle has a password (so it can be left empty).
+    #[serde(default)]
+    pub has_password: bool,
+    /// Who may talk to each agent, by agent id.
+    #[serde(default)]
+    pub users: BTreeMap<String, Vec<String>>,
+    /// Who each job reports to, by job id.
+    #[serde(default)]
+    pub report_to: BTreeMap<String, String>,
+    pub upload_mb: u32,
 }
 
 /// A bundle opened to change it.
@@ -143,6 +167,7 @@ fn build(state: &AppState, d: &Draft) -> Result<Config, String> {
     let s = state.settings();
     let name = d.name.trim();
     let mut c = Config::new_instance(name, d.time_zone.trim())?;
+    let mut base_matrix_password = None;
     let base_secrets = match d.base.as_deref() {
         Some(token) => {
             let guard = opened();
@@ -153,6 +178,12 @@ fn build(state: &AppState, d: &Draft) -> Result<Config, String> {
             // The same instance, so its state folder carries on.
             c.instance.id = base.config.instance.id.clone();
             c.state_key = base.config.state_key.clone();
+            base_matrix_password = base
+                .config
+                .channels
+                .matrix
+                .as_ref()
+                .map(|m| m.password.clone());
             base.config.secrets.clone()
         }
         None => Default::default(),
@@ -162,6 +193,38 @@ fn build(state: &AppState, d: &Draft) -> Result<Config, String> {
     c.tools = s.tools.clone();
     c.channels.terminal.enabled = d.terminal;
     c.logging.message_text = d.message_text;
+    if let Some(m) = &d.matrix {
+        let password = if m.password.is_empty() {
+            base_matrix_password.unwrap_or_default()
+        } else {
+            m.password.clone()
+        };
+        let users = |u: &Vec<String>| -> Vec<String> {
+            u.iter()
+                .map(|x| x.trim().to_string())
+                .filter(|x| !x.is_empty())
+                .collect()
+        };
+        c.channels.matrix = Some(MatrixChannel {
+            homeserver: m.homeserver.trim().trim_end_matches('/').to_string(),
+            user_id: m.user_id.trim().to_string(),
+            password,
+            // Only for what's included: unticking an agent or job drops it.
+            users: m
+                .users
+                .iter()
+                .filter(|(a, u)| d.agents.contains(a) && !users(u).is_empty())
+                .map(|(a, u)| (a.clone(), users(u)))
+                .collect(),
+            report_to: m
+                .report_to
+                .iter()
+                .filter(|(j, u)| d.jobs.contains(j) && !u.trim().is_empty())
+                .map(|(j, u)| (j.clone(), u.trim().to_string()))
+                .collect(),
+            upload_mb: m.upload_mb,
+        });
+    }
 
     let mut providers: BTreeSet<String> = BTreeSet::new();
     let add_loop = |c: &mut Config, id: &str| -> Result<(), String> {
@@ -260,6 +323,63 @@ pub fn chummyd_check(state: State<'_, AppState>, draft: Draft) -> Report {
     }
 }
 
+/// Whether a Matrix homeserver answers (its supported versions).
+#[tauri::command]
+pub async fn chummyd_check_homeserver(url: String) -> CmdResult<String> {
+    let url = url.trim().trim_end_matches('/').to_string();
+    if let Some(p) = chummy_llm::endpoint_problem(&url) {
+        return Err(p);
+    }
+    if chummy_llm::unencrypted_remote(&url) {
+        return Err(
+            "The homeserver must use https (plain http only on this computer or your local network)."
+                .into(),
+        );
+    }
+    let client = chummy_http::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let r = client
+        .get(format!("{url}/_matrix/client/versions"))
+        .send()
+        .await
+        .map_err(|e| {
+            format!(
+                "The homeserver didn't answer: {}",
+                chummy_http::describe(&e)
+            )
+        })?;
+    if !r.status().is_success() {
+        return Err(format!(
+            "That doesn't look like a Matrix homeserver (it answered {}).",
+            r.status()
+        ));
+    }
+    #[derive(Deserialize)]
+    struct Versions {
+        versions: Vec<String>,
+    }
+    let v: Versions = r
+        .json()
+        .await
+        .map_err(|_| "That doesn't look like a Matrix homeserver.".to_string())?;
+    let latest = v
+        .versions
+        .iter()
+        .filter(|v| v.starts_with('v'))
+        .max_by(|a, b| {
+            let n = |s: &str| -> Vec<u32> {
+                s[1..].split('.').filter_map(|p| p.parse().ok()).collect()
+            };
+            n(a).cmp(&n(b))
+        });
+    Ok(match latest {
+        Some(l) => format!("The homeserver answers (Matrix {l})."),
+        None => "The homeserver answers.".into(),
+    })
+}
+
 /// Why a password isn't strong enough, if it isn't.
 #[tauri::command]
 pub fn chummyd_password_problem(password: String) -> Option<String> {
@@ -341,6 +461,15 @@ pub async fn chummyd_open_bundle(
         agents,
         jobs,
         terminal: config.channels.terminal.enabled,
+        matrix: config.channels.matrix.as_ref().map(|m| MatrixDraft {
+            homeserver: m.homeserver.clone(),
+            user_id: m.user_id.clone(),
+            password: String::new(),
+            has_password: !m.password.is_empty(),
+            users: m.users.clone(),
+            report_to: m.report_to.clone(),
+            upload_mb: m.upload_mb,
+        }),
         message_text: config.logging.message_text,
         base: Some(chummy_store::random_id(8)),
     };

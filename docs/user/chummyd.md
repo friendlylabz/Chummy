@@ -9,7 +9,8 @@ same code the app uses, until it stops.
   configuration while it runs. To change it, export a new bundle and start
   chummyd again.
 - **No way in from the network.** chummyd listens on nothing. You talk to its
-  agents through *channels*: for now the terminal it runs in.
+  agents through *channels*: the terminal it runs in, and end-to-end
+  encrypted Matrix rooms.
 - **Agents stay in their folders.** Each agent works only in
   `<jail dir>/<agent>/`, which never contains (and is never inside)
   chummyd's own files.
@@ -28,8 +29,9 @@ Open **Configure chummyd** from the main menu.
    so tools that ask first won't run. Turn it on only for an agent that needs
    it: a remote "allow" is what a prompt injection would hope for.
 4. Include the jobs it runs (their agent must be included).
-5. Choose the channels, and whether chummyd's logs may include message text
-   (off: they say what happened, never what was said).
+5. Choose the channels (for Matrix, see [below](#4-talk-to-it-in-matrix)),
+   and whether chummyd's logs may include message text (off: they say what
+   happened, never what was said).
 6. **Check** shows what chummyd would say at start-up: errors to fix, and
    warnings worth knowing.
 7. Choose a password, or **Generate** one. The bundle holds the API keys of
@@ -102,7 +104,7 @@ services:
       - jails:/jails
       - state:/state
     secrets: [chummyd_password]
-    stdin_open: true   # for the terminal channel (docker attach)
+    stdin_open: true   # the terminal channel, and /verify (docker attach)
     tty: true
 secrets:
   chummyd_password:
@@ -137,3 +139,94 @@ terminal too.
 
 The system log (what chummyd does, never message text unless the bundle
 allows it) goes to standard error; the conversation to standard output.
+
+## 4. Talk to it in Matrix
+
+With the Matrix channel, each person you allow gets an end-to-end encrypted
+room with each agent, on your own homeserver (or any homeserver). chummyd
+makes the rooms and invites people; you just accept the invite.
+
+### Set it up
+
+1. **Make an account just for chummyd** on the homeserver, the same way you
+   make any account (say `@chummyd:example.org`). chummyd logs in as it.
+2. In **Configure chummyd**, turn on **Matrix** and fill in:
+   - the **homeserver**'s address (https; plain http only on this computer or
+     your local network). **Check the homeserver** says whether it answers.
+   - **chummyd's Matrix ID** and **its password**. The password goes into the
+     bundle, encrypted: chummyd uses it to log in the first time and to set up
+     its cross-signing. When you open a bundle to change it, leave the password
+     empty to keep the one it has.
+   - **Who may talk to** each agent: Matrix IDs, separated by commas. Each
+     person gets their own room with that agent.
+   - Who each job **reports to**: its results and its questions go to that
+     person's room with the job's agent.
+   - The **largest file** people can send (100 MB unless you change it).
+3. Export the bundle and start chummyd **with a terminal** (or `docker
+   attach` to it): you'll confirm verifications there.
+
+On its first start chummyd logs in, sets up cross-signing, and creates one
+room per agent and person, named like "Helper (My chummyd)". It keeps its
+session and its encryption keys in the state folder (the keys in
+`<state>/matrix/`, encrypted), so later starts carry on as the same session.
+Key backup is off: the keys never leave the state folder.
+
+### Verify chummyd
+
+chummyd only acts on messages from **verified sessions**, so the first thing
+each person does is verify it:
+
+1. Accept the invite to the room. Until you verify, chummyd answers once
+   with "Verify this session to talk to chummyd." and ignores your messages.
+2. In your Matrix app, open chummyd's profile in the room and choose
+   **Verify** (then **Verify by emoji**).
+3. chummyd shows the same seven emoji in its terminal:
+
+   ```text
+   chummyd: @you:example.org (session ABCDEFGHIJ) wants to verify chummyd. Check that they see these emoji, in this order:
+              🐶 Dog   🔑 Key   🌙 Moon   …
+            Then: /verify 1 yes if they match, /verify 1 no if they don't.
+   ```
+
+   Compare them with what your app shows. If they match, type
+   `/verify 1 yes` in chummyd's terminal (or `/verify yes` when only one is
+   waiting) and confirm in your app too. If they don't, `/verify 1 no`:
+   something is in between, and the verification is cancelled.
+
+`/verify` works in chummyd's terminal even when the terminal isn't a channel
+in the bundle. Without a terminal at all, verifications can't be confirmed
+(chummyd says so in its log).
+
+### Talk
+
+Send a message in the room: it goes to that agent. Its reply comes back as
+one message that grows as the run goes (edited at most every two seconds),
+with how the run ended and its figures at the end; long replies are split
+over several messages. The commands are the terminal's, except `/agents`,
+`/agent` and `/quit` (each room talks to one agent, and only the operator
+stops chummyd).
+
+- **Questions** from the agent come as their own message. Answer by
+  **replying** to it, or just send your answer when it's the only question
+  waiting.
+- **Approvals** (if allowed for the agent) come the same way: answer with
+  `/allow` or `/deny [reason]`.
+- **Files** you send are saved in the agent's folder under `uploads/` (with a
+  safe name, never replacing a file) and chummyd says where. Sending a file
+  doesn't start a run: tell the agent about it in a message.
+- **Jobs** that report to you post their results and questions in your room
+  with their agent.
+
+### What chummyd ignores
+
+chummyd acts only on a message that's in one of its rooms, from that room's
+own person, encrypted, and sent from a session that's verified. Everything else
+is ignored: other people, edits, reactions, deletions, and invites to other
+rooms (refused). If someone else joins a room, chummyd ignores it until they
+leave. A message sent while chummyd was off for more than ten minutes isn't
+run: chummyd says so, and you can send it again.
+
+If the homeserver can't be reached, chummyd keeps running (jobs too) and
+tries again, waiting longer each time. If you remove a person or an agent
+from the bundle, chummyd leaves their room the next time it starts; someone
+who left their room is invited back.

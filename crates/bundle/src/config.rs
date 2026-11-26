@@ -12,7 +12,9 @@ use chummy_scheduler::Job;
 use serde::{Deserialize, Serialize};
 
 pub const CONFIG_FORMAT: &str = "chummyd.config";
-pub const CONFIG_VERSION: u32 = 1;
+/// The version new bundles are written as. Version 1 (before the Matrix
+/// channel) still opens.
+pub const CONFIG_VERSION: u32 = 2;
 /// Most job runs going at once.
 pub const MAX_RUNS: u32 = 8;
 
@@ -106,12 +108,64 @@ pub struct BundleAgent {
 #[serde(deny_unknown_fields, default)]
 pub struct Channels {
     pub terminal: TerminalChannel,
+    /// Talking to agents in Matrix (end-to-end encrypted rooms).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matrix: Option<MatrixChannel>,
 }
 
 impl Channels {
     pub fn any(&self) -> bool {
-        self.terminal.enabled
+        self.terminal.enabled || self.matrix.is_some()
     }
+}
+
+/// Most a file sent over a channel may be, in MB.
+pub const MAX_UPLOAD_MB: u32 = 1024;
+
+/// The Matrix channel: chummyd logs in as its own account (the bot) and
+/// makes one encrypted room for each agent and each person allowed to talk
+/// to it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MatrixChannel {
+    /// The homeserver's address (https, or http only on this computer or
+    /// the local network).
+    pub homeserver: String,
+    /// The bot's Matrix ID (`@name:server`).
+    pub user_id: String,
+    /// The bot's password: to log in the first time, and to set up its
+    /// cross-signing.
+    pub password: String,
+    /// Who may talk to each agent, by agent id (Matrix IDs).
+    #[serde(default)]
+    pub users: BTreeMap<String, Vec<String>>,
+    /// Who each job reports to, by job id (one of its agent's users).
+    #[serde(default)]
+    pub report_to: BTreeMap<String, String>,
+    /// Largest file accepted, in MB.
+    #[serde(default = "default_upload_mb")]
+    pub upload_mb: u32,
+}
+
+fn default_upload_mb() -> u32 {
+    100
+}
+
+/// A Matrix ID (`@localpart:server`): its rough shape, checked before it's
+/// used anywhere.
+pub fn valid_matrix_id(id: &str) -> bool {
+    id.len() <= 255
+        && id.starts_with('@')
+        && id[1..].split_once(':').is_some_and(|(local, server)| {
+            !local.is_empty()
+                && !server.is_empty()
+                && local
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "._=-/+".contains(c))
+                && server
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || ".-:[]".contains(c))
+        })
 }
 
 /// Talking to agents in the terminal chummyd runs in.
@@ -191,7 +245,7 @@ impl Config {
     pub fn check(&self) -> Report {
         let mut r = Report::default();
         let mut err = |s: String| r.errors.push(s);
-        if self.format != CONFIG_FORMAT || self.version != CONFIG_VERSION {
+        if self.format != CONFIG_FORMAT || !(1..=CONFIG_VERSION).contains(&self.version) {
             err("This configuration is from a newer or different version of Chummy.".into());
         }
         if !valid_id(&self.instance.id) {
@@ -313,8 +367,72 @@ impl Config {
             }
         }
 
+        // The Matrix channel.
+        let mut matrix_warnings = vec![];
+        if let Some(m) = &self.channels.matrix {
+            match chummy_llm::endpoint_problem(&m.homeserver) {
+                Some(p) => err(format!("The Matrix homeserver: {p}")),
+                None if chummy_llm::unencrypted_remote(&m.homeserver) => err(
+                    "The Matrix homeserver must use https (plain http only on this computer or your local network)."
+                        .into(),
+                ),
+                None => {}
+            }
+            if !valid_matrix_id(&m.user_id) {
+                err("chummyd's Matrix ID isn't valid (it looks like @name:server).".into());
+            }
+            if m.password.is_empty() {
+                err("Enter chummyd's Matrix password.".into());
+            }
+            if !(1..=MAX_UPLOAD_MB).contains(&m.upload_mb) {
+                err(format!(
+                    "The largest upload must be between 1 and {MAX_UPLOAD_MB} MB."
+                ));
+            }
+            for (agent, users) in &m.users {
+                if !ids.contains(agent.as_str()) {
+                    err("People are allowed to talk to an agent that isn't in the bundle.".into());
+                }
+                for u in users {
+                    if !valid_matrix_id(u) {
+                        err(format!(
+                            "“{u}” isn't a valid Matrix ID (it looks like @name:server)."
+                        ));
+                    } else if *u == m.user_id {
+                        err("chummyd's own Matrix ID can't be one of the people allowed to talk to agents.".into());
+                    }
+                }
+            }
+            for a in &self.agents {
+                if m.users.get(&a.id).is_none_or(|u| u.is_empty()) {
+                    matrix_warnings.push(format!("Nobody may talk to “{}” in Matrix.", a.name));
+                }
+            }
+            for (job, user) in &m.report_to {
+                let Some(j) = self.jobs.iter().find(|j| j.id == *job) else {
+                    err("A job that isn't in the bundle reports to someone.".into());
+                    continue;
+                };
+                if !m.users.get(&j.agent).is_some_and(|u| u.contains(user)) {
+                    err(format!(
+                        "The job “{}” reports to {user}, who isn't allowed to talk to its agent.",
+                        j.name
+                    ));
+                }
+            }
+            for j in &self.jobs {
+                if !m.report_to.contains_key(&j.id) {
+                    matrix_warnings.push(format!(
+                        "The job “{}” doesn't report to anyone in Matrix.",
+                        j.name
+                    ));
+                }
+            }
+        }
+
         // Worth knowing.
         let warn = &mut r.warnings;
+        warn.extend(matrix_warnings);
         if !self.channels.any() {
             warn.push("No channel is on, so nobody can talk to the agents: only jobs run.".into());
         }

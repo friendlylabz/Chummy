@@ -998,7 +998,8 @@ the header can't be changed either. The password must pass a strength check
 generate one (five groups of five from a 32-character alphabet). Bundles are
 at most 64 MiB, and never extracted to disk.
 
-The configuration (`chummyd.config` v1, strict: unknown fields are refused):
+The configuration (`chummyd.config` v2, strict: unknown fields are refused;
+v1, without Matrix, still opens):
 
 | Field | |
 |---|---|
@@ -1010,14 +1011,23 @@ The configuration (`chummyd.config` v1, strict: unknown fields are refused):
 | `agents` | `id`, `name`, `loop_id`, `model`, `tools`, `network`, `loop_config`, `model_options`, `channel_approvals` |
 | `loops` | the loops, by id: trusted because the bundle authenticates |
 | `jobs` | `chummy.job` documents |
-| `channels` | `terminal.enabled` |
+| `channels` | `terminal.enabled`; `matrix` (optional, below) |
 | `logging` | `message_text` |
 | `state_key` | 32 bytes, base64: seals the state folder |
+
+`channels.matrix`: `homeserver` (https, or http only to this computer or
+the local network), `user_id` (chummyd's account, `@name:server`),
+`password` (to log in the first time and for cross-signing's password
+check), `users` (agent id → Matrix IDs allowed to talk to it), `report_to`
+(job id → one of its agent's users), `upload_mb` (1–1024, default 100).
 
 `Config::check()` gives errors (chummyd won't start; the app won't export)
 and warnings: no channel; a model connection without its key; an agent with
 tools that ask first but no approvals over channels (they'd always be
-refused).
+refused); for Matrix, nobody allowed to talk to an agent, or a job that
+reports to no one. Errors include an invalid homeserver or Matrix ID, users
+for agents not in the bundle, chummyd's own ID among the users, and
+`report_to` naming a missing job or someone not allowed for its agent.
 
 ### The state folder (`<bundle>.state/`)
 
@@ -1027,11 +1037,19 @@ state.sealed    "CHUMMYD-STATE\x01", a 24-byte nonce, XChaCha20-Poly1305 of
                 the state's JSON with the state key; associated data: the
                 magic and the instance id
 tools/          the tools' Python and built-in tools (not secret)
+matrix/         the Matrix SDK's SQLite stores (end-to-end keys, room
+                state), encrypted with the passphrase
+                hex(SHA-256("chummyd matrix store" ‖ state key))
 ```
 
 The state (`chummyd.state` v1, strict): `instance_id`, `saved_at`, `chats`
 (conversations: each agent's chat index and messages, at most 500 messages a
-conversation and 50 conversations an agent), `paused` (paused runs by
+conversation and 50 conversations an agent; a Matrix room's conversation is
+`m-` and 16 hex digits of SHA-256 of the person's Matrix ID), `paused` (paused runs by
 `agent/chat`, base64 of the session's `chummy.paused-run` document), `jobs`
-(job state and history) and `usage` (the day's model use). A state file that
+(job state and history), `usage` (the day's model use) and `matrix` (when
+the bundle has Matrix: the bot's `user_id`, its `session` (access token and
+device), whether it's `cross_signed` and has `synced`, and its `rooms`, one
+`{agent, user, room}` each). If the bot's ID changes, the Matrix state and
+stores are thrown away and it logs in afresh. A state file that
 doesn't open stops chummyd; it's never replaced by a fresh one.

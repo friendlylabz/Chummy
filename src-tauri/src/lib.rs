@@ -154,6 +154,7 @@ pub fn run() {
             chat::run_pane,
             chummyd::chummyd_sources,
             chummyd::chummyd_check,
+            chummyd::chummyd_check_homeserver,
             chummyd::chummyd_password_problem,
             chummyd::chummyd_generate_password,
             chummyd::chummyd_open_bundle,
