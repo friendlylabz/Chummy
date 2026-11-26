@@ -96,7 +96,7 @@ ui/              Svelte 5 frontend, one Vite page per window
   index.html     Main window: chat, menu, sessions panel
   editor.html    Loop editor (xyflow)
   settings.html  Settings
-  scheduler.html Scheduler: jobs, schedules, runs
+  automation.html Automation menu: jobs, schedules, runs
   logs.html      Logs: run logs and the system log
   src/lib/ipc.ts The only file that talks to Rust
 ```

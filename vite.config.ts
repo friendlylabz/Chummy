@@ -10,7 +10,7 @@ const pages = {
   main: resolve(ui, "index.html"),
   editor: resolve(ui, "editor.html"),
   settings: resolve(ui, "settings.html"),
-  scheduler: resolve(ui, "scheduler.html"),
+  automation: resolve(ui, "automation.html"),
   logs: resolve(ui, "logs.html"),
   review: resolve(ui, "review.html"),
 };

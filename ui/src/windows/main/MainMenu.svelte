@@ -1,8 +1,5 @@
 <script lang="ts">
   import { commands } from "$lib/ipc";
-  import { setup } from "$lib/stores/setup.svelte";
-  import { settings } from "$lib/stores/settings.svelte";
-  import { chat } from "$lib/stores/chat.svelte";
   import Icon, { type IconName } from "$lib/components/Icon.svelte";
   import ThemeSwitch from "$lib/components/ThemeSwitch.svelte";
 
@@ -16,42 +13,12 @@
     hint?: string;
   }
 
-  // Everything the app offers is reachable from here.
-  const sections: { title: string; items: Item[] }[] = $derived([
-    {
-      title: "Chat",
-      items: [
-        {
-          label: "New chat",
-          icon: "plus",
-          disabled: !setup.ready || !settings.current.active_agent,
-          run: () => chat.create(),
-        },
-      ],
-    },
-    {
-      title: "Agents",
-      items: [
-        { label: "Agents", icon: "bot", run: () => commands.openWindow("settings", "agents") },
-        { label: "Loop editor", icon: "flow", run: () => commands.openWindow("editor") },
-        { label: "Import loop…", icon: "import", run: () => commands.openWindow("editor", "import") },
-      ],
-    },
-    {
-      title: "Automation",
-      items: [
-        { label: "Scheduler", icon: "clock", run: () => commands.openWindow("scheduler") },
-      ],
-    },
-    {
-      title: "History",
-      items: [
-        { label: "Logs", icon: "history", run: () => commands.openWindow("logs") },
-        { label: "Export log key…", icon: "export", run: () => commands.openWindow("settings", "logs:export") },
-        { label: "Import log key…", icon: "import", run: () => commands.openWindow("settings", "logs:import") },
-      ],
-    },
-  ]);
+  // The windows the app offers; Settings and the theme sit at the foot.
+  const items: Item[] = [
+    { label: "Loop editor", icon: "flow", run: () => commands.openWindow("editor") },
+    { label: "Automation", icon: "clock", run: () => commands.openWindow("automation") },
+    { label: "Logs", icon: "history", run: () => commands.openWindow("logs") },
+  ];
 
   function choose(item: Item) {
     if (item.disabled || !item.run) return;
@@ -77,22 +44,17 @@
   </div>
 
   <div class="sections">
-    {#each sections as section (section.title)}
-      <div class="section">
-        <div class="section-title">{section.title}</div>
-        {#each section.items as item (item.label)}
-          <button
-            class="item"
-            type="button"
-            disabled={item.disabled}
-            onclick={() => choose(item)}
-          >
-            <Icon name={item.icon} size={17} />
-            <span class="label">{item.label}</span>
-            {#if item.hint}<span class="hint">{item.hint}</span>{/if}
-          </button>
-        {/each}
-      </div>
+    {#each items as item (item.label)}
+      <button
+        class="item"
+        type="button"
+        disabled={item.disabled}
+        onclick={() => choose(item)}
+      >
+        <Icon name={item.icon} size={17} />
+        <span class="label">{item.label}</span>
+        {#if item.hint}<span class="hint">{item.hint}</span>{/if}
+      </button>
     {/each}
   </div>
 
@@ -188,17 +150,6 @@
     flex: 1;
     overflow-y: auto;
     padding: var(--space-2) var(--space-2);
-  }
-  .section + .section {
-    margin-top: var(--space-4);
-  }
-  .section-title {
-    padding: 0 var(--space-3) var(--space-1);
-    color: var(--text-faint);
-    font-size: var(--text-xs);
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
   }
 
   .item {

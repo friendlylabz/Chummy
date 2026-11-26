@@ -29,7 +29,7 @@ struct TrayItems {
 /// never offers to keep running in the tray.
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open Chummy", true, None::<&str>)?;
-    let scheduler = MenuItem::with_id(app, "scheduler", "Scheduler", true, None::<&str>)?;
+    let automation = MenuItem::with_id(app, "automation", "Automation", true, None::<&str>)?;
     let status = MenuItem::with_id(app, "status", "Nothing running", false, None::<&str>)?;
     let pause = CheckMenuItem::with_id(
         app,
@@ -44,7 +44,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         app,
         &[
             &open,
-            &scheduler,
+            &automation,
             &PredefinedMenuItem::separator(app)?,
             &status,
             &pause,
@@ -58,8 +58,8 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, e| match e.id().as_ref() {
             "open" => windows::show_main(app),
-            "scheduler" => {
-                let _ = windows::open(app, AppWindow::Scheduler, None);
+            "automation" => {
+                let _ = windows::open(app, AppWindow::Automation, None);
             }
             "pause" => {
                 let state = app.state::<AppState>();

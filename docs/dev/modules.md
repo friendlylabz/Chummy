@@ -41,7 +41,7 @@ ui/          Svelte 5 frontend, one Vite page per window
 ## ui/
 
 - Pages: `index.html` (chat), `editor.html` (loop editor), `settings.html`,
-  `scheduler.html`, `logs.html`. Each mounts `src/windows/<name>/`.
+  `automation.html`, `logs.html`. Each mounts `src/windows/<name>/`.
 - `src/lib/ipc.ts`: every type mirrored from Rust and every command
   wrapper (with mocks for `npm run dev` in a browser).
 - `src/lib/stores/`: shared state (settings, live runs, chat, questions,

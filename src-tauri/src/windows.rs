@@ -1,5 +1,5 @@
 //! Secondary windows. The main window is declared in `tauri.conf.json`; the
-//! editor, settings, scheduler, logs and review windows are created on demand. Each is a
+//! editor, settings, automation, logs and review windows are created on demand. Each is a
 //! singleton: opening one that already exists focuses it.
 
 use serde::Deserialize;
@@ -10,7 +10,7 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 pub enum AppWindow {
     Editor,
     Settings,
-    Scheduler,
+    Automation,
     Logs,
     /// Reviewing a loop before it's trusted.
     Review,
@@ -22,7 +22,7 @@ impl AppWindow {
         match self {
             AppWindow::Editor => "editor",
             AppWindow::Settings => "settings",
-            AppWindow::Scheduler => "scheduler",
+            AppWindow::Automation => "automation",
             AppWindow::Logs => "logs",
             AppWindow::Review => "review",
         }
@@ -32,7 +32,7 @@ impl AppWindow {
         match self {
             AppWindow::Editor => "editor.html",
             AppWindow::Settings => "settings.html",
-            AppWindow::Scheduler => "scheduler.html",
+            AppWindow::Automation => "automation.html",
             AppWindow::Logs => "logs.html",
             AppWindow::Review => "review.html",
         }
@@ -42,7 +42,7 @@ impl AppWindow {
         match self {
             AppWindow::Editor => "Chummy — Loop Editor",
             AppWindow::Settings => "Chummy — Settings",
-            AppWindow::Scheduler => "Chummy — Scheduler",
+            AppWindow::Automation => "Chummy — Automation",
             AppWindow::Logs => "Chummy — Logs",
             AppWindow::Review => "Chummy — Review a loop",
         }
@@ -53,7 +53,7 @@ impl AppWindow {
         match self {
             AppWindow::Editor => (1280.0, 800.0, 800.0, 520.0),
             AppWindow::Settings => (860.0, 600.0, 640.0, 440.0),
-            AppWindow::Scheduler => (1000.0, 680.0, 720.0, 480.0),
+            AppWindow::Automation => (1000.0, 680.0, 720.0, 480.0),
             AppWindow::Logs => (1180.0, 760.0, 760.0, 480.0),
             AppWindow::Review => (1120.0, 800.0, 720.0, 520.0),
         }

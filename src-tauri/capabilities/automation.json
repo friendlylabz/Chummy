@@ -1,9 +1,9 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "scheduler",
-  "description": "Scheduler window: jobs, their schedules and runs, and their questions.",
+  "identifier": "automation",
+  "description": "Automation menu: jobs, their schedules and runs, and their questions.",
   "windows": [
-    "scheduler"
+    "automation"
   ],
   "permissions": [
     "core:event:allow-listen",

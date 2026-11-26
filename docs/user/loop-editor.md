@@ -154,6 +154,6 @@ Small models get confused easily. What helps:
 
 For a fixed task (summarise every file dropped in a folder, a daily
 report), build a loop that does just that task, step by step, with fixed
-prompts, and run it from a **scheduled job** (main menu → Scheduler). A job
+prompts, and run it from a **scheduled job** (main menu → **Automation**). A job
 runs as an agent, with exactly that agent's folder, model and permissions.
 See [File formats → Scheduled jobs](../dev/file-formats.md#scheduled-jobs).

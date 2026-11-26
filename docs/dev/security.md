@@ -776,7 +776,7 @@ In rough order of importance:
    yet, so people can't verify what they install. *Next:* signing on all
    three OSes, published checksums, and an updater that checks signatures.
 6. **Cost.** A repeating job with a paid model can add up. Daily token
-   limits (pass 6) cap it per connection, and the Scheduler shows about how
+   limits (pass 6) cap it per connection, and the Automation menu shows about how
    many runs a day a schedule makes. Token counts are what the server
    reports, or an estimate when it reports nothing. *Next:* limits in money
    for providers with known prices.

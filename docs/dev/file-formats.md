@@ -387,7 +387,7 @@ Absolute paths, `..`, and links that point outside the workspace are refused.
 Two things wait for the person using Chummy: an **Ask me** block, and a
 **Run tool** call that needs their OK. Both use the same mechanism: the
 question appears in the agent's chat (or in the editor's run panel for a test
-run, and in the Scheduler for a job), and the run waits until it's answered,
+run, and in the Automation menu for a job), and the run waits until it's answered,
 stopped, or an *Ask me* block's time runs out. Scheduled jobs wait too, and
 Chummy shows a notification.
 
@@ -956,7 +956,7 @@ triggering file that isn't readable text is passed by path only; a job's own
   while paused are skipped, not caught up. Runs started by hand still go.
 - A job that asks the user something (an *Ask me* block, or a tool call that
   needs an OK) waits, shows the question in the agent's chat and the
-  Scheduler, and sends a notification.
+  Automation menu, and sends a notification.
 
 ### State and history
 

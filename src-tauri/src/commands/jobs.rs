@@ -162,9 +162,9 @@ impl JobRunner for AppJobs {
             // No reply text: it may be private, and notifications show on
             // lock screens.
             let body = if problem {
-                "Open the Scheduler to see what happened."
+                "Open the Automation menu to see what happened."
             } else {
-                "Open the Scheduler to see the reply."
+                "Open the Automation menu to see the reply."
             };
             let title = if problem {
                 format!("“{}” didn't finish", job.name)
@@ -180,7 +180,7 @@ fn manager(state: &AppState) -> CmdResult<&chummy_scheduler::Manager<AppJobs>> {
     state
         .jobs
         .get()
-        .ok_or_else(|| "The scheduler is still starting.".to_string())
+        .ok_or_else(|| "Automation is still starting.".to_string())
 }
 
 #[tauri::command]

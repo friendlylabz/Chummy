@@ -15,7 +15,7 @@ export type { Generation, ModelOverrides } from "./generation";
 // ---------------------------------------------------------------- types
 
 export type Theme = "system" | "dark" | "light";
-export type AppWindow = "editor" | "settings" | "scheduler" | "logs" | "review";
+export type AppWindow = "editor" | "settings" | "automation" | "logs" | "review";
 export type ProviderKind =
   | "open_ai_compatible"
   | "open_ai"
