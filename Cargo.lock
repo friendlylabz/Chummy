@@ -823,7 +823,7 @@ dependencies = [
 
 [[package]]
 name = "chummy"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "chummy-agent",
  "chummy-bundle",
@@ -860,7 +860,7 @@ dependencies = [
 
 [[package]]
 name = "chummy-agent"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "chummy-flow",
  "chummy-llm",
@@ -872,7 +872,7 @@ dependencies = [
 
 [[package]]
 name = "chummy-bundle"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "argon2",
  "base64 0.23.1",
@@ -891,7 +891,7 @@ dependencies = [
 
 [[package]]
 name = "chummy-channel"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "chummy-flow",
  "chummy-session",
@@ -899,7 +899,7 @@ dependencies = [
 
 [[package]]
 name = "chummy-flow"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "regex",
  "serde",
@@ -911,7 +911,7 @@ dependencies = [
 
 [[package]]
 name = "chummy-http"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "reqwest",
  "rustls",
@@ -921,7 +921,7 @@ dependencies = [
 
 [[package]]
 name = "chummy-llm"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "chummy-http",
  "futures-util",
@@ -935,7 +935,7 @@ dependencies = [
 
 [[package]]
 name = "chummy-local"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "chummy-http",
  "chummy-llm",
@@ -955,7 +955,7 @@ dependencies = [
 
 [[package]]
 name = "chummy-log"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "argon2",
  "base64 0.23.1",
@@ -972,7 +972,7 @@ dependencies = [
 
 [[package]]
 name = "chummy-runner"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "chummy-flow",
  "chummy-llm",
@@ -990,7 +990,7 @@ dependencies = [
 
 [[package]]
 name = "chummy-sandbox"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "cap-std",
  "dirs",
@@ -1003,7 +1003,7 @@ dependencies = [
 
 [[package]]
 name = "chummy-scheduler"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "chummy-flow",
  "chummy-log",
@@ -1019,7 +1019,7 @@ dependencies = [
 
 [[package]]
 name = "chummy-session"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "chummy-agent",
  "chummy-flow",
@@ -1040,7 +1040,7 @@ dependencies = [
 
 [[package]]
 name = "chummy-store"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "apple-native-keyring-store",
  "base64 0.23.1",
@@ -1058,7 +1058,7 @@ dependencies = [
 
 [[package]]
 name = "chummy-tools"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "chummy-http",
  "chummy-sandbox",
@@ -1078,7 +1078,7 @@ dependencies = [
 
 [[package]]
 name = "chummyd"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "base64 0.23.1",
  "chacha20poly1305",
