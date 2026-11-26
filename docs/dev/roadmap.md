@@ -415,8 +415,9 @@ JSON-RPC 2.0 over length-prefixed frames on the socket or TLS stream:
 - **An inline loop gets exactly the agent's permissions:** the agent's jail,
   model and tools, and the "online tools ask first" rule. It can narrow them
   and nothing else, just like an imported loop in the app.
-- **Executor runs share the queue and limits** with jobs: one run per agent
-  at a time, `max_runs`, and the daily model-call budget.
+- **Executor runs share the queue and limits** with jobs: one run per job,
+  `max_runs`, and the daily model-call budget (an agent's runs go side by
+  side, as in the app).
 
 ### Questions for the user: waiting and answering
 

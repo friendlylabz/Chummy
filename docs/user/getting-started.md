@@ -58,7 +58,10 @@ unsafe* ask before each use unless you change that.
   lets the run finish the step it's on, then keeps everything it has
   done so far. Resume it whenever you like, even after quitting Chummy or
   restarting your computer: the message box and the Sessions panel's
-  **Paused** list show **Resume** (and **Discard**, to throw it away). If
+  **Paused** list show **Resume** (and **Discard**, to throw it away), and
+  so does the paused note in the response itself. Resuming removes the
+  note and carries on in the same response, as if it had never stopped:
+  its time and figures count the whole run, and Agent logs show one log. If
   it was waiting for an answer from you, it pauses straight away and asks
   again when resumed. While one chat is paused you can use others, with
   any agent. If the model can't be reached (the server is off, the

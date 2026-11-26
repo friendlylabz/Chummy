@@ -29,6 +29,12 @@ class ChatStore {
       if (e.agent_id !== this.agentId || e.chat_id !== this.chatId) return;
       if (!this.messages.some((m) => m.id === e.message.id)) this.messages.push(e.message);
     });
+    await events.onChatRunUpdated((e) => {
+      if (e.agent_id !== this.agentId || e.chat_id !== this.chatId) return;
+      this.messages = this.messages.map((m) =>
+        m.run?.run_id === e.summary.run_id ? { ...m, run: e.summary } : m,
+      );
+    });
     await events.onChatMessageDeleted((e) => {
       if (e.agent_id !== this.agentId || e.chat_id !== this.chatId) return;
       this.messages = this.messages.filter((m) => m.id !== e.message_id);

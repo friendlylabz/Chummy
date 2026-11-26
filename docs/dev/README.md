@@ -109,8 +109,8 @@ saved to the chat the message came from. Block ports come from the Rust catalog;
 editor asks Rust for them (`analyze_loop`), so there's a single source of truth.
 
 **Job pipeline:** `chummy_scheduler::Manager` checks schedules and watched
-folders every few seconds, queues what's due (one run per job and per agent,
-missed times skipped or caught up once), and starts runs through a
+folders every few seconds, queues what's due (one run per job; an agent's jobs
+and chats run side by side; missed times skipped or caught up once), and starts runs through a
 `JobRunner`. The app's runner opens the agent's jail and runs the loop with
 `chummy_runner::run_job`, exactly as a chat would. Questions from any run go
 through one `AskBroker` and are answered from the app's windows. None of this

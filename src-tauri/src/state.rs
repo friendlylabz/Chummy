@@ -58,6 +58,10 @@ pub struct RunInfo {
     pub pause: Option<Arc<AtomicBool>>,
     /// Whether it can pause (chat runs).
     pub pausable: bool,
+    /// For a resumed run: how long it had already worked before it paused,
+    /// in ms (the timer goes on from there).
+    #[serde(default)]
+    pub resumed_ms: u64,
     /// What the run's Pane output blocks have shown, oldest first (at most
     /// [`PANE_LINES`]); read with `run_pane`.
     #[serde(skip)]

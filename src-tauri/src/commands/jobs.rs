@@ -29,11 +29,13 @@ pub struct AppJobs {
 }
 
 impl JobRunner for AppJobs {
+    /// Jobs run alongside the agent's chats and other jobs, like a chat in
+    /// the background; only a test run in the loop editor holds them back.
     fn agent_busy(&self, agent: &str) -> bool {
         let state = self.app.state::<AppState>();
         crate::state::lock(&state.runs)
             .values()
-            .any(|r| r.agent_id.as_deref() == Some(agent) && r.source != "job")
+            .any(|r| r.agent_id.as_deref() == Some(agent) && r.source == "test")
     }
 
     async fn run(&self, req: RunRequest) -> RunResult {
@@ -82,6 +84,7 @@ impl JobRunner for AppJobs {
                 cancel: req.cancel.clone(),
                 pause: None,
                 pausable: false,
+                resumed_ms: 0,
                 pane: Default::default(),
                 said: Default::default(),
             },
@@ -90,6 +93,7 @@ impl JobRunner for AppJobs {
                 loop_name: file.name.clone(),
                 model: s.agent_model(&agent).map(|m| m.name.clone()),
                 message: job.message.clone(),
+                resumed: false,
             },
         );
         let tz = TimeZone::system();

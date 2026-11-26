@@ -29,6 +29,9 @@ pub const RUN_SAID: &str = "run:said";
 pub const CHAT_MESSAGE: &str = "chat:message";
 /// Payload: `ChatMessageDeleted`.
 pub const CHAT_MESSAGE_DELETED: &str = "chat:message_deleted";
+/// A run's figures changed on its messages (a resumed run). Payload:
+/// `ChatRunUpdated`.
+pub const CHAT_RUN_UPDATED: &str = "chat:run_updated";
 /// Payload: `ChatMessageRestored` (a deleted message put back by Undo).
 pub const CHAT_MESSAGE_RESTORED: &str = "chat:message_restored";
 /// Payload: `ChatsChanged` (an agent's chat list or open chat changed).

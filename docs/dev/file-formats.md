@@ -136,6 +136,13 @@ optional. Notes, comments and labels never change what a loop does.
   block, which asks again on resuming; the call isn't counted. Runs that
   can't pause (jobs, editor test runs) fail as before. A state that doesn't
   fit the loop exactly (blocks, ports, schedule, function calls) is refused.
+- A resumed run is **the same run**: it keeps its run id, so its run log
+  carries on in the same file (after a "Resumed after a pause." notice; the
+  last `end` entry is the outcome) and its chat messages stay one response.
+  The "Paused" notice messages are deleted on resuming, replies sent before
+  the pause aren't repeated, and on finishing every message of the run gets
+  the run's figures for the whole run, time before the pause included
+  (`chat:run_updated` tells windows).
 
 ### Exchanges and tools
 
@@ -474,7 +481,8 @@ it. It's `CHUMMY-PAUSED-RUN\x01`, a 24-byte nonce, then XChaCha20-Poly1305
 ciphertext of a `chummy.paused-run` v1 JSON document (agent and chat ids,
 the chat title, the agent's workspace path, the loop as it ran with the
 agent's block settings applied, the run's inputs, its `RunState`, when and
-why it paused). The associated data binds it to its agent and chat. Each
+why it paused; the run id, the time it had run so far, and the ids of the
+chat's "Paused" notice messages to remove on resuming). The associated data binds it to its agent and chat. Each
 pause has its own random key, kept only in the OS keychain as
 `paused-run:<agent>:<chat>`; resuming deletes the key, then the file. There's
 no import or export, and a file that doesn't open is deleted. See
@@ -936,9 +944,12 @@ triggering file that isn't readable text is passed by path only; a job's own
 
 - A job runs at most once at a time. A scheduled time that comes while it's
   still running, or waiting to run, is skipped and noted in its history.
-- An agent does one thing at a time. A run waits while the agent is busy (a
-  chat, a test run, or another job), and a chat waits while a job uses the
-  agent.
+- A job is like a chat in the background: it runs alongside the agent's
+  chats and its other jobs, sharing the agent's folder, model and daily
+  limit. Their model calls simply queue at the model server if it answers
+  one at a time (the built-in engine does). Only a test run in the loop
+  editor has the agent to itself: jobs and chats wait for it, and it waits
+  for them.
 - At most *N* runs go at once (Settings → General, 1 by default).
 - A scheduled time noticed more than 10 minutes late counts as missed.
 - **Pause scheduled jobs** stops scheduled and folder runs; times that pass

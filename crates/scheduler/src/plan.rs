@@ -8,8 +8,9 @@
 //! Rules:
 //! - A job runs at most once at a time. A scheduled time that comes while
 //!   it's still running (or waiting to) is skipped and noted.
-//! - An agent does one thing at a time: a run waits while another run, or a
-//!   chat, uses the same agent.
+//! - An agent's jobs run side by side, and alongside its chats, like chats
+//!   in the background. A run waits only while the app says the agent is
+//!   busy (a test run in the loop editor).
 //! - At most `max_running` runs go at once.
 //! - A scheduled time more than [`GRACE_SECONDS`] in the past when it's
 //!   noticed (Chummy was closed, or the computer asleep) is *missed*: skipped,
@@ -321,17 +322,16 @@ impl Planner {
     }
 
     /// The next run that can start now, if any, marked as running.
-    /// `agent_busy` says whether an agent is busy outside the scheduler
-    /// (e.g. answering a chat).
+    /// `agent_busy` says whether an agent can't take a run now (the app: a
+    /// test run uses it).
     pub fn next_start(&mut self, agent_busy: &dyn Fn(&str) -> bool) -> Option<Start> {
         if self.running.len() >= self.max_running {
             return None;
         }
-        let pos = self.queue.iter().position(|s| {
-            !self.running.contains_key(&s.job)
-                && !self.running.values().any(|a| *a == s.agent)
-                && !agent_busy(&s.agent)
-        })?;
+        let pos = self
+            .queue
+            .iter()
+            .position(|s| !self.running.contains_key(&s.job) && !agent_busy(&s.agent))?;
         let start = self.queue.remove(pos)?;
         self.running.insert(start.job.clone(), start.agent.clone());
         Some(start)
@@ -478,7 +478,7 @@ mod tests {
     }
 
     #[test]
-    fn one_run_per_job_and_per_agent() {
+    fn one_run_per_job_and_an_agents_jobs_side_by_side() {
         let mut p = Planner::new(BTreeMap::new(), 3);
         p.set_jobs(
             vec![
@@ -489,11 +489,11 @@ mod tests {
             at("2026-11-22T08:00"),
         );
         p.tick(at("2026-11-22T08:05"), &ny());
-        let first = p.next_start(&not_busy).unwrap();
-        assert_eq!(first.job, "a");
-        // b shares a's agent, so c goes next.
-        assert_eq!(p.next_start(&not_busy).unwrap().job, "c");
-        assert!(p.next_start(&not_busy).is_none());
+        // b shares a's agent and still goes: jobs run side by side.
+        let started: Vec<String> = std::iter::from_fn(|| p.next_start(&not_busy))
+            .map(|s| s.job)
+            .collect();
+        assert_eq!(started, ["a", "b", "c"]);
         // a's next time comes while it's still running: skipped.
         let notes = p.tick(at("2026-11-22T08:10"), &ny());
         assert!(
@@ -507,8 +507,7 @@ mod tests {
                 .any(|n| matches!(n, Note::Skipped { job, .. } if job == "b"))
         );
         p.finished("a", at("2026-11-22T08:11"));
-        assert_eq!(p.next_start(&not_busy).unwrap().job, "b");
-        // An agent busy chatting holds its runs back.
+        // An agent the app says is busy (a test run) holds its runs back.
         p.finished("b", at("2026-11-22T08:12"));
         p.request("a", Cause::Manual, at("2026-11-22T08:12"))
             .unwrap();

@@ -562,12 +562,16 @@ export interface RunInfo {
   started_at: number;
   /** Whether it can be paused (chat runs). */
   pausable: boolean;
+  /** For a resumed run: how long it worked before pausing, in ms. */
+  resumed_ms?: number;
 }
 
 /** A paused chat run, kept until its chat resumes or discards it. */
 export interface PausedInfo {
   agent_id: string;
   chat_id: string;
+  /** The run it carries on as: its response in the chat. */
+  run_id: string;
   chat_title: string;
   /** Unix seconds. */
   paused_at: number;
@@ -1205,6 +1209,9 @@ export const events = {
   onRunSaid: (cb: (e: { run_id: string; role: "question" | "answer"; text: string }) => void) => on("run:said", cb),
   onChatMessage: (cb: (e: { agent_id: string; chat_id: string; message: ChatMessage }) => void) =>
     on("chat:message", cb),
+  /** A run's figures changed on its messages (a resumed run is one response). */
+  onChatRunUpdated: (cb: (e: { agent_id: string; chat_id: string; summary: RunSummary }) => void) =>
+    on("chat:run_updated", cb),
   onChatMessageDeleted: (cb: (e: { agent_id: string; chat_id: string; message_id: string }) => void) =>
     on("chat:message_deleted", cb),
   onChatMessageRestored: (

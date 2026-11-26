@@ -353,6 +353,27 @@ impl RunLog {
         Some(log)
     }
 
+    /// Carries on a paused run's log: later entries are added after the
+    /// "paused" end, so the run keeps one log. `None` if there's no log for
+    /// it (then start a new one).
+    pub fn resume(root: &Path, run_id: &str, opts: LogOptions) -> Option<RunLog> {
+        let path = find(root, run_id)?;
+        let file = OpenOptions::new().append(true).open(&path).ok()?;
+        let bytes = file.metadata().map(|m| m.len()).unwrap_or(0);
+        let log = RunLog {
+            path,
+            out: Mutex::new(Some(BufWriter::new(file))),
+            bytes: Mutex::new(bytes),
+            opts,
+        };
+        log.write(&Entry::Notice {
+            at: now_ms(),
+            block: String::new(),
+            text: "Resumed after a pause.".into(),
+        });
+        Some(log)
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -822,6 +843,46 @@ mod tests {
             let s = search(tmp.path(), &RunQuery::default(), &HashSet::new(), None);
             assert_eq!(s[0].end.as_ref().unwrap().status, "interrupted");
         }
+    }
+
+    #[test]
+    fn a_paused_run_keeps_one_log() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log = RunLog::create(
+            tmp.path(),
+            header("run-p", "Helper", now_ms()),
+            LogOptions::default(),
+        )
+        .unwrap();
+        log.event(&step(1, "before"));
+        log.end(RunEnd {
+            status: "paused".into(),
+            ..RunEnd::default()
+        });
+        drop(log);
+        let paused = search(tmp.path(), &RunQuery::default(), &HashSet::new(), None);
+        assert_eq!(paused[0].end.as_ref().unwrap().status, "paused");
+
+        // Carrying on adds to the same file, after the pause.
+        let log = RunLog::resume(tmp.path(), "run-p", LogOptions::default()).unwrap();
+        log.event(&step(2, "after"));
+        log.end(RunEnd {
+            status: "completed".into(),
+            ..RunEnd::default()
+        });
+        let entries = read(tmp.path(), "run-p", None).unwrap();
+        assert!(matches!(&entries[0], Entry::Start(_)));
+        assert!(
+            entries
+                .iter()
+                .any(|e| matches!(e, Entry::Notice { text, .. } if text.starts_with("Resumed")))
+        );
+        assert!(matches!(entries.last(), Some(Entry::End(e)) if e.status == "completed"));
+        let all = search(tmp.path(), &RunQuery::default(), &HashSet::new(), None);
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].end.as_ref().unwrap().status, "completed");
+        // No log to carry on: the caller starts a new one.
+        assert!(RunLog::resume(tmp.path(), "run-none", LogOptions::default()).is_none());
     }
 
     #[test]

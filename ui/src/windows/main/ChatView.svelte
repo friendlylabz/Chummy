@@ -4,7 +4,8 @@
   import { stopwatch } from "$lib/format";
   import { commands, type Agent } from "$lib/ipc";
   import { chat } from "$lib/stores/chat.svelte";
-  import { runs, type Part } from "$lib/stores/runs.svelte";
+  import { runs, type Part, type RunView } from "$lib/stores/runs.svelte";
+  import { paused } from "$lib/stores/paused.svelte";
   import { asks } from "$lib/stores/asks.svelte";
   import Icon from "$lib/components/Icon.svelte";
   import Button from "$lib/components/Button.svelte";
@@ -47,7 +48,14 @@
 
   let scroller: HTMLDivElement;
   const run = $derived(runs.forChat(chat.chatId));
-  const jobRun = $derived(runs.jobForAgent(agent.id));
+  /** A resumed run carries on in its own response (the last one), not a new one. */
+  const continuing = $derived.by(() => {
+    const last = items.at(-1);
+    return !!run && last?.kind === "run" && last.runId === run.info.run_id;
+  });
+  /** This chat's paused run, resumed from its "Paused" note. */
+  const pausedHere = $derived(run ? undefined : paused.forChat(agent.id, chat.chatId));
+  const jobRuns = $derived(runs.jobsForAgent(agent.id));
   const waiting = $derived(asks.forChat(agent.id, chat.chatId));
   /** The chat's own question, answered from the message box. */
   const composerAsk = $derived(
@@ -156,7 +164,7 @@
 
     <!-- One run's response, as it builds and once saved: replies, questions
          asked along the way with your answers, and how it ended. -->
-    {#snippet response(parts: Part[], status?: string)}
+    {#snippet response(parts: Part[], status?: string, runId?: string)}
       {#each parts as p, i (i)}
         {#if p.role === "assistant"}
           <Formatted text={p.text} />
@@ -168,6 +176,22 @@
           <div class="msg notice in-response">
             <Icon name={status === "stopped" ? "stop" : status === "paused" ? "pause" : "alert"} size={14} />
             <span data-selectable>{p.text}</span>
+            {#if status === "paused" && pausedHere && pausedHere.run_id === runId}
+              <span class="paused-actions">
+                <Button
+                  variant="ghost"
+                  icon="trash"
+                  disabled={paused.busy[pausedHere.chat_id]}
+                  onclick={() => paused.discard(pausedHere)}>Discard</Button
+                >
+                <Button
+                  variant="primary"
+                  icon="play"
+                  disabled={paused.busy[pausedHere.chat_id]}
+                  onclick={() => paused.resume(pausedHere)}>Resume</Button
+                >
+              </span>
+            {/if}
           </div>
         {/if}
       {/each}
@@ -187,10 +211,15 @@
           <div class="msg assistant">
             <div class="avatar"><Icon name="bot" size={15} /></div>
             <div class="body">
-              {@render response(partsOf(item.messages), summary.status)}
-              <MessageSteps runId={item.runId} summary={counts(summary)}>
-                {#snippet end()}{@render del(item.key, ids, "response")}{/snippet}
-              </MessageSteps>
+              {@render response(partsOf(item.messages), summary.status, item.runId)}
+              {#if continuing && run && item.runId === run.info.run_id}
+                {@render response(run.parts)}
+                {@render working(run)}
+              {:else}
+                <MessageSteps runId={item.runId} summary={counts(summary)}>
+                  {#snippet end()}{@render del(item.key, ids, "response")}{/snippet}
+                </MessageSteps>
+              {/if}
             </div>
           </div>
         {:else if item.m.role === "user" || item.m.role === "answer"}
@@ -219,44 +248,54 @@
       </div>
     {/each}
 
-    {#if run}
+    <!-- A working run's progress: its current step, timer, Pause and Stop,
+         and its steps so far. -->
+    {#snippet working(r: RunView)}
+          <div class="activity">
+            <span class="pulse"></span>
+            <span class="step"
+              >{r.pausing
+                ? "Pausing after this step…"
+                : r.currentLabel
+                  ? `${r.currentLabel}…`
+                  : "Working…"}</span
+            >
+            <span class="timer" title="Time since this run started">{elapsed}</span>
+            {#if r.info.pausable}
+              <Button
+                variant="ghost"
+                icon="pause"
+                disabled={r.pausing}
+                onclick={() => runs.pause(r.info.run_id).catch(() => {})}>Pause</Button
+              >
+            {/if}
+            <Button variant="ghost" icon="stop" onclick={() => commands.stopRun(r.info.run_id)}>Stop</Button>
+          </div>
+          {#if r.streaming && !r.waitingForYou}<div class="stream">{r.streaming.slice(-600)}</div>{/if}
+          <MessageSteps runId={r.info.run_id} live={r.entries} />
+    {/snippet}
+
+    {#if run && !continuing}
       <div class="msg assistant live">
         <div class="avatar"><Icon name="bot" size={15} /></div>
         <div class="body">
           {@render response(run.parts)}
-          <div class="activity">
-            <span class="pulse"></span>
-            <span class="step"
-              >{run.pausing
-                ? "Pausing after this step…"
-                : run.currentLabel
-                  ? `${run.currentLabel}…`
-                  : "Working…"}</span
-            >
-            <span class="timer" title="Time since this run started">{elapsed}</span>
-            {#if run.info.pausable}
-              <Button
-                variant="ghost"
-                icon="pause"
-                disabled={run.pausing}
-                onclick={() => runs.pause(run.info.run_id).catch(() => {})}>Pause</Button
-              >
-            {/if}
-            <Button variant="ghost" icon="stop" onclick={() => commands.stopRun(run.info.run_id)}>Stop</Button>
-          </div>
-          {#if run.streaming && !run.waitingForYou}<div class="stream">{run.streaming.slice(-600)}</div>{/if}
-          <MessageSteps runId={run.info.run_id} live={run.entries} />
+          {@render working(run)}
         </div>
       </div>
     {/if}
 
-    {#if jobRun}
+    {#each jobRuns as jobRun (jobRun.info.run_id)}
       <div class="msg notice job">
         <Icon name="clock" size={14} />
-        <span>The job “{jobRun.info.title}” is running as {agent.name}{jobRun.currentLabel ? ` · ${jobRun.currentLabel}` : ""}</span>
+        <span
+          >The job “{jobRun.info.title}” is running as {agent.name} in the background{jobRun.currentLabel
+            ? ` · ${jobRun.currentLabel}`
+            : ""}</span
+        >
         <Button variant="ghost" icon="stop" onclick={() => commands.stopRun(jobRun.info.run_id)}>Stop</Button>
       </div>
-    {/if}
+    {/each}
 
     {#each waiting as p (p.id)}
       <AskCard pending={p} showOrigin={p.origin.kind === "job"} answerHere={p.id !== composerAsk?.id} />
@@ -505,6 +544,14 @@
   .notice.in-response {
     display: flex;
     margin: var(--space-2) 0;
+  }
+  /* Resume and Discard, on a paused run's note. */
+  .paused-actions {
+    display: flex;
+    flex: none;
+    gap: var(--space-1);
+    align-self: center;
+    margin-left: auto;
   }
   .bubble.answer {
     border: 1px dashed color-mix(in srgb, var(--accent) 50%, transparent);

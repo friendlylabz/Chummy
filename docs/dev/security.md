@@ -726,7 +726,7 @@ must never come from anywhere but Chummy itself.
   / `discard_paused` take only ids.
 
 **What resuming checks** (`commands/chat.rs::resume_run`): the agent still
-exists and isn't busy with a job or test; its workspace is the same folder
+exists and isn't in a test run; its workspace is the same folder
 the run started in (otherwise it can't carry on); the folder still opens as
 a jail; a model is connected. Tools, internet access and approvals come
 from the settings **at the time it resumes**: a paused run never brings

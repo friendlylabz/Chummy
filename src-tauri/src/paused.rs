@@ -49,6 +49,15 @@ pub struct PausedRun {
     pub first: bool,
     /// The model's name when it paused, for its run log.
     pub model: Option<String>,
+    /// The run's id: it carries on as the same run (one response, one log).
+    #[serde(default)]
+    pub run_id: String,
+    /// How long it had worked before pausing, in ms.
+    #[serde(default)]
+    pub elapsed_ms: u64,
+    /// The chat's "Paused" notes, removed when it carries on.
+    #[serde(default)]
+    pub notices: Vec<String>,
 }
 
 impl PausedRun {
@@ -79,6 +88,9 @@ impl PausedRun {
             reason,
             first,
             model,
+            run_id: String::new(),
+            elapsed_ms: 0,
+            notices: vec![],
         }
     }
 }
@@ -88,6 +100,8 @@ impl PausedRun {
 pub struct PausedInfo {
     pub agent_id: String,
     pub chat_id: String,
+    /// The run it carries on as (its response in the chat).
+    pub run_id: String,
     pub chat_title: String,
     pub paused_at: u64,
     pub reason: Option<String>,
@@ -109,6 +123,7 @@ fn info(run: &PausedRun, saved: bool) -> PausedInfo {
     PausedInfo {
         agent_id: run.agent_id.clone(),
         chat_id: run.chat_id.clone(),
+        run_id: run.run_id.clone(),
         chat_title: run.chat_title.clone(),
         paused_at: run.paused_at,
         reason: run.reason.clone(),

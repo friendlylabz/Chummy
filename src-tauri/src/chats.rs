@@ -350,6 +350,35 @@ pub fn delete_message(
     Ok((save_index(root, agent, ix)?, removed, pos))
 }
 
+/// Gives every message of a run the run's latest figures (a resumed run's
+/// response stays one response, with figures for the whole run). Returns
+/// whether any message was changed.
+pub fn set_run_summary(
+    root: &Path,
+    agent: &str,
+    chat: &str,
+    summary: &RunSummary,
+) -> Result<bool, String> {
+    let _g = lock();
+    let doc = chat_doc(root, agent, chat)?;
+    let mut log = doc.load(|v| v).map_err(|e| e.to_string())?.value;
+    let mut changed = false;
+    for m in &mut log.messages {
+        if let Some(r) = m.run.as_mut()
+            && r.run_id == summary.run_id
+            && r != summary
+        {
+            *r = summary.clone();
+            changed = true;
+        }
+    }
+    if changed {
+        log.version = 2;
+        doc.save(&log).map_err(|e| e.to_string())?;
+    }
+    Ok(changed)
+}
+
 /// Puts a deleted message back where it was (undo). `position` is clamped to
 /// the chat's length. Returns the updated index and the position used.
 pub fn restore_message(

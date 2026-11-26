@@ -382,12 +382,34 @@ pub fn resume_run(
     }
     // From here it's this run's alone: taken once, never again.
     let run = paused::take(&app, &state, &agent_id, &chat_id)?;
+    // It carries on as if it never stopped: the "Paused" note goes, and it
+    // stays the same run (one response, one log).
+    for note in &run.notices {
+        if let Ok((index, _, _)) =
+            chats::delete_message(&state.dirs.chats, &agent_id, &chat_id, note)
+        {
+            let _ = app.emit(
+                events::CHAT_MESSAGE_DELETED,
+                ChatMessageDeleted {
+                    agent_id: agent_id.clone(),
+                    chat_id: chat_id.clone(),
+                    message_id: note.clone(),
+                },
+            );
+            emit_index(&app, &agent_id, index);
+        }
+    }
     let title = chats::index(&state.dirs.chats, &agent_id)
         .ok()
         .and_then(|ix| ix.chats.into_iter().find(|c| c.id == chat_id))
         .map(|c| c.title)
         .unwrap_or(run.chat_title.clone());
-    let run_id = new_run_id();
+    let run_id = if run.run_id.is_empty() {
+        new_run_id()
+    } else {
+        run.run_id.clone()
+    };
+    let earlier = run.state.replies().len();
     let origin = Origin {
         run_id: run_id.clone(),
         kind: RunKind::Chat,
@@ -418,6 +440,8 @@ pub fn resume_run(
             model: model_name,
             resume: Some(run.state),
             first: run.first,
+            earlier_ms: run.elapsed_ms,
+            earlier,
         },
     );
     Ok(run_id)
@@ -483,12 +507,14 @@ pub fn stop_all_runs(state: &AppState) {
 }
 
 /// What, if anything, is using an agent right now, in words. With
-/// `for_chat`, the agent's other chats don't count: chats run side by side,
-/// but not alongside a job or a test run of the same agent.
+/// `for_chat`, only a test run counts: an agent's chats and jobs run side by
+/// side (a job is like a chat in the background), but a test run in the loop
+/// editor has the agent to itself. Without it, any run counts (to start a
+/// test run).
 pub fn agent_busy_with(state: &AppState, agent_id: &str, for_chat: bool) -> Option<String> {
     lock(&state.runs)
         .values()
-        .filter(|r| !(for_chat && r.source == "chat"))
+        .filter(|r| !for_chat || r.source == "test")
         .find(|r| r.agent_id.as_deref() == Some(agent_id))
         .map(|r| match r.source {
             "job" => format!("the job “{}”", r.title),
@@ -654,6 +680,8 @@ pub fn send_message(
             model: model_name,
             resume: None,
             first,
+            earlier_ms: 0,
+            earlier: 0,
         },
     );
     Ok(run_id)
@@ -723,6 +751,8 @@ pub fn test_run(
             model: model_name,
             resume: None,
             first: false,
+            earlier_ms: 0,
+            earlier: 0,
         },
     );
     Ok(run_id)
@@ -734,6 +764,8 @@ pub struct RunMeta {
     pub loop_name: String,
     pub model: Option<String>,
     pub message: String,
+    /// A paused run carrying on: its log continues.
+    pub resumed: bool,
 }
 
 /// Adds a run to the run list, starts its log and tells every window. The
@@ -744,6 +776,11 @@ pub fn track(app: &AppHandle, state: &AppState, info: RunInfo, meta: RunMeta) ->
     let opts = state.run_log_options();
     let log = opts
         .and_then(|opts| {
+            if meta.resumed
+                && let Some(log) = RunLog::resume(&state.run_logs, &info.run_id, opts.clone())
+            {
+                return Some(log);
+            }
             RunLog::create(
                 &state.run_logs,
                 RunHeader {
@@ -829,8 +866,12 @@ struct Launch {
     chat: Option<(String, String)>,
     source: &'static str,
     model: Option<String>,
-    /// A paused run to carry on.
+    /// A paused run to carry on (as the same run: `run_id` is its id).
     resume: Option<RunState>,
+    /// For a resumed run: how long it worked before, in ms, and how many
+    /// replies it had already shown.
+    earlier_ms: u64,
+    earlier: usize,
     /// The chat's first message: once answered, the chat may be named by
     /// the model (only with "Use model within app" on; see crate::in_app).
     first: bool,
@@ -848,6 +889,8 @@ fn start(app: &AppHandle, state: &AppState, launch: Launch) {
         model,
         resume,
         first,
+        earlier_ms,
+        earlier,
     } = launch;
     let cancel = Arc::new(AtomicBool::new(false));
     let resumed = resume.is_some();
@@ -868,6 +911,7 @@ fn start(app: &AppHandle, state: &AppState, launch: Launch) {
         cancel: cancel.clone(),
         pausable: pause.is_some(),
         pause: pause.clone(),
+        resumed_ms: earlier_ms,
         pane: Default::default(),
         said: Default::default(),
     };
@@ -882,6 +926,7 @@ fn start(app: &AppHandle, state: &AppState, launch: Launch) {
         } else {
             inputs.message.clone()
         },
+        resumed,
     };
     let first_message = inputs.message.clone();
     let guard = track(app, state, info, meta);
@@ -907,32 +952,46 @@ fn start(app: &AppHandle, state: &AppState, launch: Launch) {
             .unwrap_or_default();
         if let (Some(agent), Some(chat)) = (&agent, &chat_id) {
             let replied = !outcome.replies.is_empty();
+            // The whole run's time, across pauses.
+            let ms = earlier_ms + end.ended_at.saturating_sub(guard.started_at);
+            let paused_state = outcome.paused.take();
+            let mut msgs = messages_for(&outcome, &id, &end, ms, said, earlier, Some(true));
+            // A resumed run is still one response: what it said before
+            // pausing gets the whole run's figures too.
+            if resumed {
+                let summary = summary_for(&outcome, &id, &end, ms);
+                set_run_summary(&app, &state, &agent.id, chat, summary);
+            }
             // A paused run is kept for the chat to resume; what it said so
-            // far goes to the chat now.
-            let saved = match (&outcome.status, outcome.paused.take()) {
-                (RunStatus::Paused { reason }, Some(mut st)) => {
-                    st.clear_replies();
-                    Some(paused::keep(
-                        &app,
-                        &state,
-                        PausedRun::new(
-                            agent.id.clone(),
-                            chat.clone(),
-                            chat_title.clone().unwrap_or_default(),
-                            agent.workspace.path.clone(),
-                            file.clone(),
-                            inputs.clone(),
-                            *st,
-                            reason.clone(),
-                            first && !replied,
-                            model.clone(),
-                        ),
-                    ))
+            // far goes to the chat now, with a "Paused" note that goes away
+            // when it carries on.
+            if let (RunStatus::Paused { reason }, Some(st)) = (&outcome.status, paused_state) {
+                let mut run = PausedRun::new(
+                    agent.id.clone(),
+                    chat.clone(),
+                    chat_title.clone().unwrap_or_default(),
+                    agent.workspace.path.clone(),
+                    file.clone(),
+                    inputs.clone(),
+                    *st,
+                    reason.clone(),
+                    first && !replied,
+                    model.clone(),
+                );
+                run.run_id = id.clone();
+                run.elapsed_ms = ms;
+                run.notices = msgs
+                    .iter()
+                    .filter(|m| m.role == "notice")
+                    .map(|m| m.id.clone())
+                    .collect();
+                if !paused::keep(&app, &state, run) {
+                    for m in msgs.iter_mut().filter(|m| m.role == "notice") {
+                        m.text.push_str(NOT_SAVED);
+                    }
                 }
-                _ => None,
-            };
-            let ms = end.ended_at.saturating_sub(guard.started_at);
-            for m in messages_for(&outcome, &id, &end, ms, said, saved) {
+            }
+            for m in msgs {
                 let _ = append(&app, &state, &agent.id, chat, m);
             }
             if first && replied {
@@ -1048,12 +1107,71 @@ impl Drop for RunGuard {
 /// The chat messages a run leaves: its response in order (replies,
 /// questions, your answers) and any notice, all carrying the run's figures
 /// so the chat shows them as one response with one set of figures.
+/// Added to a "Paused" note when there's no keychain to seal the run with.
+const NOT_SAVED: &str =
+    " There's no system keychain to keep it safely, so it's only kept until Chummy quits.";
+
+#[derive(Clone, Serialize)]
+pub struct ChatRunUpdated {
+    pub agent_id: String,
+    pub chat_id: String,
+    pub summary: RunSummary,
+}
+
+/// Gives a run's earlier messages its latest figures, and tells windows.
+fn set_run_summary(
+    app: &AppHandle,
+    state: &AppState,
+    agent: &str,
+    chat: &str,
+    summary: RunSummary,
+) {
+    if let Ok(true) = chats::set_run_summary(&state.dirs.chats, agent, chat, &summary) {
+        let _ = app.emit(
+            events::CHAT_RUN_UPDATED,
+            ChatRunUpdated {
+                agent_id: agent.to_string(),
+                chat_id: chat.to_string(),
+                summary,
+            },
+        );
+    }
+}
+
+/// A run's figures, as its chat messages carry them.
+fn summary_for(o: &RunOutcome, run_id: &str, end: &RunEnd, ms: u64) -> RunSummary {
+    let status = match &o.status {
+        RunStatus::Paused { .. } => "paused",
+        RunStatus::Completed => "completed",
+        RunStatus::Stopped => "stopped",
+        RunStatus::LimitReached { .. } => "limit",
+        RunStatus::Failed { .. } => "failed",
+    };
+    RunSummary {
+        run_id: run_id.into(),
+        status: status.into(),
+        steps: o.steps,
+        llm_calls: o.llm_calls,
+        tool_calls: o.tool_calls,
+        ms,
+        tokens: end.tokens_added,
+        context_tokens: end.context_tokens,
+        context_window: end.context_window,
+        daily_used: end.daily_used,
+        daily_allowed: end.daily_allowed,
+    }
+}
+
+/// The chat messages a run (or the part of it since it last paused) adds:
+/// what it said, then a notice of how it ended if that needs saying.
+/// `earlier` replies were already shown before a pause.
 fn messages_for(
     o: &RunOutcome,
     run_id: &str,
     end: &RunEnd,
     ms: u64,
     said: Vec<Said>,
+    earlier: usize,
     // For a paused run: whether it was saved (or is held in memory only).
     saved: Option<bool>,
 ) -> Vec<ChatMessage> {
@@ -1067,9 +1185,7 @@ fn messages_for(
                 None => "Paused. Resume to carry on where it stopped.".to_string(),
             };
             if saved == Some(false) {
-                text.push_str(
-                    " There's no system keychain to keep it safely, so it's only kept until Chummy quits.",
-                );
+                text.push_str(NOT_SAVED);
             }
             ("paused", Some(text))
         }
@@ -1094,22 +1210,12 @@ fn messages_for(
         }
         RunStatus::Failed { error, .. } => ("failed", Some(error.clone())),
     };
-    let summary = RunSummary {
-        run_id: run_id.into(),
-        status: status.into(),
-        steps: o.steps,
-        llm_calls: o.llm_calls,
-        tool_calls: o.tool_calls,
-        ms,
-        tokens: end.tokens_added,
-        context_tokens: end.context_tokens,
-        context_window: end.context_window,
-        daily_used: end.daily_used,
-        daily_allowed: end.daily_allowed,
-    };
+    let summary = summary_for(o, run_id, end, ms);
+    debug_assert_eq!(summary.status, status);
     let mut parts = said;
-    if !parts.iter().any(|p| p.role == "assistant") && !o.replies.is_empty() {
-        Said::push(&mut parts, "assistant", &o.replies.join("\n\n"));
+    let new_replies = o.replies.get(earlier..).unwrap_or_default();
+    if !parts.iter().any(|p| p.role == "assistant") && !new_replies.is_empty() {
+        Said::push(&mut parts, "assistant", &new_replies.join("\n\n"));
     }
     let mut out: Vec<ChatMessage> = parts
         .into_iter()
@@ -1168,7 +1274,7 @@ mod tests {
             },
             &["Looking.", "Found it.", "Done."],
         );
-        let m = messages_for(&o, "run1", &RunEnd::default(), 1500, said, None);
+        let m = messages_for(&o, "run1", &RunEnd::default(), 1500, said, 0, None);
         let roles: Vec<&str> = m.iter().map(|m| m.role.as_str()).collect();
         assert_eq!(
             roles,
@@ -1182,6 +1288,39 @@ mod tests {
     }
 
     #[test]
+    fn a_resumed_run_carries_on_its_response() {
+        // Paused after one reply: what it said, then a "Paused" note (which
+        // goes when it carries on), all as the same run.
+        let mut said = Vec::new();
+        Said::push(&mut said, "assistant", "Looking.");
+        let o = outcome(RunStatus::Paused { reason: None }, &["Looking."]);
+        let m = messages_for(&o, "run1", &RunEnd::default(), 800, said, 0, Some(true));
+        assert_eq!(m.len(), 2);
+        assert_eq!(
+            (
+                m[1].role.as_str(),
+                m[1].run.as_ref().unwrap().status.as_str()
+            ),
+            ("notice", "paused")
+        );
+
+        // Resumed and done, without saying more: the reply from before the
+        // pause isn't repeated, and it doesn't count as "no reply".
+        let o = outcome(RunStatus::Completed, &["Looking."]);
+        let m = messages_for(&o, "run1", &RunEnd::default(), 2000, vec![], 1, None);
+        assert!(m.is_empty(), "{m:?}");
+        let summary = summary_for(&o, "run1", &RunEnd::default(), 2000);
+        assert_eq!((summary.status.as_str(), summary.ms), ("completed", 2000));
+
+        // Resumed and says more: only the new reply.
+        let o = outcome(RunStatus::Completed, &["Looking.", "Found it."]);
+        let m = messages_for(&o, "run1", &RunEnd::default(), 2000, vec![], 1, None);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].text, "Found it.");
+        assert_eq!(m[0].run.as_ref().unwrap().run_id, "run1");
+    }
+
+    #[test]
     fn a_reason_already_shown_isnt_repeated() {
         let why = "**I couldn't finish:** it failed 3 times";
         let o = outcome(
@@ -1191,7 +1330,7 @@ mod tests {
             },
             &[why],
         );
-        let m = messages_for(&o, "r", &RunEnd::default(), 0, vec![], None);
+        let m = messages_for(&o, "r", &RunEnd::default(), 0, vec![], 0, None);
         assert_eq!(m[1].text, "The run ended with this error.");
         // Otherwise the error is the notice.
         let o = outcome(
@@ -1201,14 +1340,14 @@ mod tests {
             },
             &["Looking."],
         );
-        let m = messages_for(&o, "r", &RunEnd::default(), 0, vec![], None);
+        let m = messages_for(&o, "r", &RunEnd::default(), 0, vec![], 0, None);
         assert_eq!(m[1].text, "Work: the server is down");
     }
 
     #[test]
     fn replies_are_kept_without_a_record() {
         let o = outcome(RunStatus::Completed, &["a", "b"]);
-        let m = messages_for(&o, "r", &RunEnd::default(), 0, vec![], None);
+        let m = messages_for(&o, "r", &RunEnd::default(), 0, vec![], 0, None);
         assert_eq!(m.len(), 1);
         assert_eq!(m[0].text, "a\n\nb");
     }

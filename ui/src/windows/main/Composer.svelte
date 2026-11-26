@@ -18,14 +18,13 @@
 
   const agent = $derived(settings.current.agents.find((a) => a.id === settings.current.active_agent) ?? null);
   const run = $derived(agent ? runs.forChat(chat.chatId) : undefined);
-  const jobRun = $derived(agent ? runs.jobForAgent(agent.id) : undefined);
   /** The chat run is waiting for an answer, which this box sends. */
   const question = $derived(
     run ? asks.forRun(run.info.run_id).find((p) => p.ask.kind === "question") : undefined,
   );
   /** This chat's paused run, if it has one. */
   const pausedHere = $derived(agent && !run ? paused.forChat(agent.id, chat.chatId) : undefined);
-  const disabled = $derived(!setup.ready || !agent || (!!jobRun && !question) || !!pausedHere);
+  const disabled = $derived(!setup.ready || !agent || !!pausedHere);
   let pauseError = $state("");
   async function pause() {
     if (!run) return;
@@ -52,7 +51,6 @@
       return pausedHere.reason
         ? "Paused: the model couldn't be reached. Resume when it's back, or discard."
         : "Paused. Resume to carry on where it stopped, or discard.";
-    if (jobRun && agent) return `${agent.name} is busy with the job “${jobRun.info.title}”…`;
     return agent ? `Message ${agent.name}…` : "Choose an agent to chat with";
   });
 

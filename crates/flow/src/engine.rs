@@ -627,12 +627,6 @@ impl RunState {
         &self.replies
     }
 
-    /// Forgets the replies made before pausing (once they're shown), so the
-    /// resumed run reports only its new ones.
-    pub fn clear_replies(&mut self) {
-        self.replies.clear();
-    }
-
     pub fn steps(&self) -> u32 {
         self.steps
     }

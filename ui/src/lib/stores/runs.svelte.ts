@@ -156,7 +156,8 @@ class RunsStore {
       outcome: null,
       waitingForYou: false,
       entries: [],
-      startedMs,
+      // A resumed run's timer goes on from where it paused.
+      startedMs: startedMs - (info.resumed_ms ?? 0),
       pane: [],
       parts: [],
       pausing: false,
@@ -237,8 +238,9 @@ class RunsStore {
   }
 
   /** A scheduled job running as this agent, if any. */
-  jobForAgent(agentId: string | null): RunView | undefined {
-    return Object.values(this.runs).find((r) => r.info.agent_id === agentId && r.info.source === "job" && !r.outcome);
+  /** The agent's jobs that are running (in the background, beside its chats). */
+  jobsForAgent(agentId: string | null): RunView[] {
+    return Object.values(this.runs).filter((r) => r.info.agent_id === agentId && r.info.source === "job" && !r.outcome);
   }
 
   /** A chat of this agent that's working, if any. */
