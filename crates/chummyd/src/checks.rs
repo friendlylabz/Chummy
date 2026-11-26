@@ -33,13 +33,6 @@ pub struct Paths {
     pub jail_dir: PathBuf,
 }
 
-/// The state folder's default place: beside the bundle, named after it.
-pub fn default_state(bundle: &Path) -> PathBuf {
-    let mut name = bundle.file_name().unwrap_or_default().to_os_string();
-    name.push(".state");
-    bundle.with_file_name(name)
-}
-
 /// Makes a private folder (0700 on Unix) if it isn't there.
 pub fn make_private_dir(path: &Path) -> Result<(), String> {
     if path.is_dir() {
@@ -64,18 +57,15 @@ fn real(path: &Path, what: &str) -> Result<PathBuf, String> {
 pub fn paths(
     bundle: &Path,
     password_file: Option<&Path>,
-    state: Option<&Path>,
+    state: &Path,
     jail_dir: &Path,
 ) -> Result<Paths, String> {
     let bundle = real(bundle, "can't find the bundle")?;
     let password_file = password_file
         .map(|p| real(p, "can't find the password file"))
         .transpose()?;
-    let state = state
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| default_state(&bundle));
-    make_private_dir(&state)?;
-    let state = real(&state, "can't use the state folder")?;
+    make_private_dir(state)?;
+    let state = real(state, "can't use the state folder")?;
     make_private_dir(jail_dir)?;
     let jail_dir = real(jail_dir, "can't use the jail dir")?;
     let mut others = vec![("the bundle", &bundle), ("the state folder", &state)];
@@ -161,17 +151,21 @@ mod tests {
         std::fs::write(&bundle, b"x").unwrap();
         let jails_dir = base.join("jails");
 
-        let p = paths(&bundle, None, None, &jails_dir).unwrap();
-        assert!(p.state.ends_with("home.chummyd.state") && p.state.is_dir());
+        let state = base.join("state");
+
+        let p = paths(&bundle, None, &state, &jails_dir).unwrap();
+        assert!(p.state.ends_with("state") && p.state.is_dir());
         assert!(p.jail_dir.is_dir());
 
         // A jail dir holding the bundle, or inside the state folder, is refused.
-        assert!(paths(&bundle, None, None, base).is_err());
-        assert!(paths(&bundle, None, None, &p.state.join("j")).is_err());
+        assert!(paths(&bundle, None, &state, base).is_err());
+        assert!(paths(&bundle, None, &state, &p.state.join("j")).is_err());
         let pw = jails_dir.join("pw");
         std::fs::write(&pw, "x").unwrap();
-        assert!(paths(&bundle, Some(&pw), None, &jails_dir).is_err());
-        assert!(paths(&base.join("missing"), None, None, &jails_dir).is_err());
+        assert!(paths(&bundle, Some(&pw), &state, &jails_dir).is_err());
+        assert!(paths(&base.join("missing"), None, &state, &jails_dir).is_err());
+        // Nor is a state folder inside the jail dir.
+        assert!(paths(&bundle, None, &jails_dir.join("s"), &jails_dir).is_err());
     }
 
     #[test]
@@ -187,7 +181,7 @@ mod tests {
         }
         let bundle = base.join("b.chummyd");
         std::fs::write(&bundle, b"x").unwrap();
-        let p = paths(&bundle, None, None, &base.join("jails")).unwrap();
+        let p = paths(&bundle, None, &base.join("state"), &base.join("jails")).unwrap();
         let prot = protected(&p);
         let j = jails(&p.jail_dir, ["helper", "writer"], &prot).unwrap();
         assert_eq!(j.len(), 2);

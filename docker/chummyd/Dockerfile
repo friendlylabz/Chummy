@@ -1,28 +1,18 @@
-# syntax=docker/dockerfile:1.10
-#
 # chummyd in a container: a distroless image (no shell, no package
 # manager) that runs as the unprivileged user 65532.
 #
-# Build from the repository's root:
+# Build from the repository's root, with the tools' Python in
+# wasi-python/python-wasi.zip (from a Chummy release, or built with
+# scripts/build-wasi-python.sh; see docs/user/chummyd.md):
 #
 #   docker build -f docker/chummyd/Dockerfile -t chummyd .
 #
+# The build downloads only the base images, Rust and its crates: the tools'
+# Python comes ready-made, so nothing is fetched from GitHub, python.org or
+# PyPI.
+#
 # See docs/user/chummyd.md ("In Docker") and docker/chummyd/compose.yaml.
 # x86_64 only for now.
-
-# --- The tools' Python ----------------------------------------------------
-# CPython for WebAssembly, built from python.org's signed source with every
-# download checked (scripts/build-wasi-python.sh). Cached by Docker while the
-# script doesn't change.
-FROM --platform=linux/amd64 debian:trixie-slim AS python
-RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-      build-essential pkg-config libffi-dev zip unzip xz-utils curl ca-certificates \
-      python3 python3-venv \
- && rm -rf /var/lib/apt/lists/*
-WORKDIR /work
-COPY scripts/build-wasi-python.sh scripts/
-RUN OUT=/out scripts/build-wasi-python.sh
 
 # --- chummyd --------------------------------------------------------------
 FROM rust:1-slim-trixie AS build
@@ -37,7 +27,16 @@ WORKDIR /src
 COPY rust-toolchain.toml ./
 RUN rustup toolchain install
 COPY . .
-COPY --from=python /out/python-wasi.zip wasi-python/python-wasi.zip
+# The tools' Python, checked against its .sha256 when that came with it.
+RUN if [ ! -f wasi-python/python-wasi.zip ]; then \
+      echo "The tools' Python is missing: put python-wasi.zip in wasi-python/ (see docs/user/chummyd.md, \"In Docker\")." >&2; \
+      exit 1; \
+    fi \
+ && if [ -f wasi-python/python-wasi.zip.sha256 ]; then \
+      (cd wasi-python && sha256sum -c python-wasi.zip.sha256); \
+    else \
+      echo "Note: no python-wasi.zip.sha256 beside the zip, so its hash wasn't checked." >&2; \
+    fi
 # Fail rather than leave the tools' Python out.
 ENV CHUMMY_REQUIRE_BUNDLED_PYTHON=1 \
     CARGO_INCREMENTAL=0

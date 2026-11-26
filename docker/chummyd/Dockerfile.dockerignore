@@ -5,7 +5,10 @@
 node_modules
 ui/dist
 src-tauri/gen
-wasi-python
+# Only the tools' Python itself (and its hash) from wasi-python/.
+wasi-python/*
+!wasi-python/python-wasi.zip
+!wasi-python/python-wasi.zip.sha256
 docs
 assets
 **/*.log

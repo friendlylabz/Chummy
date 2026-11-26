@@ -1,5 +1,5 @@
 # chummyd with Docker Compose. Build the image first, from the repository's
-# root:
+# root, with the tools' Python in wasi-python/ (see docs/user/chummyd.md):
 #
 #   docker build -f docker/chummyd/Dockerfile -t chummyd .
 #

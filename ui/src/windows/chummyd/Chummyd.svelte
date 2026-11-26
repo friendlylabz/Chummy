@@ -444,7 +444,7 @@
         <Icon name="check-circle" size={16} />
         <span>
           Saved to <span class="mono" data-selectable>{saved}</span>. Start it with
-          <span class="mono" data-selectable>chummyd run --bundle {saved} --jail-dir &lt;folder&gt;</span>
+          <span class="mono" data-selectable>chummyd run --bundle {saved} --jail-dir &lt;folder&gt; --state &lt;folder&gt;</span>
         </span>
       </div>
     {/if}

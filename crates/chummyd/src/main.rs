@@ -186,12 +186,7 @@ async fn run(a: RunArgs) -> Result<(), String> {
     }
 
     // Where everything is, kept apart.
-    let paths = checks::paths(
-        &a.bundle,
-        a.password_file.as_deref(),
-        a.state.as_deref(),
-        &a.jail_dir,
-    )?;
+    let paths = checks::paths(&a.bundle, a.password_file.as_deref(), &a.state, &a.jail_dir)?;
     let protected = checks::protected(&paths);
     let jails = checks::jails(
         &paths.jail_dir,

@@ -8,7 +8,7 @@ pub const USAGE: &str = "\
 chummyd: runs Chummy agents as configured in the Chummy app.
 
 Usage:
-  chummyd run --bundle <file> --jail-dir <folder> [--password-file <file>] [--state <folder>] [--grace <seconds>]
+  chummyd run --bundle <file> --jail-dir <folder> --state <folder> [--password-file <file>] [--grace <seconds>]
   chummyd check --bundle <file> [--password-file <file>]
   chummyd --version
   chummyd --help
@@ -17,7 +17,8 @@ Usage:
   --jail-dir       where the agents' folders go: <jail-dir>/<agent>/
   --password-file  read the bundle's password from this file (a Docker
                    secret, say) instead of asking in the terminal
-  --state          the state folder (default: the bundle's path + .state)
+  --state          the state folder: conversations, paused runs, job history
+                   and Matrix keys, sealed (made if it's missing)
   --grace          how long shutting down waits for runs to pause (default 90)
 
 The configuration can't change while chummyd runs. To change it, make a new
@@ -36,7 +37,7 @@ pub struct RunArgs {
     pub bundle: PathBuf,
     pub jail_dir: PathBuf,
     pub password_file: Option<PathBuf>,
-    pub state: Option<PathBuf>,
+    pub state: PathBuf,
     pub grace: Duration,
 }
 
@@ -119,7 +120,9 @@ pub fn parse(args: &[String]) -> Result<Cmd, String> {
         bundle,
         jail_dir: get("--jail-dir").ok_or("--jail-dir is needed")?,
         password_file,
-        state: get("--state"),
+        // Always given: where chummyd keeps what it must not lose is never
+        // a guess.
+        state: get("--state").ok_or("--state is needed: the folder chummyd keeps its state in")?,
         grace,
     }))
 }
@@ -136,16 +139,29 @@ mod tests {
     fn the_command_line_is_strict() {
         assert_eq!(parse(&[]).unwrap(), Cmd::Help);
         assert_eq!(parse(&args("--version")).unwrap(), Cmd::Version);
-        let Cmd::Run(r) = parse(&args("run --bundle b.chummyd --jail-dir=/srv/j")).unwrap() else {
+        let Cmd::Run(r) = parse(&args(
+            "run --bundle b.chummyd --jail-dir=/srv/j --state /srv/s",
+        ))
+        .unwrap() else {
             panic!()
         };
         assert_eq!(r.bundle, PathBuf::from("b.chummyd"));
         assert_eq!(r.jail_dir, PathBuf::from("/srv/j"));
-        assert_eq!((r.state, r.grace), (None, GRACE));
-        assert!(parse(&args("run --bundle b")).is_err(), "jail dir needed");
-        assert!(parse(&args("run --bundle b --jail-dir j --password hunter2")).is_err());
-        assert!(parse(&args("run --bundle b --bundle c --jail-dir j")).is_err());
-        assert!(parse(&args("run --bundle b --jail-dir j --grace 0")).is_err());
+        assert_eq!((r.state, r.grace), (PathBuf::from("/srv/s"), GRACE));
+        assert!(
+            parse(&args("run --bundle b --state s")).is_err(),
+            "jail dir needed"
+        );
+        let no_state = parse(&args("run --bundle b --jail-dir j")).unwrap_err();
+        assert!(no_state.contains("--state"), "{no_state}");
+        assert!(
+            parse(&args(
+                "run --bundle b --jail-dir j --state s --password hunter2"
+            ))
+            .is_err()
+        );
+        assert!(parse(&args("run --bundle b --bundle c --jail-dir j --state s")).is_err());
+        assert!(parse(&args("run --bundle b --jail-dir j --state s --grace 0")).is_err());
         assert!(parse(&args("check --bundle b --jail-dir j")).is_err());
         assert!(parse(&args("start")).is_err());
         assert!(matches!(

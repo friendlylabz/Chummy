@@ -162,7 +162,7 @@ machine, or around the clock.
 ### Running it
 
 ```text
-chummyd run --bundle home.chummyd --jail-dir /srv/chummy-jails [--password-file F] [--state DIR]
+chummyd run --bundle home.chummyd --jail-dir /srv/chummy-jails --state DIR [--password-file F]
 ```
 
 - The password is asked for in the terminal (no echo), or read from
@@ -206,7 +206,7 @@ The app warns that anyone with the bundle and its password gets the keys
 and credentials in it, and requires a strong password (offering a
 generated passphrase).
 
-### The state folder (`<bundle>.state/`, beside the bundle by default)
+### The state folder (`--state`, always given)
 
 - `state.sealed`, encrypted with the state key and bound to the instance:
   conversation histories, paused runs, waiting questions, job state and

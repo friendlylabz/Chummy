@@ -215,6 +215,8 @@ impl Daemon {
             .arg(bundle)
             .arg("--jail-dir")
             .arg(jails)
+            .arg("--state")
+            .arg(bundle.with_extension("state"))
             .arg("--password-file")
             .arg(password)
             .args(["--grace", "10"])

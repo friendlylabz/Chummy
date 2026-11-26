@@ -48,7 +48,7 @@ new chummyd, and an old state folder won't open with it (see below).
 ## 2. Run it
 
 ```sh
-chummyd run --bundle home.chummyd --jail-dir /srv/chummy-jails
+chummyd run --bundle home.chummyd --jail-dir /srv/chummy-jails --state /srv/chummyd-state
 ```
 
 - chummyd asks for the password (it isn't shown). Without a terminal, give it
@@ -58,8 +58,8 @@ chummyd run --bundle home.chummyd --jail-dir /srv/chummy-jails
 - `--jail-dir` is where the agents' folders go: `<jail dir>/<agent id>/`, made
   if they're missing. It can't hold the bundle, the password file or the state
   folder, or be inside them.
-- `--state <folder>` sets the state folder (default: beside the bundle, named
-  `<bundle>.state`).
+- `--state <folder>` is the state folder (below), made if it's missing. It's
+  always needed: chummyd never guesses where to keep what it mustn't lose.
 - chummyd refuses to run as root or Administrator.
 - `chummyd check --bundle <file>` opens a bundle and says what's in it.
 
@@ -88,15 +88,38 @@ next time; they don't carry on by themselves. Runs that can't pause in time
 `docker/chummyd/` has a Dockerfile and a Compose file. The image is
 distroless (no shell, no package manager), holds only chummyd and what it
 needs, and runs as the unprivileged user 65532. For now you build it
-yourself (x86_64), from the repository's root:
+yourself (x86_64), from the repository's root.
+
+**First, the tools' Python.** The image takes it ready-made from
+`wasi-python/python-wasi.zip`, so the build itself never downloads it.
+Take it from a Chummy release (the same one the app has inside):
+
+```sh
+mkdir -p wasi-python && cd wasi-python
+curl -fLO https://github.com/friendlylabz/chummy/releases/latest/download/python-wasi.zip
+curl -fLO https://github.com/friendlylabz/chummy/releases/latest/download/python-wasi.zip.sha256
+sha256sum -c python-wasi.zip.sha256
+cd ..
+```
+
+The release's workflow built it from python.org's signed source and signed
+where it came from. To check that too (with the GitHub CLI):
+`gh attestation verify wasi-python/python-wasi.zip --repo friendlylabz/chummy`.
+Or build it yourself with `scripts/build-wasi-python.sh` (about 5 minutes;
+it puts it in `wasi-python/`). If you build from an older or newer clone
+than the latest release, take the zip from that version's release instead
+(`…/releases/download/v0.1.3/…`).
+
+**Then the image:**
 
 ```sh
 docker build -f docker/chummyd/Dockerfile -t chummyd .
 ```
 
-The first build takes a while: it builds the tools' Python from python.org's
-source (checked against pinned hashes and signatures) and chummyd itself.
-Later builds reuse what didn't change.
+It checks the zip against `python-wasi.zip.sha256` when that's there, and
+stops if the zip is missing. The first build takes a while (chummyd is
+built fully optimized); later builds reuse what didn't change. It downloads
+only the base images, Rust and its crates.
 
 Then copy `docker/chummyd/compose.yaml` to a folder of your own (not inside
 the repository) and put beside it:

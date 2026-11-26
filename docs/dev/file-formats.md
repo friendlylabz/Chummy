@@ -1029,7 +1029,7 @@ reports to no one. Errors include an invalid homeserver or Matrix ID, users
 for agents not in the bundle, chummyd's own ID among the users, and
 `report_to` naming a missing job or someone not allowed for its agent.
 
-### The state folder (`<bundle>.state/`)
+### The state folder (`--state`)
 
 ```text
 lock            held while chummyd runs

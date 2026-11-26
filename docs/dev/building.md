@@ -34,9 +34,11 @@ CHUMMY_TEST_SYNAPSE=/tmp/synapse/bin/python cargo test -p chummyd --test matrix
 
 Without `CHUMMY_TEST_SYNAPSE` it's skipped.
 
-chummyd's Docker image (`docker/chummyd/`, distroless, x86_64) builds the
-tools' Python and chummyd inside Docker. `tests/docker.rs` runs an image
-locked down as the docs say:
+chummyd's Docker image (`docker/chummyd/`, distroless, x86_64) builds
+chummyd inside Docker, with the tools' Python taken ready-made from
+`wasi-python/python-wasi.zip` (a release's, or `scripts/build-wasi-python.sh`'s;
+checked against its `.sha256`). `tests/docker.rs` runs an image locked down
+as the docs say:
 
 ```sh
 docker build -f docker/chummyd/Dockerfile -t chummyd .
