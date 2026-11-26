@@ -48,7 +48,7 @@ chummy-session.workspace = true
 chummy-tools = { workspace = true, features = ["bundled-python"] }
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1", features = ["process"] }
+rustix = { version = "1", features = ["process", "fs"] }
 
 [target.'cfg(windows)'.dependencies]
 is_elevated = "0.1"

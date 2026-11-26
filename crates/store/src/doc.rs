@@ -153,7 +153,16 @@ pub fn write_atomic(path: &Path, bytes: &[u8], backup: bool) -> Result<(), Store
     };
     let tmp = sibling(".tmp");
     {
-        let mut f = File::create(&tmp).map_err(io_err(&tmp))?;
+        // Private from the start (on Unix): never readable by others, not
+        // even before it's restricted below.
+        let mut o = fs::OpenOptions::new();
+        o.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            o.mode(0o600);
+        }
+        let mut f = o.open(&tmp).map_err(io_err(&tmp))?;
         f.write_all(bytes).map_err(io_err(&tmp))?;
         f.sync_all().map_err(io_err(&tmp))?;
     }

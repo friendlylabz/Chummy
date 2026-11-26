@@ -416,7 +416,9 @@ pub async fn chummyd_open_bundle(
     let bytes =
         std::fs::read(&path).map_err(|e| format!("Couldn't read {}: {e}", path.display()))?;
     let config = tauri::async_runtime::spawn_blocking(move || {
-        chummy_bundle::open_unchecked(&bytes, &password)
+        // The same key chummyd's password file holds, from the password.
+        chummy_bundle::BundleKey::for_bundle(&bytes, &password)
+            .and_then(|key| chummy_bundle::open_unchecked(&bytes, &key))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -518,19 +520,9 @@ pub async fn chummyd_export(
     {
         return Ok(None);
     }
-    let slug: String = draft
-        .name
-        .trim()
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect();
-    let slug = slug.trim_matches('-');
-    let suggested = format!(
-        "{}.{}",
-        if slug.is_empty() { "chummyd" } else { slug },
-        chummy_bundle::EXTENSION
-    );
+    // Always the name chummyd's Docker setup expects, so nothing needs
+    // renaming on the server.
+    let suggested = format!("bundle.{}", chummy_bundle::EXTENSION);
     let Some(path) = dialogs::save_file(
         &app,
         window.label(),

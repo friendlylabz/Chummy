@@ -45,6 +45,10 @@ fn config() -> Config {
 
 const PASSWORD: &str = "correct-horse-battery-staple-42";
 
+fn key(c: &Config) -> BundleKey {
+    BundleKey::from_password(PASSWORD, &c.instance.id).unwrap()
+}
+
 #[test]
 fn a_sealed_bundle_opens_only_with_its_password() {
     let c = config();
@@ -54,20 +58,56 @@ fn a_sealed_bundle_opens_only_with_its_password() {
     let text = String::from_utf8_lossy(&sealed);
     assert!(!text.contains("sk-secret") && !text.contains("Helper"));
     assert_eq!(header(&sealed).unwrap().instance_id, c.instance.id);
-    assert_eq!(open(&sealed, PASSWORD).unwrap(), c);
-    assert_eq!(
-        open(&sealed, "wrong password!!"),
-        Err(BundleError::WrongPassword)
-    );
+    assert_eq!(open(&sealed, &key(&c)).unwrap(), c);
+    let wrong = BundleKey::for_bundle(&sealed, "wrong password!!").unwrap();
+    assert_eq!(open(&sealed, &wrong), Err(BundleError::WrongPassword));
 
     // Any changed byte (header or ciphertext) and it doesn't open.
     for at in [20, sealed.len() - 1] {
         let mut bad = sealed.clone();
         bad[at] ^= 1;
-        assert!(open(&bad, PASSWORD).is_err(), "byte {at}");
+        assert!(open(&bad, &key(&c)).is_err(), "byte {at}");
     }
-    assert_eq!(open(b"hello", PASSWORD), Err(BundleError::NotABundle));
-    assert_eq!(open(&[], PASSWORD), Err(BundleError::NotABundle));
+    assert_eq!(open(b"hello", &key(&c)), Err(BundleError::NotABundle));
+    assert_eq!(open(&[], &key(&c)), Err(BundleError::NotABundle));
+    // Version 1 bundles are refused, saying so.
+    let mut old = sealed.clone();
+    old[7] = 1;
+    assert_eq!(open(&old, &key(&c)), Err(BundleError::Old));
+}
+
+#[test]
+fn the_password_file_holds_a_key_never_the_password() {
+    let c = config();
+    let k = key(&c);
+    let line = k.to_line();
+    assert!(line.starts_with("chummyd-key-2 ") && line.contains(&c.instance.id));
+    assert!(!line.contains(PASSWORD));
+    assert_eq!(BundleKey::from_line(&format!("{}\n", *line)).unwrap(), k);
+    // A password, or anything else, is refused.
+    for not_a_key in [PASSWORD, "", "chummyd-key-2 x 00", "chummyd-key-1 a 00"] {
+        assert!(BundleKey::from_line(not_a_key).is_err(), "{not_a_key}");
+    }
+
+    // Every bundle of the instance with that password opens with it, so
+    // the file outlives new exports.
+    let mut changed = c.clone();
+    changed.instance.name = "Renamed".into();
+    let sealed = seal(&changed, PASSWORD).unwrap();
+    assert_eq!(open(&sealed, &k).unwrap().instance.name, "Renamed");
+    assert_eq!(
+        seal_with(&changed, &k).map(|b| open(&b, &k).is_ok()),
+        Ok(true)
+    );
+
+    // Another instance's key doesn't open it.
+    let other = Config::new_instance("Other", "UTC").unwrap();
+    let theirs = BundleKey::from_password(PASSWORD, &other.instance.id).unwrap();
+    assert!(matches!(
+        open(&sealed, &theirs),
+        Err(BundleError::OtherInstance(_))
+    ));
+    assert_ne!(theirs.to_line(), k.to_line());
 }
 
 #[test]
@@ -151,7 +191,7 @@ fn the_matrix_channel_is_checked() {
     assert!(r.ok() && r.warnings.is_empty(), "{r:?}");
     // It seals and opens like the rest.
     let sealed = seal(&c, PASSWORD).unwrap();
-    assert_eq!(open(&sealed, PASSWORD).unwrap(), c);
+    assert_eq!(open(&sealed, &key(&c)).unwrap(), c);
 
     let m = c.channels.matrix.as_mut().unwrap();
     m.homeserver = "http://matrix.example.org".into();
@@ -175,12 +215,12 @@ fn the_matrix_channel_is_checked() {
 }
 
 #[test]
-fn version_1_bundles_still_open() {
+fn version_1_configurations_still_open() {
     let mut c = config();
     c.version = 1;
     assert!(c.check().ok());
     let sealed = seal(&c, PASSWORD).unwrap();
-    assert_eq!(open(&sealed, PASSWORD).unwrap().version, 1);
+    assert_eq!(open(&sealed, &key(&c)).unwrap().version, 1);
     c.version = 3;
     assert!(!c.check().ok());
 }

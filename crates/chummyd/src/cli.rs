@@ -10,16 +10,27 @@ chummyd: runs Chummy agents as configured in the Chummy app.
 Usage:
   chummyd run --bundle <file> --jail-dir <folder> --state <folder> [--password-file <file>] [--grace <seconds>]
   chummyd check --bundle <file> [--password-file <file>]
+  chummyd hash-password --bundle <file>
   chummyd --version
   chummyd --help
 
   --bundle         the bundle made in the app (Configure chummyd)
   --jail-dir       where the agents' folders go: <jail-dir>/<agent>/
-  --password-file  read the bundle's password from this file (a Docker
-                   secret, say) instead of asking in the terminal
+  --password-file  the bundle's password hash from this file (a Docker
+                   secret, say), instead of asking for the password in the
+                   terminal. The file never holds the password itself.
   --state          the state folder: conversations, paused runs, job history
                    and Matrix keys, sealed (made if it's missing)
   --grace          how long shutting down waits for runs to pause (default 90)
+
+hash-password asks for the bundle's password (in the terminal, or one line
+on standard input), checks it opens the bundle, and prints the line a
+password file holds. It works for every bundle of that instance exported
+with that password.
+
+check opens the bundle and says what's in it (without running anything):
+where its models are, what its agents may do, its jobs and who can talk
+to them.
 
 The configuration can't change while chummyd runs. To change it, make a new
 bundle in the app and start chummyd again.";
@@ -28,6 +39,7 @@ bundle in the app and start chummyd again.";
 pub enum Cmd {
     Run(RunArgs),
     Check(CheckArgs),
+    HashPassword(PathBuf),
     Help,
     Version,
 }
@@ -57,7 +69,7 @@ pub fn parse(args: &[String]) -> Result<Cmd, String> {
     let cmd = match cmd.as_str() {
         "-h" | "--help" | "help" => return Ok(Cmd::Help),
         "-V" | "--version" | "version" => return Ok(Cmd::Version),
-        "run" | "check" => cmd.as_str(),
+        "run" | "check" | "hash-password" => cmd.as_str(),
         other => return Err(format!("unknown command “{other}”")),
     };
     let mut flags: Vec<(String, String)> = vec![];
@@ -81,8 +93,10 @@ pub fn parse(args: &[String]) -> Result<Cmd, String> {
                 "--state",
                 "--grace",
             ]
-        } else {
+        } else if cmd == "check" {
             &["--bundle", "--password-file"]
+        } else {
+            &["--bundle"]
         };
         if !allowed.contains(&name.as_str()) {
             return Err(format!("{cmd} doesn't take {name}"));
@@ -103,6 +117,9 @@ pub fn parse(args: &[String]) -> Result<Cmd, String> {
     };
     let bundle = get("--bundle").ok_or("--bundle is needed")?;
     let password_file = get("--password-file");
+    if cmd == "hash-password" {
+        return Ok(Cmd::HashPassword(bundle));
+    }
     if cmd == "check" {
         return Ok(Cmd::Check(CheckArgs {
             bundle,
@@ -168,5 +185,10 @@ mod tests {
             parse(&args("check --bundle b --password-file p")).unwrap(),
             Cmd::Check(_)
         ));
+        assert_eq!(
+            parse(&args("hash-password --bundle b")).unwrap(),
+            Cmd::HashPassword("b".into())
+        );
+        assert!(parse(&args("hash-password --bundle b --password-file p")).is_err());
     }
 }

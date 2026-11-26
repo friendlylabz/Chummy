@@ -1,24 +1,18 @@
-# chummyd with Docker Compose. Build the image first, from the repository's
-# root, with the tools' Python in wasi-python/ (see docs/user/chummyd.md):
+# chummyd with Docker Compose, with the agents' folders in a Docker volume.
 #
-#   docker build -f docker/chummyd/Dockerfile -t chummyd .
+# The easy way: docker/chummyd/chummyd-docker-init asks for the bundle, its
+# password and where the agents' folders go, readies the files for
+# chummyd's user in the container (65532), and writes this file, set up,
+# into a folder of your own. See docs/user/chummyd.md ("In Docker").
 #
-# Then copy this file to a folder of your own (not inside the repository)
-# and put beside it:
-#
-#   bundle.chummyd          the bundle you exported from Chummy
-#   chummyd_password.txt    its password, on one line, readable only by
-#                           chummyd's user in the container (65532):
-#                             sudo chown 65532:65532 chummyd_password.txt
-#                             sudo chmod 400 chummyd_password.txt
-#
-# Then, in that folder:
+# By hand: build the image (docker build -f docker/chummyd/Dockerfile -t
+# chummyd .), copy this file to a folder of your own, and put beside it
+# bundle.chummyd and chummyd_password.txt, both owned by 65532:65532 and
+# mode 400. Then, in that folder:
 #
 #   docker compose up -d
 #   docker attach chummyd       # to /verify Matrix sessions or talk to agents
 #                               # leave with Ctrl-P Ctrl-Q (Ctrl-C stops chummyd)
-#
-# See docs/user/chummyd.md ("In Docker").
 
 services:
   chummyd:
@@ -42,6 +36,9 @@ services:
       - ./bundle.chummyd:/bundle/bundle.chummyd:ro
       - jails:/jails
       - state:/state
+      # Your own certificates (a homeserver or model with a self-signed
+      # one): this computer's trusted certificates, instead of the image's.
+      # - /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt:ro
     secrets: [chummyd_password]
     # chummyd listens on nothing, so there are no ports. Never mount the
     # Docker socket: chummyd doesn't need it.

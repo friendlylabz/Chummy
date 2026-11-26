@@ -982,21 +982,34 @@ chummyd's whole configuration, made by the app's Configure chummyd window
 and read by chummyd at start-up (`crates/bundle`). One file:
 
 ```text
-"CHUMMYD\x01"         8 bytes
+"CHUMMYD\x02"         8 bytes
 header length         u32, little-endian (at most 4 KiB)
-header                JSON: format "chummyd.bundle", version 1, instance_id,
-                      kdf { name "argon2id", memory_kib, iterations, lanes, salt }
+header                JSON: format "chummyd.bundle", version 2, instance_id,
+                      kdf { name "argon2id", memory_kib, iterations, lanes }
 nonce                 24 bytes
 ciphertext            XChaCha20-Poly1305 of the configuration's JSON
 ```
 
-The key is Argon2id of the password with the header's settings (new bundles:
-64 MiB, 3 passes, 1 lane; settings outside 8 MiB–1 GiB, 1–10 passes or 1–8
-lanes are refused). The associated data is everything before the nonce, so
-the header can't be changed either. The password must pass a strength check
-(at least 12 characters and about 64 bits by a rough estimate); the app can
-generate one (five groups of five from a 32-character alphabet). Bundles are
-at most 64 MiB, and never extracted to disk.
+The key is Argon2id of the password (64 MiB, 3 passes, 1 lane, fixed in
+version 2; anything else is refused), salted with the first 16 bytes of
+SHA-256("chummyd bundle key salt\0" ‖ instance id). So every bundle of an
+instance sealed with the same password has the same key, and chummyd's
+**password file** can hold the key instead of the password, as one line:
+
+```text
+chummyd-key-2 <instance id> <the key, 64 hex digits>
+```
+
+(`chummyd hash-password` writes it; chummyd refuses a password file holding
+anything else, such as the password.) The key opens that instance's bundles,
+so the file is as private as the bundle's password, but it doesn't give the
+password away. The associated data is everything before the nonce, so the
+header can't be changed either; the nonce is random for each export. The
+password must pass a strength check (at least 12 characters and about 64 bits
+by a rough estimate); the app can generate one (five groups of five from a
+32-character alphabet). Bundles are at most 64 MiB, and never extracted to
+disk. Version 1 (`CHUMMYD\x01`, a random salt in the header) isn't opened any
+more: export it again.
 
 The configuration (`chummyd.config` v2, strict: unknown fields are refused;
 v1, without Matrix, still opens):

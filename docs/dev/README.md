@@ -71,7 +71,9 @@ CHUMMY_TEST_PYTHON_ZIP=$PWD/wasi-python/python-wasi.zip CHUMMY_TEST_PYPI=1 cargo
 ```
 
 Pushing a tag like `v0.1.0` runs `.github/workflows/release.yml`, which builds
-installers for all platforms and attaches them to a draft GitHub release.
+installers for all platforms and attaches them to a draft GitHub release. Its
+notes are that version's section of `CHANGELOG.md`, which must be there (see
+[building](building.md#ci-and-releases)).
 
 ## Architecture
 

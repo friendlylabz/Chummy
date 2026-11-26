@@ -885,6 +885,7 @@ dependencies = [
  "jiff 1.0.3",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.21",
  "zeroize",
 ]

@@ -9,7 +9,8 @@ name: Release
 # (scripts/set-version.mjs), so the app and its installers always say the
 # tag's version, whatever the repository's files say.
 # The release stays a draft while building and is published only when every
-# platform built.
+# platform built. Its notes start with the version's section of
+# CHANGELOG.md: without one, the release stops before building anything.
 on:
   push:
     tags: ["v*"]
@@ -34,6 +35,7 @@ jobs:
     outputs:
       version: ${{ steps.v.outputs.version }}
       tag: ${{ steps.v.outputs.tag }}
+      notes: ${{ steps.notes.outputs.notes }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: v
@@ -44,6 +46,17 @@ jobs:
           v="${GIVEN#v}"
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "tag=v$v" >> "$GITHUB_OUTPUT"
+      # What's new: the version's section of CHANGELOG.md. No section, no
+      # release (scripts/release-notes.mjs says what to add).
+      - id: notes
+        name: Release notes from CHANGELOG.md
+        env:
+          TAG: ${{ steps.v.outputs.tag }}
+        run: |
+          node scripts/release-notes.mjs "$TAG" > notes.md
+          end="NOTES_$(openssl rand -hex 12)"
+          { echo "notes<<$end"; cat notes.md; echo "$end"; } >> "$GITHUB_OUTPUT"
+          cat notes.md >> "$GITHUB_STEP_SUMMARY"
 
   # The Python that tools run on, built fresh for every release from
   # python.org's signed source (scripts/build-wasi-python.sh), with a
@@ -129,6 +142,12 @@ jobs:
           releaseName: Chummy ${{ needs.version.outputs.tag }}
           releaseCommitish: ${{ github.sha }}
           releaseBody: |
+            ## What's new
+
+            ${{ needs.version.outputs.notes }}
+
+            ## Downloads
+
             **Chummy is a heavy work in progress, and 100% vibe-coded.** Expect rough edges.
 
             Download the file for your computer below:

@@ -115,7 +115,17 @@ fn setup() -> Setup {
     let bundle = tmp.path().join("test.chummyd");
     std::fs::write(&bundle, chummy_bundle::seal(&c, PASSWORD).unwrap()).unwrap();
     let password = tmp.path().join("password");
-    std::fs::write(&password, format!("{PASSWORD}\n")).unwrap();
+    // The password's hash, as chummyd-docker-init writes it.
+    std::fs::write(
+        &password,
+        format!(
+            "{}\n",
+            *chummy_bundle::BundleKey::from_password(PASSWORD, &c.instance.id)
+                .unwrap()
+                .to_line()
+        ),
+    )
+    .unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -283,22 +293,62 @@ fn a_wrong_password_or_a_jail_dir_holding_the_bundle_stops_it() {
     if !temp_is_usable(s.bundle.parent().unwrap()) {
         return;
     }
+    let instance = chummy_bundle::header(&std::fs::read(&s.bundle).unwrap())
+        .unwrap()
+        .instance_id;
     let bad = s.password.with_file_name("bad");
-    std::fs::write(&bad, "not the right password at all").unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_chummyd"))
-        .args(["run", "--bundle"])
-        .arg(&s.bundle)
-        .arg("--state")
-        .arg(s.bundle.with_file_name("test.chummyd.state"))
-        .arg("--jail-dir")
-        .arg(&s.jails)
-        .arg("--password-file")
-        .arg(&bad)
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
+    let run_with = |file: &Path| {
+        Command::new(env!("CARGO_BIN_EXE_chummyd"))
+            .args(["run", "--bundle"])
+            .arg(&s.bundle)
+            .arg("--state")
+            .arg(s.bundle.with_file_name("test.chummyd.state"))
+            .arg("--jail-dir")
+            .arg(&s.jails)
+            .arg("--password-file")
+            .arg(file)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    // The hash of a wrong password.
+    let wrong =
+        chummy_bundle::BundleKey::from_password("not the right password", &instance).unwrap();
+    std::fs::write(&bad, format!("{}\n", *wrong.to_line())).unwrap();
+    let out = run_with(&bad);
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("password is wrong"));
+    // The password itself: never taken from a file.
+    std::fs::write(&bad, format!("{PASSWORD}\n")).unwrap();
+    let out = run_with(&bad);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("never the password"));
+
+    // hash-password: the password on standard input, the line out.
+    let hash = |password: &str| {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_chummyd"))
+            .args(["hash-password", "--bundle"])
+            .arg(&s.bundle)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        writeln!(child.stdin.take().unwrap(), "{password}").unwrap();
+        child.wait_with_output().unwrap()
+    };
+    let out = hash(PASSWORD);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        std::fs::read_to_string(&s.password).unwrap()
+    );
+    let out = hash("not the right password");
+    assert!(!out.status.success() && out.stdout.is_empty());
 
     let out = Command::new(env!("CARGO_BIN_EXE_chummyd"))
         .args(["run", "--bundle"])

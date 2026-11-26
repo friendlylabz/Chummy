@@ -214,13 +214,24 @@ fn the_image_runs_locked_down_and_keeps_its_state() {
     for d in ["bundle", "jails", "state"] {
         std::fs::create_dir(dir.join(d)).unwrap();
     }
+    let config = bundle();
     std::fs::write(
         dir.join("bundle").join("bundle.chummyd"),
-        chummy_bundle::seal(&bundle(), PASSWORD).unwrap(),
+        chummy_bundle::seal(&config, PASSWORD).unwrap(),
     )
     .unwrap();
+    // The password's hash, as chummyd-docker-init writes it.
     let password = dir.join("password");
-    std::fs::write(&password, format!("{PASSWORD}\n")).unwrap();
+    std::fs::write(
+        &password,
+        format!(
+            "{}\n",
+            *chummy_bundle::BundleKey::from_password(PASSWORD, &config.instance.id)
+                .unwrap()
+                .to_line()
+        ),
+    )
+    .unwrap();
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&password, std::fs::Permissions::from_mode(0o400)).unwrap();

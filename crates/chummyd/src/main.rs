@@ -13,6 +13,7 @@
 
 mod checks;
 mod cli;
+mod inspect;
 mod jobs;
 mod link;
 #[cfg(feature = "matrix")]
@@ -62,6 +63,7 @@ fn main() -> ExitCode {
             start_logging();
             check(a)
         }
+        Cmd::HashPassword(bundle) => hash_password(&bundle),
         Cmd::Run(a) => {
             start_logging();
             match tokio::runtime::Builder::new_multi_thread()
@@ -126,32 +128,33 @@ fn open_bundle(
         "app",
         format!("Opening the bundle for instance {}", header.instance_id),
     );
-    let pw = password::read(password_file)?;
-    // The password is dropped (and wiped) once the key is derived.
-    chummy_bundle::open(&bytes, &pw).map_err(|e| e.to_string())
+    let key = password::key(&bytes, password_file)?;
+    chummy_bundle::open(&bytes, &key).map_err(|e| e.to_string())
 }
 
-/// `chummyd check`: opens the bundle and says what's in it and what's wrong.
+/// `chummyd hash-password`: the line a password file holds, once the
+/// password has opened the bundle.
+fn hash_password(bundle: &std::path::Path) -> Result<(), String> {
+    let bytes = read_bundle(bundle)?;
+    let header = chummy_bundle::header(&bytes).map_err(|e| e.to_string())?;
+    let pw = password::ask()?;
+    let key = chummy_bundle::BundleKey::from_password(&pw, &header.instance_id)
+        .map_err(|e| e.to_string())?;
+    drop(pw);
+    chummy_bundle::open_unchecked(&bytes, &key).map_err(|e| e.to_string())?;
+    println!("{}", *key.to_line());
+    Ok(())
+}
+
+/// `chummyd check`: opens the bundle and says what's in it and what's wrong,
+/// without running anything.
 fn check(a: CheckArgs) -> Result<(), String> {
     let c = open_bundle(&a.bundle, a.password_file.as_deref())?;
-    let r = c.check();
-    println!(
-        "Instance “{}” ({}), time zone {}",
-        c.instance.name, c.instance.id, c.instance.time_zone
-    );
-    for ag in &c.agents {
-        let jobs = c.jobs.iter().filter(|j| j.agent == ag.id).count();
-        println!("  agent {} [{}]: {jobs} jobs", ag.name, ag.id);
+    for line in inspect::describe(&c) {
+        println!("{line}");
     }
-    println!("  channels: {}", channel_names(&c));
-    if let Some(m) = &c.channels.matrix {
-        println!("  matrix: {} on {}", m.user_id, m.homeserver);
-        for (agent, users) in &m.users {
-            println!("    {agent}: {}", users.join(", "));
-        }
-    }
-    for w in &r.warnings {
-        println!("  note: {w}");
+    for w in &c.check().warnings {
+        println!("Note: {w}");
     }
     println!("The bundle is fine.");
     Ok(())
@@ -193,6 +196,20 @@ async fn run(a: RunArgs) -> Result<(), String> {
         config.agents.iter().map(|a| a.id.as_str()),
         &protected,
     )?;
+    // The agents' tools run inside chummyd, as its user: everything in
+    // their folders should be its.
+    syslog::info(
+        "app",
+        format!(
+            "Running as {}; agents' tools run inside chummyd, as the same user",
+            checks::running_as()
+        ),
+    );
+    for (id, dir) in &jails {
+        if let Some(w) = checks::ownership(id, dir)? {
+            syslog::warn("app", w);
+        }
+    }
     let key = config
         .state_key_bytes()
         .ok_or("the bundle's state key isn't valid")?;

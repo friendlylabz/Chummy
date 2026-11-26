@@ -790,7 +790,11 @@ In rough order of importance:
 
 **chummyd** (M1): the bundle is sealed with Argon2id + XChaCha20-Poly1305 and
 a checked-strong password (the export warns that bundle + password = the API
-keys); the password is never on the command line and is wiped once used; the
+keys); the password is never on the command line, never in a file (a password
+file holds only its Argon2id hash, salted with the instance, which opens that
+instance's bundles but doesn't reveal the password) and is wiped once used;
+`chummyd check` describes what a bundle sets up (models, tools, internet,
+jobs, who can talk to it) without running anything; the
 configuration can't change while it runs; the jail dir is checked apart from
 the bundle, the password file and the state folder (and those, with chummyd's
 own folder, are protected places for every agent's jail); the state is

@@ -521,7 +521,16 @@ async fn people_verify_chummyd_then_talk_to_agents_in_their_rooms() {
     let bundle = tmp.path().join("test.chummyd");
     std::fs::write(&bundle, chummy_bundle::seal(&c, PASSWORD).unwrap()).unwrap();
     let password = tmp.path().join("password");
-    std::fs::write(&password, format!("{PASSWORD}\n")).unwrap();
+    std::fs::write(
+        &password,
+        format!(
+            "{}\n",
+            *chummy_bundle::BundleKey::from_password(PASSWORD, &c.instance.id)
+                .unwrap()
+                .to_line()
+        ),
+    )
+    .unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

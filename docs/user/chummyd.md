@@ -52,9 +52,20 @@ chummyd run --bundle home.chummyd --jail-dir /srv/chummy-jails --state /srv/chum
 ```
 
 - chummyd asks for the password (it isn't shown). Without a terminal, give it
-  `--password-file <file>` (one line; make it private: `chmod 600`). There's no
-  way to put the password on the command line, where other programs could see
-  it.
+  `--password-file <file>`: a file holding the password's **hash**, never the
+  password itself (a file with the password in it is refused). Make it with
+
+  ```sh
+  chummyd hash-password --bundle home.chummyd > chummyd_password.txt
+  chmod 400 chummyd_password.txt
+  ```
+
+  It asks for the password, checks it opens the bundle, and writes one line.
+  The hash opens this chummyd's bundles (keep the file private), but doesn't
+  give away the password, which you may use elsewhere. Every bundle you
+  export later for the same chummyd with the same password opens with it
+  too. There's no way to put the password on the command line, where other
+  programs could see it.
 - `--jail-dir` is where the agents' folders go: `<jail dir>/<agent id>/`, made
   if they're missing. It can't hold the bundle, the password file or the state
   folder, or be inside them.
@@ -121,23 +132,59 @@ stops if the zip is missing. The first build takes a while (chummyd is
 built fully optimized); later builds reuse what didn't change. It downloads
 only the base images, Rust and its crates.
 
-Then copy `docker/chummyd/compose.yaml` to a folder of your own (not inside
-the repository) and put beside it:
-
-- `bundle.chummyd`: the bundle you exported.
-- `chummyd_password.txt`: its password, on one line.
-
-**The password file has to be readable by chummyd's user in the container.**
-Compose mounts it with the owner and permissions it has on your computer, so
-give it to user 65532 and make it private:
+**Then set it up with `chummyd-docker-init`**, from anywhere, in a terminal:
 
 ```sh
-sudo chown 65532:65532 chummyd_password.txt
-sudo chmod 400 chummyd_password.txt
+~/chummy/docker/chummyd/chummyd-docker-init ~/chummyd
 ```
 
-(Docker Swarm, Kubernetes and Podman secrets can set the owner and mode
-themselves.) Then:
+It asks:
+
+1. **The folder** for chummyd's files (the argument, or it asks; not inside
+   the repository).
+2. **The bundle** you exported. It copies it into that folder as
+   `bundle.chummyd` and leaves yours as it was.
+3. **Where the agents' folders go:** a Docker volume (Docker keeps it), or a
+   folder on this computer (default: `jails/` in the same folder), where you
+   can see and back up their files. In a folder, each agent works in
+   `<folder>/agents/<agent>`. A folder that already has files can't hold
+   chummyd's own files, and anything in it not owned by chummyd's user can
+   be given to it (it asks).
+4. **Your own certificates:** whether chummyd connects to anything with a
+   self-signed certificate this computer trusts (a homeserver over a VPN,
+   say). Then the container uses this computer's trusted certificates.
+5. **The bundle's password**, never shown, never in your shell's history.
+
+Then it readies everything for chummyd's user in the container (65532), with
+sudo, since giving files to another user takes root:
+
+- `bundle.chummyd`: owned by 65532, readable only by it (mode 400);
+- `chummyd_password.txt`: the password's **hash**, worked out by the image,
+  which also checks the password opens the bundle. The password itself is
+  never written anywhere. Owned by 65532, mode 400;
+- the agents' folder (if on this computer): owned by 65532, only it can open
+  it (mode 700; look inside with sudo).
+
+It checks those owners and modes, then **opens the bundle and says what it
+sets up**, without running anything (in a container with no network, as
+chummyd's user): where its models are, what tools and internet access each
+agent has, its jobs, who can talk to it, and a short "Look at" list of
+anything worth a second look (internet access, approvals over channels,
+plain http to somewhere that isn't local). If that's not what you expected,
+answer no and nothing is set up to run. Otherwise it writes `compose.yaml`
+there, set up with your choices. It stops, saying why, if something's wrong:
+a wrong password, no image (`CHUMMYD_IMAGE` sets its name if it isn't
+`chummyd`), and so on. Run it again after exporting a new bundle.
+
+`chummyd check --bundle <file> --password-file <file>` shows the same
+description anywhere.
+
+(By hand instead: copy `docker/chummyd/compose.yaml`, which uses volumes,
+and put the bundle and `chummyd_password.txt` (made with `chummyd
+hash-password`, above) beside it, both owned by 65532:65532 with mode 400. Docker Swarm, Kubernetes and Podman secrets can set
+the owner and mode themselves.)
+
+Then, in that folder:
 
 ```sh
 docker compose up -d
@@ -152,9 +199,27 @@ what it said.
 What the Compose file sets up:
 
 - The bundle mounted read-only at `/bundle/bundle.chummyd`; the agents'
-  folders in the volume `jails` (as `/jails/agents/<agent>`: chummyd won't use
-  a mount point, such as a volume's root, as the jail dir) and the state folder in the volume `state`
-  (`/state`). Back up `state`: it holds the conversations and Matrix keys.
+  folders in the volume `jails`, or your folder, at `/jails` (each agent in
+  `/jails/agents/<agent>`: chummyd won't use a mount point, such as a volume's
+  root, as the jail dir); the state folder in the volume `state` (`/state`).
+  Back up `state`: it holds the conversations and Matrix keys.
+- Everything runs as user 65532: chummyd, and the agents' tools, which run
+  inside it (WebAssembly). So everything in the agents' folders should
+  belong to 65532. chummyd makes their folders itself; on each start it says
+  in its log who it runs as, and warns about anything in an agent's folder
+  it can't change. **Files you copy in** with `docker cp` (or as root on the
+  host) belong to root, and the agent can read them but not change them.
+  Give them to chummyd's user:
+
+  ```sh
+  docker run --rm -v chummyd_jails:/jails debian:trixie-slim chown -R 65532:65532 /jails
+  # agents' folders on this computer instead:
+  sudo chown -R 65532:65532 ~/chummyd/jails
+  ```
+
+  (`chummyd_jails` is the volume's name when your Compose folder is called
+  `chummyd`: it's the folder's name, then `_jails`. Files people send in
+  Matrix are saved as chummyd's own.)
 - A read-only container with no capabilities and no privilege escalation.
   chummyd listens on nothing, so there are no ports. It never needs the
   Docker socket: don't mount it.

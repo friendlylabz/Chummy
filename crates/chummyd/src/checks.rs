@@ -139,6 +139,130 @@ pub fn jails<'a>(
     Ok(out)
 }
 
+/// Who chummyd runs as. Tools run inside chummyd (WebAssembly), so they act
+/// as this user too, on the agents' folders.
+pub fn running_as() -> String {
+    #[cfg(unix)]
+    {
+        format!(
+            "user {} (group {})",
+            rustix::process::geteuid().as_raw(),
+            rustix::process::getegid().as_raw()
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        "this account".into()
+    }
+}
+
+/// The most entries looked at in one agent's folder.
+#[cfg(unix)]
+const MAX_LOOKED_AT: usize = 50_000;
+
+/// Checks that chummyd (and so the agent's tools) can change what's in an
+/// agent's folder. The folder itself must be chummyd's: an error says how
+/// to fix it otherwise. Files and folders inside that belong to someone
+/// else (copied in as root, say) or are read-only come back as a warning.
+#[cfg(unix)]
+pub fn ownership(id: &str, dir: &Path) -> Result<Option<String>, String> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let (uid, gid) = (
+        rustix::process::geteuid().as_raw(),
+        rustix::process::getegid().as_raw(),
+    );
+    let fix = |what: &Path| {
+        format!(
+            "Give it to chummyd's user: chown -R {uid}:{gid} {} (in Docker, see “In Docker” in the chummyd guide).",
+            what.display()
+        )
+    };
+    let meta = std::fs::symlink_metadata(dir)
+        .map_err(|e| format!("can't look at {}: {e}", dir.display()))?;
+    if meta.uid() != uid {
+        return Err(format!(
+            "{id}'s folder {} belongs to user {}, but chummyd runs as user {uid}, so the agent couldn't write in it. {}",
+            dir.display(),
+            meta.uid(),
+            fix(dir)
+        ));
+    }
+    // chummyd's own: it can open it up to itself.
+    if meta.mode() & 0o700 != 0o700 {
+        std::fs::set_permissions(
+            dir,
+            std::fs::Permissions::from_mode((meta.mode() & 0o7777) | 0o700),
+        )
+        .map_err(|e| format!("can't give chummyd access to {}: {e}", dir.display()))?;
+    }
+
+    let (mut others, mut read_only, mut looked) = (0usize, 0usize, 0usize);
+    let mut example: Option<String> = None;
+    let mut todo = vec![dir.to_path_buf()];
+    'walk: while let Some(d) = todo.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            looked += 1;
+            if looked > MAX_LOOKED_AT {
+                break 'walk;
+            }
+            let Ok(m) = e.metadata() else { continue };
+            let path = e.path();
+            let rel = path
+                .strip_prefix(dir)
+                .unwrap_or(&path)
+                .display()
+                .to_string();
+            if m.uid() != uid {
+                others += 1;
+                example.get_or_insert(format!("{rel}, owned by user {}", m.uid()));
+            } else if m.mode() & 0o200 == 0 && !m.file_type().is_symlink() {
+                read_only += 1;
+                example.get_or_insert(format!("{rel}, read-only"));
+            }
+            // Into folders that are chummyd's own (not through links).
+            if m.is_dir() && !m.file_type().is_symlink() {
+                todo.push(path);
+            }
+        }
+    }
+    if others + read_only == 0 {
+        return Ok(None);
+    }
+    let n = others + read_only;
+    let mut why = vec![];
+    if others > 0 {
+        let verb = if others == 1 { "belongs" } else { "belong" };
+        why.push(format!("{others} {verb} to another user"));
+    }
+    if read_only > 0 {
+        let verb = if read_only == 1 { "is" } else { "are" };
+        why.push(format!("{read_only} {verb} read-only"));
+    }
+    Ok(Some(format!(
+        "{id} can't change {n} file{} or folder{} in its folder ({}; like {}). {}",
+        if n == 1 { "" } else { "s" },
+        if n == 1 { "" } else { "s" },
+        why.join(", "),
+        example.unwrap_or_default(),
+        if others > 0 {
+            fix(dir)
+        } else {
+            format!(
+                "Make them writable if it should: chmod -R u+w {}",
+                dir.display()
+            )
+        }
+    )))
+}
+
+#[cfg(not(unix))]
+pub fn ownership(_id: &str, _dir: &Path) -> Result<Option<String>, String> {
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,5 +312,46 @@ mod tests {
         assert!(j["helper"].ends_with("jails/helper") && j["helper"].is_dir());
         // The state folder can never be an agent's folder.
         assert!(Jail::open(&p.state, &prot).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn what_an_agent_cant_change_is_reported() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("helper");
+        std::fs::create_dir_all(dir.join("notes")).unwrap();
+        std::fs::write(dir.join("notes/a.md"), "x").unwrap();
+        assert_eq!(ownership("helper", &dir).unwrap(), None);
+
+        // A read-only file is reported; a folder closed to chummyd is opened.
+        std::fs::set_permissions(
+            dir.join("notes/a.md"),
+            std::fs::Permissions::from_mode(0o444),
+        )
+        .unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let w = ownership("helper", &dir).unwrap().expect("a warning");
+        assert!(
+            w.contains("1 file") && w.contains("read-only") && w.contains("notes/a.md"),
+            "{w}"
+        );
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
+        assert_eq!(mode & 0o700, 0o700);
+
+        // Files of another user (only root can make them).
+        if rustix::process::geteuid().is_root() {
+            let f = dir.join("root.txt");
+            std::fs::write(&f, "x").unwrap();
+            rustix::fs::chown(&f, Some(rustix::process::Uid::from_raw(1)), None).unwrap();
+            let w = ownership("helper", &dir).unwrap().unwrap();
+            assert!(
+                w.contains("belongs to another user") && w.contains("chown -R"),
+                "{w}"
+            );
+            rustix::fs::chown(&dir, Some(rustix::process::Uid::from_raw(1)), None).unwrap();
+            let e = ownership("helper", &dir).unwrap_err();
+            assert!(e.contains("belongs to user 1"), "{e}");
+        }
     }
 }

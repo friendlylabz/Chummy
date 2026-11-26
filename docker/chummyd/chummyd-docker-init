@@ -1,0 +1,249 @@
+#!/usr/bin/env bash
+# Sets up chummyd in Docker, in a folder of your own: asks for the bundle,
+# its password, and where the agents' folders go (a Docker volume or a
+# folder on this computer). Then it:
+#
+#   - copies the bundle in as bundle.chummyd, chummyd's user's, mode 400;
+#   - writes the password's hash (never the password) to
+#     chummyd_password.txt, chummyd's user's, mode 400;
+#   - readies the agents' folder on disk, if that's where they go;
+#   - opens the bundle and says what it sets up, without running anything;
+#   - checks the owners and modes, and writes the Compose file.
+#
+#   chummyd-docker-init [folder]        (default: this folder)
+#
+# Afterwards, in that folder:  docker compose up -d
+#
+# Giving files to chummyd's user takes root, so it uses sudo when you
+# aren't root. It never changes the bundle you point it at: it copies it.
+#
+# CHUMMYD_IMAGE sets the image's name (default: chummyd). CHUMMYD_UID and
+# CHUMMYD_GID change the user (default 65532, the image's).
+set -euo pipefail
+
+uid="${CHUMMYD_UID:-65532}"
+gid="${CHUMMYD_GID:-65532}"
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+template="$here/compose.yaml"
+
+say() { printf '%s\n' "$*"; }
+fail() {
+  printf 'chummyd-docker-init: %s\n' "$*" >&2
+  exit 1
+}
+# ask "Question" default -> answer (the default when left empty)
+ask() {
+  local answer
+  read -r -e -p "$1${2:+ [$2]}: " answer
+  printf '%s' "${answer:-$2}"
+}
+yes_no() {
+  local answer
+  read -r -p "$1 [${2:-n}] " answer
+  answer="${answer:-${2:-n}}"
+  [[ "$answer" =~ ^[Yy] ]]
+}
+# A path as an absolute one, ~ and all (it needn't exist yet).
+absolute() {
+  local p="${1/#\~/$HOME}"
+  realpath -m -- "$p"
+}
+# Whether a path is the other or inside it.
+within() {
+  [ "$1" = "$2" ] || [[ "$1" == "$2"/* ]]
+}
+
+[ -t 0 ] || fail "run it in a terminal: it asks questions."
+[ -f "$template" ] || fail "can't find compose.yaml beside the script ($template)."
+command -v docker > /dev/null || fail "Docker isn't installed."
+docker compose version > /dev/null 2>&1 || fail "Docker Compose isn't installed (docker-compose-plugin)."
+sudo=""
+if [ "$(id -u)" -ne 0 ]; then
+  command -v sudo > /dev/null || fail "run it as root: it gives files to user $uid."
+  sudo="sudo"
+fi
+
+say "Setting up chummyd in Docker."
+say
+
+# --- Where -----------------------------------------------------------------
+folder="$(absolute "${1:-$(ask "The folder for chummyd's files (the Compose file, bundle and password)" "$PWD")}")"
+if within "$folder" "$(absolute "$here/../..")"; then
+  fail "use a folder outside the Chummy repository: it would hold your bundle and password."
+fi
+mkdir -p -- "$folder"
+cd -- "$folder"
+# Compose names the volumes after the folder (lowercase, letters, digits,
+# - and _ only).
+name="$(basename "$folder" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')"
+if [ -e compose.yaml ] && ! yes_no "$folder/compose.yaml is already there. Replace it?"; then
+  exit 1
+fi
+
+image="${CHUMMYD_IMAGE:-chummyd}"
+docker image inspect "$image" > /dev/null 2>&1 ||
+  fail "there's no image '$image': build it first (docker build -f docker/chummyd/Dockerfile -t chummyd ., from the repository), or set CHUMMYD_IMAGE."
+
+# --- The bundle ------------------------------------------------------------
+default_bundle=""
+[ -f bundle.chummyd ] && default_bundle="$folder/bundle.chummyd"
+bundle="$(ask "The bundle you exported from Chummy" "$default_bundle")"
+[ -n "$bundle" ] || fail "no bundle given."
+bundle="$(absolute "$bundle")"
+[ -f "$bundle" ] || fail "there's no bundle at $bundle."
+
+# --- The agents' folders ---------------------------------------------------
+say
+say "Where should the agents' folders go?"
+say "  1) a Docker volume (Docker keeps it)"
+say "  2) a folder on this computer (you can see and back up the files)"
+case "$(ask "1 or 2" 1)" in
+  1) jails="" ;;
+  2)
+    say "Each agent gets a folder of its own in it: <folder>/agents/<agent>."
+    jails="$(absolute "$(ask "The folder" "$folder/jails")")"
+    [ "$jails" != "/" ] || fail "not the whole disk."
+    # Agents can read everything in it: never chummyd's own files.
+    within "$folder" "$jails" &&
+      fail "the agents' folders can't hold chummyd's own files ($folder)."
+    within "$bundle" "$jails" &&
+      fail "the agents' folders can't hold the bundle."
+    ;;
+  *) fail "answer 1 or 2." ;;
+esac
+
+# --- Certificates ----------------------------------------------------------
+say
+trust_host=no
+if yes_no "Does chummyd connect to anything with your own (self-signed) certificate, which this computer trusts?"; then
+  trust_host=yes
+  [ -f /etc/ssl/certs/ca-certificates.crt ] ||
+    fail "there's no /etc/ssl/certs/ca-certificates.crt: add your certificate with update-ca-certificates first."
+fi
+
+# --- The password ----------------------------------------------------------
+say
+read -r -s -p "The bundle's password: " PW
+say
+[ -n "$PW" ] || fail "no password given."
+
+# --- Ready the files -------------------------------------------------------
+say
+if [ "$bundle" != "$folder/bundle.chummyd" ]; then
+  $sudo install -m 0400 -o "$uid" -g "$gid" -- "$bundle" bundle.chummyd
+else
+  $sudo chown "$uid:$gid" bundle.chummyd
+  $sudo chmod 0400 bundle.chummyd
+fi
+say "bundle.chummyd: copied in."
+
+# The image works out the password's hash (Argon2id, salted with the
+# instance) and checks it opens the bundle: only the hash is kept. The
+# password goes in on standard input (printf is the shell's own), never on
+# a command line.
+run_image() {
+  docker run --rm --network none --read-only --cap-drop ALL \
+    --security-opt no-new-privileges:true --user "$uid:$gid" \
+    -v "$folder/bundle.chummyd:/bundle/bundle.chummyd:ro" "$@"
+}
+say "Working out the password's hash (a few seconds)..."
+if ! line="$(printf '%s\n' "$PW" | run_image -i --entrypoint /usr/local/bin/chummyd "$image" \
+  hash-password --bundle /bundle/bundle.chummyd)"; then
+  unset PW
+  fail "the password doesn't open the bundle (above). Run chummyd-docker-init again."
+fi
+unset PW
+[[ "$line" == chummyd-key-2\ * ]] || fail "the image gave something unexpected for the hash."
+printf '%s\n' "$line" | $sudo install -m 0400 -o "$uid" -g "$gid" /dev/stdin chummyd_password.txt
+unset line
+say "chummyd_password.txt: the password's hash (the password itself isn't kept)."
+
+if [ -n "$jails" ]; then
+  $sudo mkdir -p -- "$jails"
+  if [ -n "$($sudo find "$jails" -mindepth 1 -not -user "$uid" -print -quit)" ]; then
+    if yes_no "$jails has files that aren't chummyd's user's. Give them to it (so agents can change them)?" y; then
+      $sudo chown -R "$uid:$gid" -- "$jails"
+    else
+      say "Left them as they are: agents can't change those (chummyd will say which)."
+    fi
+  fi
+  # chummyd's jail dir is agents/ inside it (the mount's own root can't be).
+  $sudo mkdir -p -- "$jails/agents"
+  $sudo chown "$uid:$gid" -- "$jails" "$jails/agents"
+  $sudo chmod 0700 -- "$jails" "$jails/agents"
+  say "$jails: ready. Agents' folders: $jails/agents/<agent>."
+fi
+
+# --- Owners and modes ------------------------------------------------------
+# What chummyd needs, checked as it is now.
+expect() { # path, mode
+  local got
+  got="$($sudo stat -c '%u:%g %a' -- "$1")"
+  [ "$got" = "$uid:$gid $2" ] || fail "$1 is $got, not $uid:$gid $2."
+}
+expect bundle.chummyd 400
+expect chummyd_password.txt 400
+if [ -n "$jails" ]; then
+  expect "$jails" 700
+  expect "$jails/agents" 700
+fi
+say "Owners and modes: all $uid:$gid, readable only by it."
+
+# --- What the bundle sets up -----------------------------------------------
+# Opened, checked strictly and described, with nothing run: no network, a
+# read-only container, as chummyd's user.
+say
+say "What the bundle sets up (nothing has run):"
+say
+if ! run_image -v "$folder/chummyd_password.txt:/run/secrets/chummyd_password:ro" \
+  --entrypoint /usr/local/bin/chummyd "$image" \
+  check --bundle /bundle/bundle.chummyd --password-file /run/secrets/chummyd_password; then
+  fail "the bundle didn't pass its check (above)."
+fi
+say
+yes_no "Does that look right? Go on to write the Compose file?" y ||
+  fail "stopped: nothing will run. Export the bundle again from Chummy, then run chummyd-docker-init again."
+
+# --- The Compose file ------------------------------------------------------
+# From the repository's compose.yaml, with this setup's choices.
+{
+  cat << EOF
+# chummyd, set up by chummyd-docker-init on $(date -u +%Y-%m-%d).
+#
+#   docker compose up -d        start it (and after a new bundle: restart)
+#   docker attach chummyd       its terminal: /verify Matrix sessions, talk to
+#                               agents; leave with Ctrl-P Ctrl-Q (Ctrl-C stops it)
+#   docker compose logs -f      what it says
+#   docker compose stop         pause runs, save and stop
+#
+# The bundle and password beside this file belong to chummyd's user in the
+# image ($uid:$gid). After exporting a new bundle, run chummyd-docker-init again.
+# See docs/user/chummyd.md ("In Docker") in the Chummy repository.
+
+EOF
+  # Everything from "services:" on.
+  sed -n '/^services:/,$p' "$template"
+} > compose.yaml.new
+
+sed -i "s|^    image: chummyd:latest\$|    image: $image|" compose.yaml.new
+if [ -n "$jails" ]; then
+  sed -i "s|^      - jails:/jails\$|      - $jails:/jails|; /^  jails:\$/d" compose.yaml.new
+fi
+if [ "$trust_host" = yes ]; then
+  sed -i 's|^      # - /etc/ssl/certs/ca-certificates.crt:|      - /etc/ssl/certs/ca-certificates.crt:|' compose.yaml.new
+fi
+docker compose -f compose.yaml.new config --quiet ||
+  fail "the Compose file came out wrong (compose.yaml.new): please report it."
+mv compose.yaml.new compose.yaml
+
+say
+say "Wrote $folder/compose.yaml."
+if [ -n "$jails" ]; then
+  say "The agents' folders: $jails/agents/<agent>. The state: the Docker volume ${name}_state."
+else
+  say "The agents' folders: the Docker volume ${name}_jails. The state: the Docker volume ${name}_state."
+fi
+say
+say "Start it:"
+say "  cd $folder && docker compose up -d"
+say "Then, for Matrix, verify chummyd from your app and confirm in: docker attach chummyd"

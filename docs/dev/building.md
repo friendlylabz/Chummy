@@ -154,7 +154,12 @@ Node version in the workflows when a new Node LTS arrives (each October).
   building, each job writes it into the app with `scripts/set-version.mjs`,
   so the app and its installers always carry the tag's version. Tags must
   be plain `vMAJOR.MINOR.PATCH` (Windows installers refuse anything else);
-  a bad tag fails the release before anything builds. After a release,
+  a bad tag fails the release before anything builds. **The notes come from
+  `CHANGELOG.md`**: the release's text starts with the section headed with
+  its version (`## v0.1.5`), and a release without one stops before building.
+  Write under `## Unreleased` as you go, rename it to the version in the
+  commit you tag, and check with `node scripts/release-notes.mjs v0.1.5`.
+  After a release,
   bring the repository's files up to date: run **Set version**
   (`set-version.yml`) from the Actions tab with the tag, which commits the
   change, or run `node scripts/set-version.mjs v0.1.3` yourself (`--check`
