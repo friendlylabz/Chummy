@@ -399,16 +399,25 @@ impl Router {
         }
         self.ensure_chat(to);
         match chummy_session::send_message(&self.p, to.agent(), &to.chat(), text) {
-            Ok(run) => {
-                self.views
-                    .insert(run.clone(), (to.clone(), RunView::new(run)));
-            }
+            Ok(run) => self.track(to, run),
             Err(e) if e.contains("still working") => self.say(
                 to,
                 "Busy with your last message: /stop it, or wait for the reply.",
             ),
             Err(e) => self.say(to, &e),
         }
+    }
+
+    /// Shows a run in its conversation as it goes.
+    fn track(&mut self, to: &Conv, run: String) {
+        if let Conv::Matrix(r) = to {
+            self.to_matrix(ToMatrix::Started {
+                run_id: run.clone(),
+                room: r.room.clone(),
+            });
+        }
+        self.views
+            .insert(run.clone(), (to.clone(), RunView::new(run)));
     }
 
     /// The run going on in a conversation, if any.
@@ -454,8 +463,7 @@ impl Router {
             Command::Resume => match chummy_session::resume_run(&self.p, &agent, &chat) {
                 Ok(run) => {
                     self.say(to, "Carrying on where it stopped.");
-                    self.views
-                        .insert(run.clone(), (to.clone(), RunView::new(run)));
+                    self.track(to, run);
                 }
                 Err(e) => self.say(to, &e),
             },

@@ -1,6 +1,8 @@
 //! Everything chummyd sends to Matrix, in order. A run's response is one
 //! message edited as it grows (at most every [`EDIT_EVERY`]), split into
-//! several when it's long.
+//! several when it's long. While a run goes, chummyd shows it's typing
+//! (Matrix forgets that after a few seconds, so it's kept up), except while
+//! a question waits for the person.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -29,6 +31,22 @@ struct RunMsg {
     want: String,
     done: bool,
     last: Option<Instant>,
+    /// Showing that chummyd is typing.
+    typing: bool,
+}
+
+impl RunMsg {
+    fn new(room: &str) -> Self {
+        Self {
+            room: room.into(),
+            events: vec![],
+            sent: vec![],
+            want: String::new(),
+            done: false,
+            last: None,
+            typing: false,
+        }
+    }
 }
 
 pub async fn run(
@@ -56,7 +74,14 @@ pub async fn run(
                 Some(m) => handle(&ctx, &c, &mut runs, m).await,
                 None => return,
             },
-            _ = tick.tick() => flush_due(&c, &mut runs, false).await,
+            _ = tick.tick() => {
+                flush_due(&c, &mut runs, false).await;
+                // Kept up: the SDK only resends when the last one is about
+                // to run out.
+                for r in runs.values().filter(|r| r.typing) {
+                    typing(&c, &r.room, true).await;
+                }
+            }
         }
     }
 }
@@ -69,26 +94,23 @@ async fn handle(ctx: &Ctx, c: &Client, runs: &mut HashMap<String, RunMsg>, m: To
         ToMatrix::Text { room, text } => {
             send_parts(c, &room, &text, false).await;
         }
+        ToMatrix::Started { run_id, room } => {
+            let r = runs.entry(run_id).or_insert_with(|| RunMsg::new(&room));
+            r.typing = true;
+            typing(c, &room, true).await;
+        }
         ToMatrix::Run {
             run_id,
             room,
             text,
             done,
         } => {
-            let r = runs.entry(run_id).or_insert_with(|| RunMsg {
-                room: room.clone(),
-                events: vec![],
-                sent: vec![],
-                want: String::new(),
-                done: false,
-                last: None,
-            });
+            let r = runs.entry(run_id).or_insert_with(|| RunMsg::new(&room));
             let first = r.last.is_none();
             r.want = text;
             r.done = done;
-            if first {
-                typing(c, &room, true).await;
-            }
+            // Going again after a question was answered; or finished.
+            r.typing = !done;
             // The first text goes out at once, the last too.
             if first || done {
                 flush(c, r).await;
@@ -99,9 +121,16 @@ async fn handle(ctx: &Ctx, c: &Client, runs: &mut HashMap<String, RunMsg>, m: To
             runs.retain(|_, r| !(r.done && r.sent_all()));
         }
         ToMatrix::Question { room, ask_id, text } => {
-            // What the run said before asking goes first.
+            // What the run said before asking goes first; then it waits
+            // for the person, so it isn't typing.
+            let mut waiting = false;
             for r in runs.values_mut().filter(|r| r.room == room) {
                 flush(c, r).await;
+                waiting |= r.typing;
+                r.typing = false;
+            }
+            if waiting {
+                typing(c, &room, false).await;
             }
             if let Some(ev) = send_parts(c, &room, &text, true).await {
                 ctx.remember_question(ev, ask_id);
@@ -119,6 +148,9 @@ async fn handle(ctx: &Ctx, c: &Client, runs: &mut HashMap<String, RunMsg>, m: To
 impl RunMsg {
     fn parts(&self) -> Vec<String> {
         chummy_channel::split(&self.want, MAX_PART)
+            .into_iter()
+            .filter(|p| !p.trim().is_empty())
+            .collect()
     }
 
     fn sent_all(&self) -> bool {
@@ -146,9 +178,6 @@ async fn flush(c: &Client, r: &mut RunMsg) {
         return;
     };
     for (i, part) in r.parts().into_iter().enumerate() {
-        if part.trim().is_empty() {
-            continue;
-        }
         if r.sent.get(i) == Some(&part) {
             continue;
         }

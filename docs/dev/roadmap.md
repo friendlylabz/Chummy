@@ -132,7 +132,8 @@ Ideas for later:
 
 Status: **being built.** M0 (sharing the app's agent code), M1 (the
 headless runner with the terminal channel, and the Configure chummyd window)
-and M2 (the Matrix channel) are done: see [chummyd](../user/chummyd.md) and the
+and M2 (the Matrix channel) are done, and M3 has its Dockerfile (built
+locally; no published image or release binaries yet): see [chummyd](../user/chummyd.md) and the
 [file formats](file-formats.md#chummyd). The rest is the plan agreed in
 November 2026. This section is the master plan for
 building chummyd, and the reference for keeping Chummy's code ready for it.

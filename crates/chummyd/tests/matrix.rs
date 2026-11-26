@@ -297,6 +297,7 @@ struct Seen {
 struct Alice {
     client: Client,
     rx: tokio::sync::mpsc::UnboundedReceiver<Seen>,
+    typing: tokio::sync::mpsc::UnboundedReceiver<(OwnedRoomId, bool)>,
     seen: Vec<Seen>,
 }
 
@@ -353,6 +354,17 @@ impl Alice {
                 });
             }
         });
+        // Whether chummyd shows it's typing, in each room.
+        let (typing_tx, typing) = tokio::sync::mpsc::unbounded_channel();
+        client.add_event_handler(
+            move |ev: matrix_sdk::ruma::events::typing::SyncTypingEvent, room: Room| {
+                let tx = typing_tx.clone();
+                async move {
+                    let on = ev.content.user_ids.iter().any(|u| u == "@bot:localhost");
+                    let _ = tx.send((room.room_id().to_owned(), on));
+                }
+            },
+        );
         let c = client.clone();
         tokio::spawn(async move {
             let _ = c
@@ -362,6 +374,7 @@ impl Alice {
         Self {
             client,
             rx,
+            typing,
             seen: vec![],
         }
     }
@@ -379,6 +392,32 @@ impl Alice {
                 }
                 _ => panic!("never saw it; saw: {:#?}", self.seen),
             }
+        }
+    }
+
+    /// Waits until chummyd shows it's typing in `room` (or stops).
+    async fn expect_typing(&mut self, room: &OwnedRoomId, on: bool) {
+        let deadline = tokio::time::Instant::now() + WAIT;
+        loop {
+            match tokio::time::timeout_at(deadline, self.typing.recv()).await {
+                Ok(Some((r, t))) if &r == room && t == on => return,
+                Ok(Some(_)) => {}
+                _ => panic!(
+                    "chummyd never {} typing",
+                    if on { "started" } else { "stopped" }
+                ),
+            }
+        }
+    }
+
+    /// Fails if chummyd stops typing in `room` within `time`.
+    async fn typing_stays(&mut self, room: &OwnedRoomId, time: Duration) {
+        let until = tokio::time::Instant::now() + time;
+        while let Ok(Some((r, on))) = tokio::time::timeout_at(until, self.typing.recv()).await {
+            assert!(
+                &r != room || on,
+                "chummyd stopped typing while the run went on"
+            );
         }
     }
 
@@ -421,15 +460,42 @@ async fn people_verify_chummyd_then_talk_to_agents_in_their_rooms() {
     hs.register("bot", BOT_PW);
     hs.register("alice", ALICE_PW);
 
+    // A model that never answers: a run that calls it goes on until it's
+    // stopped.
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let model_url = format!("http://{}/v1", silent.local_addr().unwrap());
+    std::thread::spawn(move || {
+        let mut held = vec![];
+        for conn in silent.incoming().flatten() {
+            held.push(conn);
+        }
+    });
+
     let tmp = tempfile::tempdir().unwrap();
     let mut c = Config::new_instance("Test", "UTC").unwrap();
     c.providers.push(
         serde_json::from_value(serde_json::json!({
             "id": "m", "name": "M", "kind": "open_ai_compatible",
-            "base_url": "http://127.0.0.1:9/v1", "model": "x"
+            "base_url": model_url, "model": "x"
         }))
         .unwrap(),
     );
+    c.loops.insert(
+        "slow".into(),
+        LoopFile {
+            blocks: vec![
+                block("in", "input", serde_json::json!({})),
+                block("m", "llm", serde_json::json!({})),
+                block("out", "output", serde_json::json!({})),
+            ],
+            links: vec![
+                Link::new(("in", "out"), ("m", "in")),
+                Link::new(("m", "out"), ("out", "in")),
+            ],
+            ..LoopFile::new("slow")
+        },
+    );
+    c.agents.push(agent("thinker", "Thinker", "slow"));
     c.loops.insert("echo".into(), loop_file(false));
     c.loops.insert("asker".into(), loop_file(true));
     c.agents.push(agent("echoer", "Echoer", "echo"));
@@ -443,6 +509,7 @@ async fn people_verify_chummyd_then_talk_to_agents_in_their_rooms() {
             "users": {
                 "echoer": ["@alice:localhost"],
                 "asker": ["@alice:localhost"],
+                "thinker": ["@alice:localhost"],
             },
             "upload_mb": 1,
         }))
@@ -467,7 +534,7 @@ async fn people_verify_chummyd_then_talk_to_agents_in_their_rooms() {
     let mut alice = Alice::log_in(&hs.url).await;
     let invited = until("the invites", async || {
         let rooms = alice.client.invited_rooms();
-        (rooms.len() == 2).then_some(rooms)
+        (rooms.len() == 3).then_some(rooms)
     })
     .await;
     for r in &invited {
@@ -486,6 +553,7 @@ async fn people_verify_chummyd_then_talk_to_agents_in_their_rooms() {
     };
     let echo = by_name("Echoer (Test)").await;
     let ask = by_name("Asker (Test)").await;
+    let think = by_name("Thinker (Test)").await;
     assert!(
         alice
             .room(&echo)
@@ -559,6 +627,15 @@ async fn people_verify_chummyd_then_talk_to_agents_in_their_rooms() {
         .await;
 
     // The asker asks; Alice answers by replying to the question.
+    // chummyd shows it's typing while a run goes (kept up past Matrix's
+    // few seconds), and stops when it ends.
+    alice.say(&think, "hmm").await;
+    alice.expect_typing(&think, true).await;
+    alice.typing_stays(&think, Duration::from_secs(12)).await;
+    alice.say(&think, "/stop").await;
+    alice.expect_typing(&think, false).await;
+
+    // It stops while a question waits.
     alice.say(&ask, "start").await;
     let q = alice
         .expect(&ask, |s| s.notice && s.body.contains("Which one?"))
@@ -625,6 +702,6 @@ async fn people_verify_chummyd_then_talk_to_agents_in_their_rooms() {
     alice
         .expect(&echo, |s| !s.notice && s.body.contains("again"))
         .await;
-    assert_eq!(alice.client.joined_rooms().len(), 3, "no new rooms");
+    assert_eq!(alice.client.joined_rooms().len(), 4, "no new rooms");
     d.stop();
 }

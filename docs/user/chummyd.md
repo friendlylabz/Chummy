@@ -85,34 +85,81 @@ next time; they don't carry on by themselves. Runs that can't pause in time
 
 ### In Docker
 
-Give the password as a Docker secret, mount the bundle read-only, and keep the
-jail dir and the state folder in volumes:
+`docker/chummyd/` has a Dockerfile and a Compose file. The image is
+distroless (no shell, no package manager), holds only chummyd and what it
+needs, and runs as the unprivileged user 65532. For now you build it
+yourself (x86_64), from the repository's root:
 
-```yaml
-services:
-  chummyd:
-    image: chummyd:latest   # or a container with the chummyd binary
-    command: ["run", "--bundle", "/bundle/home.chummyd", "--jail-dir", "/jails",
-              "--state", "/state", "--password-file", "/run/secrets/chummyd_password"]
-    user: "10001:10001"
-    read_only: true
-    cap_drop: [ALL]
-    security_opt: ["no-new-privileges:true"]
-    stop_grace_period: 2m
-    volumes:
-      - ./bundle:/bundle:ro
-      - jails:/jails
-      - state:/state
-    secrets: [chummyd_password]
-    stdin_open: true   # the terminal channel, and /verify (docker attach)
-    tty: true
-secrets:
-  chummyd_password:
-    file: ./chummyd_password.txt
-volumes:
-  jails:
-  state:
+```sh
+docker build -f docker/chummyd/Dockerfile -t chummyd .
 ```
+
+The first build takes a while: it builds the tools' Python from python.org's
+source (checked against pinned hashes and signatures) and chummyd itself.
+Later builds reuse what didn't change.
+
+Then copy `docker/chummyd/compose.yaml` to a folder of your own (not inside
+the repository) and put beside it:
+
+- `bundle.chummyd`: the bundle you exported.
+- `chummyd_password.txt`: its password, on one line.
+
+**The password file has to be readable by chummyd's user in the container.**
+Compose mounts it with the owner and permissions it has on your computer, so
+give it to user 65532 and make it private:
+
+```sh
+sudo chown 65532:65532 chummyd_password.txt
+sudo chmod 400 chummyd_password.txt
+```
+
+(Docker Swarm, Kubernetes and Podman secrets can set the owner and mode
+themselves.) Then:
+
+```sh
+docker compose up -d
+docker attach chummyd
+```
+
+`docker attach` is chummyd's terminal: confirm Matrix verifications there
+(`/verify`), or talk to agents if the terminal channel is on. **Leave it
+with Ctrl-P Ctrl-Q**: Ctrl-C stops chummyd. `docker logs chummyd` shows
+what it said.
+
+What the Compose file sets up:
+
+- The bundle mounted read-only at `/bundle/bundle.chummyd`; the agents'
+  folders in the volume `jails` (as `/jails/agents/<agent>`: chummyd won't use
+  a mount point, such as a volume's root, as the jail dir) and the state folder in the volume `state`
+  (`/state`). Back up `state`: it holds the conversations and Matrix keys.
+- A read-only container with no capabilities and no privilege escalation.
+  chummyd listens on nothing, so there are no ports. It never needs the
+  Docker socket: don't mount it.
+- `stop_grace_period: 2m`, longer than chummyd's 90 seconds for pausing
+  runs, so `docker compose stop` (or a restart) pauses them cleanly.
+- `restart: unless-stopped`. To stop chummyd for good, use
+  `docker compose stop`: after `/quit` or Ctrl-C, Docker starts it again.
+- A model on the same computer (Ollama, say) is at
+  `http://host.docker.internal:11434` from inside the container: use that
+  address in the app's model connection, and uncomment the `extra_hosts`
+  line on Linux. A homeserver in the same Compose file is at its service
+  name (`http://synapse:8008`, say). Both count as local, so they can use
+  plain http.
+
+**Without a password file:** run it by hand with a terminal, and without
+`--password-file`:
+
+```sh
+docker run -it --name chummyd --read-only --tmpfs /tmp --cap-drop ALL \
+  --security-opt no-new-privileges:true --stop-timeout 120 \
+  -v "$PWD/bundle.chummyd:/bundle/bundle.chummyd:ro" \
+  -v chummyd_jails:/jails -v chummyd_state:/state \
+  chummyd run --bundle /bundle/bundle.chummyd --jail-dir /jails/agents --state /state
+```
+
+chummyd asks for the password (so it never touches the disk); then leave
+with Ctrl-P Ctrl-Q. It can't restart by itself that way: each start waits
+for the password.
 
 ## 3. Talk to it (the terminal channel)
 
@@ -202,7 +249,8 @@ in the bundle. Without a terminal at all, verifications can't be confirmed
 Send a message in the room: it goes to that agent. Its reply comes back as
 one message that grows as the run goes (edited at most every two seconds),
 with how the run ended and its figures at the end; long replies are split
-over several messages. The commands are the terminal's, except `/agents`,
+over several messages. While it works, chummyd shows as typing (not while
+it waits for your answer to a question). The commands are the terminal's, except `/agents`,
 `/agent` and `/quit` (each room talks to one agent, and only the operator
 stops chummyd).
 

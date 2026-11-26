@@ -1,0 +1,59 @@
+# chummyd with Docker Compose. Build the image first, from the repository's
+# root:
+#
+#   docker build -f docker/chummyd/Dockerfile -t chummyd .
+#
+# Then copy this file to a folder of your own (not inside the repository)
+# and put beside it:
+#
+#   bundle.chummyd          the bundle you exported from Chummy
+#   chummyd_password.txt    its password, on one line, readable only by
+#                           chummyd's user in the container (65532):
+#                             sudo chown 65532:65532 chummyd_password.txt
+#                             sudo chmod 400 chummyd_password.txt
+#
+# Then, in that folder:
+#
+#   docker compose up -d
+#   docker attach chummyd       # to /verify Matrix sessions or talk to agents
+#                               # leave with Ctrl-P Ctrl-Q (Ctrl-C stops chummyd)
+#
+# See docs/user/chummyd.md ("In Docker").
+
+services:
+  chummyd:
+    image: chummyd:latest
+    container_name: chummyd
+    restart: unless-stopped
+    # As little as possible: no root, no capabilities, nothing written
+    # outside its two volumes.
+    user: "65532:65532"
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # chummyd pauses every run when stopped and waits up to 90 seconds
+    # (--grace) for them; give it longer than that.
+    stop_grace_period: 2m
+    # The terminal: for /verify (Matrix) and the terminal channel.
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./bundle.chummyd:/bundle/bundle.chummyd:ro
+      - jails:/jails
+      - state:/state
+    secrets: [chummyd_password]
+    # chummyd listens on nothing, so there are no ports. Never mount the
+    # Docker socket: chummyd doesn't need it.
+    #
+    # A model on this computer (Ollama, say): use
+    # http://host.docker.internal:11434 in the app's connection, and:
+    # extra_hosts: ["host.docker.internal:host-gateway"]
+
+secrets:
+  chummyd_password:
+    file: ./chummyd_password.txt
+
+volumes:
+  jails:
+  state:

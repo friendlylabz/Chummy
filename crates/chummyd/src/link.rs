@@ -34,6 +34,9 @@ pub enum ToMatrix {
     Notice { room: String, text: String },
     /// An agent saying something outside a run (a job's reply).
     Text { room: String, text: String },
+    /// A run started in a room: chummyd shows it's typing until it ends
+    /// (or asks something and waits).
+    Started { run_id: String, room: String },
     /// A run's response so far: one message, edited as it grows.
     Run {
         run_id: String,

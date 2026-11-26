@@ -1,8 +1,10 @@
 name: CI (all systems)
 
 # Started by hand (Actions tab → "CI (all systems)" → Run workflow): every
-# check on Linux, Windows and macOS. Worth running before a release and after
-# changes to platform code (sandboxes, keychain, paths, the bundled Python).
+# check on Linux, Windows and macOS, and chummyd's checks (chummyd.yml: its
+# tests, Matrix against Synapse, and its Docker image). Worth running before a
+# release and after changes to platform code (sandboxes, keychain, paths, the
+# bundled Python) or to the crates chummyd shares.
 
 on:
   workflow_dispatch:
@@ -20,3 +22,9 @@ jobs:
     with:
       # macos-15-intel: the arm64 macOS runners have been too busy to start jobs.
       oses: '["ubuntu-24.04", "windows-latest", "macos-15-intel"]'
+
+  chummyd:
+    name: chummyd
+    uses: ./.github/workflows/chummyd.yml
+    permissions:
+      contents: read

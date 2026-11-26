@@ -34,6 +34,20 @@ CHUMMY_TEST_SYNAPSE=/tmp/synapse/bin/python cargo test -p chummyd --test matrix
 
 Without `CHUMMY_TEST_SYNAPSE` it's skipped.
 
+chummyd's Docker image (`docker/chummyd/`, distroless, x86_64) builds the
+tools' Python and chummyd inside Docker. `tests/docker.rs` runs an image
+locked down as the docs say:
+
+```sh
+docker build -f docker/chummyd/Dockerfile -t chummyd .
+CHUMMY_TEST_IMAGE=chummyd cargo test -p chummyd --test docker
+```
+
+CI on each push checks the app and its crates only (chummyd excluded). The
+**chummyd** workflow (`chummyd.yml`, started by hand, and part of "CI (all
+systems)") checks chummyd: clippy with and without Matrix, no Tauri in its
+dependencies, its tests (Matrix against Synapse), and its image.
+
 Checks (CI runs all of them, and so should you before committing):
 
 ```sh

@@ -1,0 +1,103 @@
+name: chummyd
+
+# chummyd's checks, apart from the app's: started by hand (Actions tab →
+# "chummyd" → Run workflow), and by "CI (all systems)" (ci-all.yml). Linux
+# only for now, as is its image.
+#
+# - Rust: clippy (with and without Matrix), chummyd never depending on
+#   Tauri, and its tests, including Matrix end to end against Synapse.
+# - Image: builds docker/chummyd/Dockerfile and runs it as the docs say.
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chummyd-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  wasi-python:
+    name: Python for WASI
+    uses: ./.github/workflows/wasi-python.yml
+    permissions:
+      contents: read
+
+  rust:
+    name: Rust (chummyd)
+    needs: wasi-python
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: The tools' Python (built into chummyd)
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: wasi-python
+          path: wasi-python
+      - name: Point the build and tests at it
+        run: |
+          echo "CHUMMY_TEST_PYTHON_ZIP=$GITHUB_WORKSPACE/wasi-python/python-wasi.zip" >> "$GITHUB_ENV"
+          echo "CHUMMY_REQUIRE_BUNDLED_PYTHON=1" >> "$GITHUB_ENV"
+      # A shared crate's keychain code needs these to build.
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libdbus-1-dev
+      - name: Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: chummyd
+
+      - name: Clippy
+        run: cargo clippy -p chummyd --all-targets --locked -- -D warnings
+      - name: Clippy without Matrix
+        run: cargo clippy -p chummyd --all-targets --no-default-features --locked -- -D warnings
+      # chummyd runs agents with the app's own crates, but never with Tauri
+      # or a webview.
+      - name: chummyd doesn't depend on Tauri
+        run: |
+          if cargo tree -p chummyd -e normal --locked --prefix none | grep -iE '^(tauri|wry|webkit2gtk)'; then
+            echo "chummyd must not depend on Tauri" >&2
+            exit 1
+          fi
+      # The Matrix channel end to end, against a real homeserver.
+      - name: Synapse for the Matrix test
+        run: |
+          python3 -m venv "$RUNNER_TEMP/synapse"
+          "$RUNNER_TEMP/synapse/bin/pip" install --quiet matrix-synapse==1.166.0
+          echo "CHUMMY_TEST_SYNAPSE=$RUNNER_TEMP/synapse/bin/python" >> "$GITHUB_ENV"
+      - name: Test
+        run: cargo test -p chummyd --locked
+
+  image:
+    name: Docker image
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Builds the tools' Python and chummyd inside Docker, as anyone would.
+      - name: Build the image
+        run: docker build -f docker/chummyd/Dockerfile -t chummyd:ci .
+      - name: Its size
+        run: docker image ls chummyd:ci
+
+      # The test runs the image; building the test needs these.
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libdbus-1-dev
+      - name: Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: chummyd-image
+      - name: Run it
+        env:
+          CHUMMY_TEST_IMAGE: chummyd:ci
+        run: cargo test -p chummyd --test docker --locked -- --nocapture

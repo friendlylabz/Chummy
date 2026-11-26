@@ -1,8 +1,9 @@
 name: Checks
 
-# Every check CI runs, on the systems the caller picks. Called by ci.yml
-# (each push and pull request: Linux only) and ci-all.yml (started by hand:
-# Linux, Windows and macOS).
+# Every check of the Chummy app and its crates, on the systems the caller
+# picks. Called by ci.yml (each push and pull request: Linux only) and
+# ci-all.yml (started by hand: Linux, Windows and macOS). chummyd has its
+# own checks (chummyd.yml).
 
 on:
   workflow_call:
@@ -94,35 +95,17 @@ jobs:
       - name: Format
         if: runner.os == 'Linux'
         run: cargo fmt --all --check
+      # chummyd has its own workflow (chummyd.yml).
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --exclude chummyd --all-targets --locked -- -D warnings
       # The Container sandbox test runs real tools in real Docker containers.
       - name: Docker image for the container sandbox test
         if: runner.os == 'Linux'
         run: |
           docker pull python:3.14-slim
           echo "CHUMMY_TEST_DOCKER_IMAGE=python:3.14-slim" >> "$GITHUB_ENV"
-      # chummyd's Matrix channel end to end, against a real homeserver.
-      - name: Synapse for the Matrix test
-        if: runner.os == 'Linux'
-        run: |
-          python3 -m venv "$RUNNER_TEMP/synapse"
-          "$RUNNER_TEMP/synapse/bin/pip" install --quiet matrix-synapse==1.166.0
-          echo "CHUMMY_TEST_SYNAPSE=$RUNNER_TEMP/synapse/bin/python" >> "$GITHUB_ENV"
       - name: Test
-        run: cargo test --workspace --locked
-      - name: chummyd without Matrix
-        if: runner.os == 'Linux'
-        run: cargo clippy -p chummyd --all-targets --no-default-features --locked -- -D warnings
-      # chummyd runs agents with the app's own crates, but never with Tauri
-      # or a webview.
-      - name: chummyd doesn't depend on Tauri
-        if: runner.os == 'Linux'
-        run: |
-          if cargo tree -p chummyd -e normal --locked --prefix none | grep -iE '^(tauri|wry|webkit2gtk)'; then
-            echo "chummyd must not depend on Tauri" >&2
-            exit 1
-          fi
+        run: cargo test --workspace --exclude chummyd --locked
       # Real HTTPS to github.com and PyPI with the operating system checking
       # certificates (Windows fetches missing root certificates on demand).
       - name: HTTPS with the OS certificate verifier

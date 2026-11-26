@@ -1,0 +1,19 @@
+# What the chummyd image's build doesn't need (Docker reads this file for
+# docker/chummyd/Dockerfile, with the repository's root as the context).
+.git
+**/target
+node_modules
+ui/dist
+src-tauri/gen
+wasi-python
+docs
+assets
+**/*.log
+**/__pycache__
+**/*.pyc
+.vscode
+.idea
+# Bundles, passwords and state never belong in an image.
+**/*.chummyd
+**/*.chummyd.state
+**/chummyd_password*

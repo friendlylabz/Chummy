@@ -122,8 +122,18 @@ pub fn jails<'a>(
     agents: impl IntoIterator<Item = &'a str>,
     protected: &Protected,
 ) -> Result<BTreeMap<String, PathBuf>, String> {
-    validate_workspace(jail_dir, protected)
-        .map_err(|e| format!("The jail dir {} can't be used: {e}.", jail_dir.display()))?;
+    validate_workspace(jail_dir, protected).map_err(|e| {
+        let hint = if matches!(e, chummy_sandbox::WorkspaceError::DriveRoot) {
+            // As a Docker volume is.
+            " A mounted volume counts as a drive: use a folder inside it (like /jails/agents)."
+        } else {
+            ""
+        };
+        format!(
+            "The jail dir {} can't be used: {e}.{hint}",
+            jail_dir.display()
+        )
+    })?;
     let mut out = BTreeMap::new();
     for id in agents {
         let dir = jail_dir.join(id);

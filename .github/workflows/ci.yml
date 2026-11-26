@@ -1,7 +1,9 @@
 name: CI
 
-# Each push and pull request: every check, on Linux only. To test Windows
-# and macOS too, run "CI (all systems)" (ci-all.yml) from the Actions tab.
+# Each push and pull request: every check of the app and its crates, on
+# Linux only. To test Windows and macOS too, and chummyd, run "CI (all
+# systems)" (ci-all.yml) from the Actions tab; chummyd alone: "chummyd"
+# (chummyd.yml).
 
 on:
   push:
