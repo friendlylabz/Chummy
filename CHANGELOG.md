@@ -9,7 +9,7 @@ the version (`## v0.1.5`) in the commit you tag. Keep each line short and
 about what people notice; `scripts/release-notes.mjs v0.1.5` shows what the
 release will say.
 
-## Unreleased
+## v0.1.6
 
 - **Breaking:** tools are switched on per agent. Each agent has a tool
   switchboard (Settings → Agents): for every tool, **On**, **Ask first** and
