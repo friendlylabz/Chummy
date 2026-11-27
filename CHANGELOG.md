@@ -9,7 +9,7 @@ the version (`## v0.1.5`) in the commit you tag. Keep each line short and
 about what people notice; `scripts/release-notes.mjs v0.1.5` shows what the
 release will say.
 
-## Unreleased
+## v0.1.5
 
 <!-- What's changed since the last release. -->
 
