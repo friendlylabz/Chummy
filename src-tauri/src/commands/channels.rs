@@ -1,7 +1,7 @@
 //! Settings → Channels: adding, changing, turning off and deleting the
-//! channels agents can be talked to through, and answering their emoji
-//! verifications. Anything that lets more people reach an agent asks
-//! natively first.
+//! channels agents can be talked to through; answering Matrix emoji
+//! verifications; Telegram pairing codes and the people let in. Anything
+//! that lets more people reach an agent asks natively first.
 
 use serde::Serialize;
 use tauri::{AppHandle, State, WebviewWindow};
@@ -10,15 +10,19 @@ use zeroize::Zeroizing;
 use super::CmdResult;
 use crate::channels::{self, Live};
 use crate::dialogs;
-use crate::settings::{ChannelConfig, ChannelKind, Settings};
+use crate::settings::{ChannelConfig, ChannelKind, MatrixChannel, Settings};
 use crate::state::AppState;
+use chummy_channel::{Code, Person};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ChannelView {
     #[serde(flatten)]
     pub config: ChannelConfig,
-    /// A password is saved in the keychain.
-    pub has_password: bool,
+    /// Its secret (Matrix: password; Telegram: bot token) is saved in the
+    /// keychain.
+    pub has_secret: bool,
+    /// Who was let in (Telegram).
+    pub people: Vec<Person>,
     pub live: Live,
 }
 
@@ -30,12 +34,16 @@ pub fn list_channels(state: State<'_, AppState>) -> Vec<ChannelView> {
         .channels
         .into_iter()
         .map(|c| ChannelView {
-            has_password: state
+            has_secret: state
                 .secrets
-                .get(&channels::password_key(&c.id))
+                .get(&channels::secret_key(&c.id))
                 .ok()
                 .flatten()
                 .is_some(),
+            people: match c.kind {
+                ChannelKind::Telegram(_) => channels::people(&state, &c.id),
+                ChannelKind::Matrix(_) => vec![],
+            },
             live: live.get(&c.id).cloned().unwrap_or_default(),
             config: c,
         })
@@ -51,17 +59,34 @@ fn check(s: &Settings, c: &ChannelConfig) -> CmdResult<()> {
     if s.agent(&c.agent).is_none() {
         return Err("Choose the agent people talk to.".into());
     }
-    let ChannelKind::Matrix(m) = &c.kind;
-    match chummy_llm::endpoint_problem(&m.homeserver) {
-        Some(p) => return Err(format!("The homeserver: {p}")),
-        None if chummy_llm::unencrypted_remote(&m.homeserver) => {
-            return Err(
-                "The homeserver must use https (plain http only on this computer or your local network)."
-                    .into(),
-            );
+    match &c.kind {
+        ChannelKind::Matrix(m) => check_matrix(s, c, m),
+        ChannelKind::Telegram(t) => {
+            server("The Bot API server", &t.api_url)?;
+            if !(1..=chummy_bundle::MAX_TELEGRAM_UPLOAD_MB).contains(&t.upload_mb) {
+                return Err(format!(
+                    "The largest file must be between 1 and {} MB (Telegram gives bots no more).",
+                    chummy_bundle::MAX_TELEGRAM_UPLOAD_MB
+                ));
+            }
+            Ok(())
         }
-        None => {}
     }
+}
+
+/// An address Chummy connects to: https, or plain http only nearby.
+fn server(what: &str, url: &str) -> CmdResult<()> {
+    match chummy_llm::endpoint_problem(url) {
+        Some(p) => Err(format!("{what}: {p}")),
+        None if chummy_llm::unencrypted_remote(url) => Err(format!(
+            "{what} must use https (plain http only on this computer or your local network)."
+        )),
+        None => Ok(()),
+    }
+}
+
+fn check_matrix(s: &Settings, c: &ChannelConfig, m: &MatrixChannel) -> CmdResult<()> {
+    server("The homeserver", &m.homeserver)?;
     if !chummy_bundle::valid_matrix_id(&m.user_id) {
         return Err("The bot's Matrix ID isn't valid (it looks like @name:server).".into());
     }
@@ -85,8 +110,7 @@ fn check(s: &Settings, c: &ChannelConfig) -> CmdResult<()> {
         ));
     }
     let same_bot = s.channels.iter().any(|o| {
-        let ChannelKind::Matrix(om) = &o.kind;
-        o.id != c.id && om.user_id == m.user_id
+        o.id != c.id && matches!(&o.kind, ChannelKind::Matrix(om) if om.user_id == m.user_id)
     });
     if same_bot {
         return Err(
@@ -96,37 +120,74 @@ fn check(s: &Settings, c: &ChannelConfig) -> CmdResult<()> {
     Ok(())
 }
 
+/// A Telegram channel's token: one from @BotFather, and a bot no other
+/// channel uses.
+fn check_token(state: &AppState, s: &Settings, c: &ChannelConfig, token: &str) -> CmdResult<()> {
+    if !chummy_bundle::valid_telegram_token(token) {
+        return Err(
+            "That isn't a bot token: it looks like 123456:ABC-def…, as @BotFather gives it.".into(),
+        );
+    }
+    let bot = chummy_bundle::telegram_bot_id(token);
+    let same = s.channels.iter().any(|o| {
+        o.id != c.id
+            && matches!(o.kind, ChannelKind::Telegram(_))
+            && state
+                .secrets
+                .get(&channels::secret_key(&o.id))
+                .ok()
+                .flatten()
+                .is_some_and(|t| chummy_bundle::telegram_bot_id(&t) == bot)
+    });
+    if same {
+        return Err("Another channel already uses that bot: give each channel its own.".into());
+    }
+    Ok(())
+}
+
 /// The confirmation for letting people reach an agent through a channel.
 fn reach_message(s: &Settings, c: &ChannelConfig) -> String {
-    let ChannelKind::Matrix(m) = &c.kind;
     let agent = s
         .agent(&c.agent)
         .map(|a| a.name.clone())
         .unwrap_or_default();
-    let people = m.users.join(", ");
-    let mut msg = format!(
-        "{people} will be able to talk to “{agent}” in Matrix: each message they send starts a run of its \
-         loop, in its folder, with the tools it has. Chummy connects to {} as {} (the Internet permission \
-         doesn't apply to it, as for model connections) and makes an encrypted room for each person.\n\n\
-         They verify the bot by comparing emoji with you here first. Use a Matrix account of its own for \
-         the bot, not one a chummyd uses.",
-        m.homeserver, m.user_id
-    );
+    let mut msg = match &c.kind {
+        ChannelKind::Matrix(m) => format!(
+            "{} will be able to talk to “{agent}” in Matrix: each message they send starts a run of its \
+             loop, in its folder, with the tools it has. Chummy connects to {} as {} (the Internet permission \
+             doesn't apply to it, as for model connections) and makes an encrypted room for each person.\n\n\
+             They verify the bot by comparing emoji with you here first. Use a Matrix account of its own for \
+             the bot, not one a chummyd uses.",
+            m.users.join(", "),
+            m.homeserver,
+            m.user_id
+        ),
+        ChannelKind::Telegram(t) => format!(
+            "“{agent}” gets a Telegram bot. People you let in can talk to it: each message they send starts a \
+             run of its loop, in its folder, with the tools it has. Someone asks with a pairing code you make \
+             here, and you're asked before they're let in.\n\nTelegram isn't end-to-end encrypted: Telegram's \
+             servers can read what they and the agent say. Chummy connects to {} (the Internet permission \
+             doesn't apply to it, as for model connections). Use a bot of its own, not one a chummyd uses.",
+            t.api_url
+        ),
+    };
+    let label = c.kind.label();
     if c.approvals {
-        msg.push_str(
-            "\n\nTool approvals can be answered in Matrix too, so whoever has those accounts can let the \
-             agent use its tools. A message or page the agent reads could ask for exactly that.",
-        );
+        msg.push_str(&format!(
+            "\n\nTool approvals can be answered in {label} too, so whoever can talk to the agent there can let it \
+             use its tools. A message or page the agent reads could ask for exactly that."
+        ));
     } else {
         msg.push_str("\n\nTool approvals stay here, in Chummy.");
     }
     msg
 }
 
-/// Adds or changes a channel. `password`: the bot's password (`None` or
-/// empty keeps the saved one). Letting more people in, a new agent, or
-/// approvals over the channel ask natively first. Returns the channel's
-/// id, or `None` if the user said no.
+/// Adds or changes a channel. `password`: its secret, the Matrix bot's
+/// password or the Telegram bot's token (`None` or empty keeps the saved
+/// one). Letting more people in, a new agent, or approvals over the
+/// channel ask natively first. Returns the channel's id, or `None` if the
+/// user said no.
 #[tauri::command]
 pub async fn save_channel(
     app: AppHandle,
@@ -136,37 +197,64 @@ pub async fn save_channel(
     password: Option<String>,
 ) -> CmdResult<Option<String>> {
     channel.name = channel.name.trim().to_string();
-    let ChannelKind::Matrix(m) = &mut channel.kind;
-    m.homeserver = m.homeserver.trim().trim_end_matches('/').to_string();
-    m.user_id = m.user_id.trim().to_string();
-    let mut users: Vec<String> = m
-        .users
-        .iter()
-        .map(|u| u.trim().to_string())
-        .filter(|u| !u.is_empty())
-        .collect();
-    users.sort();
-    users.dedup();
-    m.users = users;
-    let password = password.map(Zeroizing::new).filter(|p| !p.is_empty());
+    match &mut channel.kind {
+        ChannelKind::Matrix(m) => {
+            m.homeserver = m.homeserver.trim().trim_end_matches('/').to_string();
+            m.user_id = m.user_id.trim().to_string();
+            let mut users: Vec<String> = m
+                .users
+                .iter()
+                .map(|u| u.trim().to_string())
+                .filter(|u| !u.is_empty())
+                .collect();
+            users.sort();
+            users.dedup();
+            m.users = users;
+        }
+        ChannelKind::Telegram(t) => {
+            t.api_url = t.api_url.trim().trim_end_matches('/').to_string();
+        }
+    }
+    let password = password
+        .map(|p| Zeroizing::new(p.trim().to_string()))
+        .filter(|p| !p.is_empty());
 
     let s = state.settings();
     let old = s.channels.iter().find(|c| c.id == channel.id).cloned();
     if !channel.id.is_empty() && old.is_none() {
         return Err("That channel no longer exists.".into());
     }
+    if let Some(o) = &old
+        && o.kind.label() != channel.kind.label()
+    {
+        return Err("A channel's type can't change: make a new one.".into());
+    }
     if channel.id.is_empty() {
         channel.id = format!("ch-{}", chummy_store::random_id(4));
     }
     check(&s, &channel)?;
-    let has_password = state
+    let saved = state
         .secrets
-        .get(&channels::password_key(&channel.id))
+        .get(&channels::secret_key(&channel.id))
         .ok()
         .flatten()
-        .is_some();
-    if password.is_none() && !has_password {
-        return Err("Enter the bot's Matrix password.".into());
+        .map(Zeroizing::new);
+    if password.is_none() && saved.is_none() {
+        return Err(match channel.kind {
+            ChannelKind::Matrix(_) => "Enter the bot's Matrix password.",
+            ChannelKind::Telegram(_) => "Enter the bot's token, from @BotFather.",
+        }
+        .into());
+    }
+    let new_bot = matches!(channel.kind, ChannelKind::Telegram(_))
+        && password.as_ref().is_some_and(|p| {
+            saved.as_ref().map(|s| chummy_bundle::telegram_bot_id(s))
+                != Some(chummy_bundle::telegram_bot_id(p))
+        });
+    if let (ChannelKind::Telegram(_), Some(token)) =
+        (&channel.kind, password.as_ref().or(saved.as_ref()))
+    {
+        check_token(&state, &s, &channel, token)?;
     }
 
     // Asks when more people (or another agent) can be reached, or
@@ -174,17 +262,28 @@ pub async fn save_channel(
     let ask = match &old {
         None => channel.enabled,
         Some(o) => {
-            let (ChannelKind::Matrix(om), ChannelKind::Matrix(m)) = (&o.kind, &channel.kind);
+            let wider = match (&o.kind, &channel.kind) {
+                (ChannelKind::Matrix(om), ChannelKind::Matrix(m)) => {
+                    m.users.iter().any(|u| !om.users.contains(u)) || m.homeserver != om.homeserver
+                }
+                (ChannelKind::Telegram(ot), ChannelKind::Telegram(t)) => {
+                    ot.api_url != t.api_url || new_bot
+                }
+                _ => true,
+            };
             channel.enabled
                 && (!o.enabled
                     || o.agent != channel.agent
                     || (channel.approvals && !o.approvals)
-                    || m.users.iter().any(|u| !om.users.contains(u))
-                    || m.homeserver != om.homeserver)
+                    || wider)
         }
     };
     if ask {
-        let title = format!("Let people talk to {} in Matrix?", agent_name(&s, &channel));
+        let title = format!(
+            "Let people talk to {} in {}?",
+            agent_name(&s, &channel),
+            channel.kind.label()
+        );
         if !dialogs::confirm(
             &app,
             window.label(),
@@ -202,7 +301,7 @@ pub async fn save_channel(
     if let Some(p) = &password {
         state
             .secrets
-            .set(&channels::password_key(&channel.id), p)
+            .set(&channels::secret_key(&channel.id), p)
             .map_err(|e| e.to_string())?;
     }
     let id = channel.id.clone();
@@ -251,7 +350,11 @@ pub async fn set_channel_enabled(
         .ok_or("That channel no longer exists.")?;
     if enabled && !c.enabled {
         check(&s, &c)?;
-        let title = format!("Let people talk to {} in Matrix?", agent_name(&s, &c));
+        let title = format!(
+            "Let people talk to {} in {}?",
+            agent_name(&s, &c),
+            c.kind.label()
+        );
         if !dialogs::confirm(
             &app,
             window.label(),
@@ -296,12 +399,20 @@ pub async fn delete_channel(
     let Some(c) = state.settings().channels.into_iter().find(|c| c.id == id) else {
         return Ok(true);
     };
-    let msg = format!(
-        "“{}” will be deleted, with its password and the bot's login and keys on this computer. The \
-         Matrix rooms stay, but nobody can talk to the agent through them. The conversations stay in \
-         the agent's chats.",
-        c.name
-    );
+    let msg = match c.kind {
+        ChannelKind::Matrix(_) => format!(
+            "“{}” will be deleted, with its password and the bot's login and keys on this computer. The \
+             Matrix rooms stay, but nobody can talk to the agent through them. The conversations stay in \
+             the agent's chats.",
+            c.name
+        ),
+        ChannelKind::Telegram(_) => format!(
+            "“{}” will be deleted, with the bot's token and the people let in. The bot stays in Telegram \
+             (delete it in @BotFather if you like), but it no longer answers. The conversations stay in \
+             the agent's chats.",
+            c.name
+        ),
+    };
     if !dialogs::confirm(
         &app,
         window.label(),
@@ -328,26 +439,85 @@ pub async fn delete_channel(
     Ok(true)
 }
 
-/// The answer to an emoji verification: whether the emoji match what the
-/// person sees.
+/// The answer to what waits on a channel: Matrix emoji that match (or
+/// don't), or someone to let in to a Telegram bot (or not). Letting
+/// someone in asks natively first.
 #[tauri::command]
-pub fn answer_channel_verification(
+pub async fn answer_channel_pending(
+    app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, AppState>,
     channel: String,
     n: u32,
-    matches: bool,
-) -> CmdResult<()> {
-    state
-        .channels
-        .get()
-        .ok_or("Channels aren't running yet.")?
-        .verify(&channel, n, matches)
+    yes: bool,
+) -> CmdResult<bool> {
+    let ch = state.channels.get().ok_or("Channels aren't running yet.")?;
+    let p = ch
+        .pending(&channel, n)
+        .ok_or("That doesn't wait any more.")?;
+    if yes && p.kind == "pairing" {
+        let s = state.settings();
+        let agent = s
+            .channels
+            .iter()
+            .find(|c| c.id == channel)
+            .map(|c| agent_name(&s, c))
+            .unwrap_or_else(|| "the agent".into());
+        let msg = format!(
+            "{} will be able to talk to {agent} in Telegram: each message they send starts a run of its \
+             loop, in its folder, with the tools it has. Telegram can read what they say.\n\nOnly let in \
+             someone you gave the code to.",
+            p.who
+        );
+        if !dialogs::confirm(
+            &app,
+            window.label(),
+            "Let them talk to the agent?",
+            &msg,
+            "Let them in",
+            true,
+        )
+        .await
+        {
+            return Ok(false);
+        }
+    }
+    ch.answer(&channel, n, yes)?;
+    Ok(true)
+}
+
+/// A pairing code for a Telegram channel: whoever sends it to the bot asks
+/// to be let in.
+#[tauri::command]
+pub async fn channel_pairing_code(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    channel: String,
+) -> CmdResult<Code> {
+    let ch = state.channels.get().ok_or("Channels aren't running yet.")?;
+    let code = ch.pairing_code(&channel).await?;
+    chummy_log::system::info("channels", "Made a pairing code");
+    channels::changed(&app);
+    Ok(code)
+}
+
+/// Stops someone talking to a Telegram channel's agent.
+#[tauri::command]
+pub fn remove_channel_person(app: AppHandle, channel: String, person: String) -> CmdResult<()> {
+    channels::remove_person(&app, &channel, &person)?;
+    chummy_log::system::log(
+        chummy_log::system::Level::Warn,
+        "channels",
+        "Removed someone from a channel",
+        &[],
+    );
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::MatrixChannel;
+    use crate::settings::TelegramChannel;
 
     fn channel(users: &[&str]) -> ChannelConfig {
         ChannelConfig {
@@ -388,7 +558,9 @@ mod tests {
         assert!(check(&s, &c).is_err());
         let at = |hs: &str| {
             let mut c = channel(&["@me:example.org"]);
-            let ChannelKind::Matrix(m) = &mut c.kind;
+            let ChannelKind::Matrix(m) = &mut c.kind else {
+                unreachable!()
+            };
             m.homeserver = hs.into();
             c
         };
@@ -406,6 +578,49 @@ mod tests {
         let mut other = channel(&["@me:example.org"]);
         other.id = "ch-2".into();
         assert!(check(&s, &other).is_err());
+    }
+
+    #[test]
+    fn telegram_channels_are_checked() {
+        let s = settings();
+        let mut c = channel(&[]);
+        c.kind = ChannelKind::Telegram(TelegramChannel {
+            api_url: chummy_bundle::TELEGRAM_API.into(),
+            upload_mb: 20,
+            stream: true,
+        });
+        assert!(check(&s, &c).is_ok(), "nobody yet is fine: people pair");
+        let with = |mb: u32, url: &str| {
+            let mut c = c.clone();
+            c.kind = ChannelKind::Telegram(TelegramChannel {
+                api_url: url.into(),
+                upload_mb: mb,
+                stream: true,
+            });
+            c
+        };
+        assert!(
+            check(&s, &with(50, chummy_bundle::TELEGRAM_API)).is_err(),
+            "bots get 20 MB at most"
+        );
+        assert!(
+            check(&s, &with(20, "http://telegram.example.org")).is_err(),
+            "plain http far away"
+        );
+        let v = serde_json::to_value(&c).unwrap();
+        assert_eq!(v["type"], "telegram");
+        let back: ChannelConfig = serde_json::from_value(serde_json::json!({
+            "id": "t", "name": "T", "agent": "a", "type": "telegram"
+        }))
+        .unwrap();
+        assert_eq!(
+            back.kind,
+            ChannelKind::Telegram(TelegramChannel {
+                api_url: chummy_bundle::TELEGRAM_API.into(),
+                upload_mb: 20,
+                stream: true,
+            })
+        );
     }
 
     #[test]

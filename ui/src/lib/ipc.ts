@@ -591,6 +591,17 @@ export interface MatrixChannelKind {
   upload_mb: number;
 }
 
+/** A Telegram bot: its token is in the keychain; people pair with a code. */
+export interface TelegramChannelKind {
+  type: "telegram";
+  /** The Bot API server (Telegram's own unless you run one). */
+  api_url: string;
+  /** At most 20. */
+  upload_mb: number;
+  /** Show answers as they're written. */
+  stream: boolean;
+}
+
 /** A channel: a way to talk to one agent from outside Chummy. */
 export type ChannelConfig = {
   id: string;
@@ -599,16 +610,39 @@ export type ChannelConfig = {
   agent: string;
   /** Tool approvals may be answered in the channel. */
   approvals: boolean;
-} & MatrixChannelKind;
+} & (MatrixChannelKind | TelegramChannelKind);
+
+/** A pairing code, and when it stops working (Unix ms). */
+export interface PairingCode {
+  code: string;
+  expires_at: number;
+}
 
 export interface ChannelLive {
   state: "" | "off" | "connecting" | "connected" | "problem";
   message: string | null;
-  verifications: { n: number; who: string; emoji: [string, string][] }[];
+  /** What waits: emoji to compare (Matrix), someone to let in (Telegram). */
+  pending: { n: number; kind: "emoji" | "pairing"; who: string; emoji: [string, string][] }[];
   note: string | null;
+  /** The bot, as people find it ("@helper_bot"). */
+  account: string | null;
+  /** The pairing code made last. */
+  code: PairingCode | null;
 }
 
-export type ChannelView = ChannelConfig & { has_password: boolean; live: ChannelLive };
+/** Someone let in to a Telegram bot. */
+export interface ChannelPerson {
+  id: string;
+  name: string;
+  since: number;
+}
+
+export type ChannelView = ChannelConfig & {
+  /** Its password (Matrix) or bot token (Telegram) is saved. */
+  has_secret: boolean;
+  people: ChannelPerson[];
+  live: ChannelLive;
+};
 
 /** A paused chat run, kept until its chat resumes or discards it. */
 export interface PausedInfo {
@@ -1009,6 +1043,8 @@ export interface ChummydDraft {
   terminal: boolean;
   /** The Matrix channel, if it's on. */
   matrix?: ChummydMatrix | null;
+  /** Agents' Telegram bots (one each). */
+  telegram?: ChummydTelegram[];
   message_text: boolean;
   /** An opened bundle this one replaces. */
   base?: string | null;
@@ -1026,6 +1062,17 @@ export interface ChummydMatrix {
   /** Who each job reports to, by job id. */
   report_to: Record<string, string>;
   upload_mb: number;
+}
+
+export interface ChummydTelegram {
+  agent: string;
+  /** Typed here; empty keeps the opened bundle's. Never sent back. */
+  token: string;
+  /** The opened bundle has one for this agent. */
+  has_token: boolean;
+  api_url: string;
+  upload_mb: number;
+  stream: boolean;
 }
 
 export interface ChummydReport {
@@ -1218,15 +1265,19 @@ export const commands = {
   recentRuns: () => call<RecentRun[]>("recent_runs", undefined, () => []),
 
   listChannels: () => call<ChannelView[]>("list_channels", undefined, () => []),
-  /** Adds or changes a channel; `password` empty keeps the saved one. Returns its id, or null if declined. */
+  /** Adds or changes a channel; `password` (its password or bot token) empty keeps the saved one. Returns its id, or null if declined. */
   saveChannel: (channel: ChannelConfig, password: string | null) =>
     call<string | null>("save_channel", { channel, password }),
   /** Turning one on asks natively. Returns whether it's on. */
   setChannelEnabled: (id: string, enabled: boolean) => call<boolean>("set_channel_enabled", { id, enabled }),
   /** Asks natively first. False: cancelled. */
   deleteChannel: (id: string) => call<boolean>("delete_channel", { id }),
-  answerChannelVerification: (channel: string, n: number, matches: boolean) =>
-    call<void>("answer_channel_verification", { channel, n, matches }),
+  /** Emoji that match, or someone to let in (asks natively). False: cancelled. */
+  answerChannelPending: (channel: string, n: number, yes: boolean) =>
+    call<boolean>("answer_channel_pending", { channel, n, yes }),
+  channelPairingCode: (channel: string) => call<PairingCode>("channel_pairing_code", { channel }),
+  removeChannelPerson: (channel: string, person: string) =>
+    call<void>("remove_channel_person", { channel, person }),
   setPermission: (kind: "network" | "tools" | "confirm_online_tools", enabled: boolean) =>
     call<boolean>("set_permission", { kind, enabled }, () => false),
 

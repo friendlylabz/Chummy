@@ -1,18 +1,17 @@
-//! What the conversations and the Matrix channel tell each other, and how
-//! the conversations' [`Out`] reads in Matrix. Plain data only, so it
-//! builds without Matrix too.
+//! What the conversations and a channel (Matrix, Telegram) tell each
+//! other. Plain data only, so it builds without any channel too.
 
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::{Conv, Out, Outlet};
+use crate::{Code, Conv, Out, Outlet};
 
-/// From Matrix to the program.
+/// From a channel to the program.
 #[derive(Debug, Clone)]
-pub enum FromMatrix {
-    /// The rooms are set up: one conversation per agent and allowed person.
+pub enum FromChannel {
+    /// The conversations it has now: one per agent and allowed person.
     Ready { convs: Vec<Conv> },
-    /// A message to act on: from the room's own person, encrypted, from a
-    /// verified session, sent while the program was running.
+    /// A message to act on, from someone allowed, sent while the program
+    /// was running.
     Message {
         conv: Conv,
         text: String,
@@ -21,53 +20,62 @@ pub enum FromMatrix {
     },
 }
 
-/// To the Matrix channel.
+/// To a channel.
 #[derive(Debug)]
-pub enum ToMatrix {
+pub enum ToChannel {
     /// The program saying something (a notice).
-    Notice { room: String, text: String },
+    Notice { place: String, text: String },
     /// An agent saying something outside a run (a job's reply).
-    Text { room: String, text: String },
-    /// A run started in a room: the bot shows it's typing until it ends
-    /// (or asks something and waits).
-    Started { run_id: String, room: String },
-    /// A run's response so far: one message, edited as it grows.
+    Text { place: String, text: String },
+    /// A run started: the bot shows it's typing until it ends (or asks
+    /// something and waits).
+    Started { run_id: String, place: String },
+    /// A run's response so far (the whole of it): shown as it grows.
     Run {
         run_id: String,
-        room: String,
+        place: String,
         text: String,
         done: bool,
     },
     /// A question (or approval) waiting: posted as its own message, so it
-    /// can be answered by replying to it.
+    /// can be answered by replying to it (or with buttons).
     Question {
-        room: String,
+        place: String,
         ask_id: String,
+        /// Who asks.
+        from: String,
         text: String,
+        /// A question (answered with a message), not an approval.
+        question: bool,
     },
     /// That question doesn't wait any more.
     Closed { ask_id: String },
-    /// The answer to an emoji verification.
-    Verify { n: Option<u32>, matches: bool },
+    /// The answer to what waits for the program: emoji that match (or
+    /// don't), someone to let in (or not).
+    Answer { n: Option<u32>, yes: bool },
+    /// A new pairing code, for channels where people pair.
+    NewCode(tokio::sync::oneshot::Sender<Result<Code, String>>),
+    /// Stop letting someone in (by their id).
+    Remove { id: String },
     /// Send everything still waiting, then answer.
     Flush(tokio::sync::oneshot::Sender<()>),
 }
 
-/// The conversations' side of a Matrix channel.
-pub struct MatrixOutlet(pub UnboundedSender<ToMatrix>);
+/// The conversations' side of a channel.
+pub struct ChannelOutlet(pub UnboundedSender<ToChannel>);
 
-impl Outlet for MatrixOutlet {
+impl Outlet for ChannelOutlet {
     fn send(&self, to: &Conv, out: Out) {
-        let room = to.place.clone();
+        let place = to.place.clone();
         let m = match out {
-            Out::Notice(text) => ToMatrix::Notice { room, text },
-            Out::Text { text, .. } => ToMatrix::Text { room, text },
-            Out::Started { run_id } => ToMatrix::Started { run_id, room },
+            Out::Notice(text) => ToChannel::Notice { place, text },
+            Out::Text { text, .. } => ToChannel::Text { place, text },
+            Out::Started { run_id } => ToChannel::Started { run_id, place },
             Out::Run {
                 run_id, text, done, ..
-            } => ToMatrix::Run {
+            } => ToChannel::Run {
                 run_id,
-                room,
+                place,
                 text,
                 done,
             },
@@ -76,19 +84,14 @@ impl Outlet for MatrixOutlet {
                 from,
                 text,
                 question,
-            } => {
-                let how = if question {
-                    "Reply to this message to answer."
-                } else {
-                    "Send /allow, or /deny [reason]."
-                };
-                ToMatrix::Question {
-                    room,
-                    ask_id,
-                    text: format!("**{from}:** {text}\n\n{how}"),
-                }
-            }
-            Out::Closed { ask_id } => ToMatrix::Closed { ask_id },
+            } => ToChannel::Question {
+                place,
+                ask_id,
+                from,
+                text,
+                question,
+            },
+            Out::Closed { ask_id } => ToChannel::Closed { ask_id },
         };
         let _ = self.0.send(m);
     }
@@ -138,7 +141,7 @@ mod tests {
     }
 
     #[test]
-    fn questions_read_as_how_to_answer() {
+    fn questions_carry_who_asks() {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let to = Conv {
             channel: "m".into(),
@@ -148,7 +151,7 @@ mod tests {
             who: "@p:hs".into(),
             console: false,
         };
-        MatrixOutlet(tx).send(
+        ChannelOutlet(tx).send(
             &to,
             Out::Asked {
                 ask_id: "q1".into(),
@@ -158,10 +161,16 @@ mod tests {
             },
         );
         match rx.try_recv().unwrap() {
-            ToMatrix::Question { room, ask_id, text } => {
-                assert_eq!((room.as_str(), ask_id.as_str()), ("!r:hs", "q1"));
-                assert!(text.starts_with("**Helper:** wants to use fetch"));
-                assert!(text.contains("/allow"));
+            ToChannel::Question {
+                place,
+                ask_id,
+                from,
+                question,
+                ..
+            } => {
+                assert_eq!((place.as_str(), ask_id.as_str()), ("!r:hs", "q1"));
+                assert_eq!(from, "Helper");
+                assert!(!question);
             }
             m => panic!("{m:?}"),
         }

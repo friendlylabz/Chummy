@@ -13,10 +13,12 @@ name = "chummyd"
 path = "src/main.rs"
 
 [features]
-default = ["matrix"]
+default = ["matrix", "telegram"]
 # The Matrix channel (matrix-sdk with end-to-end encryption and its SQLite
 # store, built in so no system SQLite is needed).
 matrix = ["chummy-channel/matrix"]
+# The Telegram channel (the Bot API over HTTPS).
+telegram = ["chummy-channel/telegram"]
 
 [dependencies]
 serde.workspace = true
@@ -61,6 +63,11 @@ mime = "0.3"
 [[test]]
 name = "matrix"
 required-features = ["matrix"]
+
+# Against a stand-in Bot API.
+[[test]]
+name = "telegram"
+required-features = ["telegram"]
 
 [lints]
 workspace = true

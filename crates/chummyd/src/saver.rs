@@ -1,12 +1,14 @@
 //! Saving the state: when something changed (at most every 30 seconds),
 //! after a run or job finishes, and on shutdown.
 
+use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
-
-/// What the Matrix channel keeps in the state (its login and rooms).
-pub type MatrixKept = Arc<Mutex<Option<serde_json::Value>>>;
 use std::time::Duration;
+
+/// What each channel keeps in the state, by channel id (Matrix's login and
+/// rooms, the people paired with each Telegram bot).
+pub type Kept = Arc<Mutex<BTreeMap<String, serde_json::Value>>>;
 
 use chummy_scheduler::JobStore;
 
@@ -20,18 +22,18 @@ pub struct Saver {
     p: DaemonPlatform,
     state: StateDir,
     jobs: JobStore,
-    matrix: MatrixKept,
+    kept: Kept,
     /// One save at a time.
     busy: Mutex<()>,
 }
 
 impl Saver {
-    pub fn new(p: DaemonPlatform, state: StateDir, jobs: JobStore, matrix: MatrixKept) -> Self {
+    pub fn new(p: DaemonPlatform, state: StateDir, jobs: JobStore, kept: Kept) -> Self {
         Self {
             p,
             state,
             jobs,
-            matrix,
+            kept,
             busy: Mutex::new(()),
         }
     }
@@ -47,11 +49,14 @@ impl Saver {
         s.paused = inner.paused.snapshot();
         s.jobs = self.jobs.snapshot();
         s.usage = inner.session.usage.snapshot();
-        s.matrix = self
-            .matrix
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        {
+            let kept = self.kept.lock().unwrap_or_else(|e| e.into_inner());
+            s.matrix = kept.get(crate::router::MATRIX).cloned();
+            s.telegram = kept
+                .iter()
+                .filter_map(|(id, v)| Some((id.strip_prefix("telegram:")?.to_string(), v.clone())))
+                .collect();
+        }
         if let Err(e) = self.state.save(&s) {
             inner.dirty.store(true, Ordering::Relaxed);
             chummy_log::system::error("state", format!("Couldn't save the state: {e}"));

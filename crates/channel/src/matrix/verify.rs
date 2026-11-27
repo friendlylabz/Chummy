@@ -10,7 +10,8 @@ use matrix_sdk::encryption::verification::{
 };
 use matrix_sdk::ruma::UserId;
 
-use super::{Ctx, VerifyEvent};
+use super::Ctx;
+use crate::Event;
 
 /// Someone asked to verify (in a room or to this device).
 pub async fn requested(ctx: std::sync::Arc<Ctx>, client: Client, user: &UserId, flow_id: &str) {
@@ -90,7 +91,7 @@ async fn follow_sas(ctx: std::sync::Arc<Ctx>, sas: SasVerification) {
                 };
                 let n = ctx.add_verification(sas.clone());
                 shown = Some(n);
-                ctx.host.verification(VerifyEvent::Waiting {
+                ctx.host.event(Event::Emoji {
                     n,
                     who: who.clone(),
                     emoji: emoji
@@ -106,7 +107,7 @@ async fn follow_sas(ctx: std::sync::Arc<Ctx>, sas: SasVerification) {
             Some(SasState::Done { .. }) => {
                 if let Some(n) = shown {
                     ctx.remove_verification(n);
-                    ctx.host.verification(VerifyEvent::Over { n });
+                    ctx.host.event(Event::Over { n });
                 }
                 ctx.note(format!("Verified {who}."));
                 chummy_log::system::info("matrix", format!("Verified {who}"));
@@ -115,7 +116,7 @@ async fn follow_sas(ctx: std::sync::Arc<Ctx>, sas: SasVerification) {
             Some(SasState::Cancelled(c)) => {
                 if let Some(n) = shown {
                     ctx.remove_verification(n);
-                    ctx.host.verification(VerifyEvent::Over { n });
+                    ctx.host.event(Event::Over { n });
                 }
                 ctx.note(format!(
                     "The verification with {who} was cancelled ({}).",
@@ -130,7 +131,7 @@ async fn follow_sas(ctx: std::sync::Arc<Ctx>, sas: SasVerification) {
             None => {
                 if let Some(n) = shown {
                     ctx.remove_verification(n);
-                    ctx.host.verification(VerifyEvent::Over { n });
+                    ctx.host.event(Event::Over { n });
                 }
                 return;
             }

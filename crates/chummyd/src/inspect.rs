@@ -148,6 +148,23 @@ pub fn describe(c: &Config) -> Vec<String> {
     if let Some(m) = &c.channels.matrix {
         channels.push(format!("Matrix as {} on {}", m.user_id, m.homeserver));
     }
+    for t in &c.channels.telegram {
+        let agent = c
+            .agents
+            .iter()
+            .find(|a| a.id == t.agent)
+            .map(|a| a.name.as_str())
+            .unwrap_or(&t.agent);
+        let server = if t.api_url == chummy_bundle::TELEGRAM_API {
+            String::new()
+        } else {
+            format!(", through {}", t.api_url)
+        };
+        channels.push(format!(
+            "Telegram bot {} for {agent}{server}",
+            chummy_bundle::telegram_bot_id(&t.token).unwrap_or("?")
+        ));
+    }
     out.push(format!(
         "Channels: {}",
         if channels.is_empty() {
@@ -172,6 +189,12 @@ pub fn describe(c: &Config) -> Vec<String> {
                 }
             ));
         }
+    }
+    if !c.channels.telegram.is_empty() {
+        look.push(
+            "Telegram isn't end-to-end encrypted: Telegram can read what people and agents say there (people are let in with /pair in the terminal)"
+                .into(),
+        );
     }
     out.push(format!(
         "Logs: message text {}",
@@ -255,5 +278,22 @@ mod tests {
         let text = describe(&c).join("\n");
         assert!(text.contains("tools: none; internet: no"), "{text}");
         assert!(!text.contains("may use the internet"), "{text}");
+
+        // A Telegram bot: its id (never its token), and a word on privacy.
+        let token = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw";
+        c.channels.telegram.push(chummy_bundle::TelegramBot {
+            agent: "helper".into(),
+            token: token.into(),
+            api_url: chummy_bundle::TELEGRAM_API.into(),
+            upload_mb: 20,
+            stream: true,
+        });
+        let text = describe(&c).join("\n");
+        assert!(text.contains("Telegram bot 123456789 for Helper"), "{text}");
+        assert!(
+            text.contains("Telegram isn't end-to-end encrypted"),
+            "{text}"
+        );
+        assert!(!text.contains("AAHdq"), "{text}");
     }
 }

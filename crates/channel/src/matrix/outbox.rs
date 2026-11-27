@@ -15,7 +15,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::watch;
 
 use super::Ctx;
-use crate::link::ToMatrix;
+use crate::link::ToChannel;
 
 /// How often a run's message is edited at most.
 pub const EDIT_EVERY: Duration = Duration::from_secs(2);
@@ -51,7 +51,7 @@ impl RunMsg {
 
 pub async fn run(
     ctx: Arc<Ctx>,
-    mut rx: UnboundedReceiver<ToMatrix>,
+    mut rx: UnboundedReceiver<ToChannel>,
     mut client: watch::Receiver<Option<Client>>,
 ) {
     let mut runs: HashMap<String, RunMsg> = HashMap::new();
@@ -86,22 +86,25 @@ pub async fn run(
     }
 }
 
-async fn handle(ctx: &Ctx, c: &Client, runs: &mut HashMap<String, RunMsg>, m: ToMatrix) {
+async fn handle(ctx: &Ctx, c: &Client, runs: &mut HashMap<String, RunMsg>, m: ToChannel) {
     match m {
-        ToMatrix::Notice { room, text } => {
+        ToChannel::Notice { place: room, text } => {
             send_parts(c, &room, &text, true).await;
         }
-        ToMatrix::Text { room, text } => {
+        ToChannel::Text { place: room, text } => {
             send_parts(c, &room, &text, false).await;
         }
-        ToMatrix::Started { run_id, room } => {
+        ToChannel::Started {
+            run_id,
+            place: room,
+        } => {
             let r = runs.entry(run_id).or_insert_with(|| RunMsg::new(&room));
             r.typing = true;
             typing(c, &room, true).await;
         }
-        ToMatrix::Run {
+        ToChannel::Run {
             run_id,
-            room,
+            place: room,
             text,
             done,
         } => {
@@ -120,7 +123,19 @@ async fn handle(ctx: &Ctx, c: &Client, runs: &mut HashMap<String, RunMsg>, m: To
             }
             runs.retain(|_, r| !(r.done && r.sent_all()));
         }
-        ToMatrix::Question { room, ask_id, text } => {
+        ToChannel::Question {
+            place: room,
+            ask_id,
+            from,
+            text,
+            question,
+        } => {
+            let how = if question {
+                "Reply to this message to answer."
+            } else {
+                "Send /allow, or /deny [reason]."
+            };
+            let text = format!("**{from}:** {text}\n\n{how}");
             // What the run said before asking goes first; then it waits
             // for the person, so it isn't typing.
             let mut waiting = false;
@@ -136,9 +151,15 @@ async fn handle(ctx: &Ctx, c: &Client, runs: &mut HashMap<String, RunMsg>, m: To
                 ctx.remember_question(ev, ask_id);
             }
         }
-        ToMatrix::Closed { ask_id } => ctx.forget_question(&ask_id),
-        ToMatrix::Verify { n, matches } => super::verify::answer(ctx, n, matches).await,
-        ToMatrix::Flush(done) => {
+        ToChannel::Closed { ask_id } => ctx.forget_question(&ask_id),
+        ToChannel::Answer { n, yes } => super::verify::answer(ctx, n, yes).await,
+        ToChannel::NewCode(answer) => {
+            let _ = answer.send(Err(
+                "Matrix channels don't use pairing codes: people verify by emoji.".into(),
+            ));
+        }
+        ToChannel::Remove { .. } => {}
+        ToChannel::Flush(done) => {
             flush_due(c, runs, true).await;
             let _ = done.send(());
         }

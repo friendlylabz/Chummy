@@ -49,6 +49,14 @@ release will say.
   verify the bot by emoji, which you confirm in the channel's card. The
   password stays in the keychain and the login is sealed, so channels
   connect again by themselves. Their runs show in the sessions panel.
+- **Telegram channels**, in the app (Settings → Channels) and in chummyd
+  (Configure chummyd): a bot of its own (from @BotFather) for each agent.
+  People ask to talk to it with a pairing code you make, and you let them
+  in (in the channel's card, or with `/pair` in chummyd's terminal); anyone
+  else gets no answer. Answers show as they're written, approvals have
+  Allow and Deny buttons, and files up to 20 MB are saved to the agent's
+  `uploads/`. Private chats only: the bot leaves groups. Telegram isn't
+  end-to-end encrypted, and the app says so where you set it up.
 - Sessions panel: each run has a link to its full log, the pane button has
   a thought-bubble icon, and **Recent runs** keeps each agent's three
   latest runs with their pane and log.

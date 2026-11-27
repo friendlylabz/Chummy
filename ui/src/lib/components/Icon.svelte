@@ -3,6 +3,8 @@
   const paths = {
     // Two arcs either side of a dot: something broadcast and heard.
     channel: "M12 11.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM8.3 9.3a5.2 5.2 0 0 0 0 7.4M15.7 9.3a5.2 5.2 0 0 1 0 7.4M5.6 6.6a9 9 0 0 0 0 12.8M18.4 6.6a9 9 0 0 1 0 12.8",
+    // A head and shoulders: someone.
+    person: "M12 4.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7zM5 19.5c.6-3.4 3.4-5.5 7-5.5s6.4 2.1 7 5.5",
     // A thought bubble: what a run is thinking (its pane).
     thought: "M7.5 14.5a3.5 3.5 0 0 1-.4-7 4.8 4.8 0 0 1 9.2-.7 3.9 3.9 0 0 1 .7 7.7zM7.3 17.6a1.3 1.3 0 1 0 2.6 0 1.3 1.3 0 1 0-2.6 0M4.4 20.6a.8.8 0 1 0 1.6 0 .8.8 0 1 0-1.6 0",
     wrench: "M14.5 5.5a4 4 0 0 0 4.9 4.9L20 11l-9.5 9.5a2.1 2.1 0 0 1-3-3L17 8l.6.6M14.5 5.5 15 4a4 4 0 0 1 5 5",

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-answer-channel-pending"
+description = "Enables the answer_channel_pending command without any pre-configured scope."
+commands.allow = ["answer_channel_pending"]
+
+[[permission]]
+identifier = "deny-answer-channel-pending"
+description = "Denies the answer_channel_pending command without any pre-configured scope."
+commands.deny = ["answer_channel_pending"]

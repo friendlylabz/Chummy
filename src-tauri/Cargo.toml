@@ -47,7 +47,7 @@ chummy-store.workspace = true
 chummy-agent.workspace = true
 chummy-session.workspace = true
 chummy-bundle.workspace = true
-chummy-channel = { workspace = true, features = ["matrix"] }
+chummy-channel = { workspace = true, features = ["matrix", "telegram"] }
 
 [lints]
 workspace = true

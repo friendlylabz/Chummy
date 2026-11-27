@@ -7,6 +7,7 @@
     type ChummydMatrix,
     type ChummydReport,
     type ChummydSources,
+    type ChummydTelegram,
   } from "$lib/ipc";
   import Button from "$lib/components/Button.svelte";
   import Icon from "$lib/components/Icon.svelte";
@@ -24,6 +25,7 @@
     approvals: [],
     jobs: [],
     terminal: true,
+    telegram: [],
     message_text: false,
     base: null,
   });
@@ -59,6 +61,27 @@
   function setMatrix(on: boolean) {
     draft.matrix = on ? (draft.matrix ?? newMatrix()) : null;
     hsResult = null;
+  }
+
+  function telegramOf(agent: string): ChummydTelegram | undefined {
+    return (draft.telegram ?? []).find((t) => t.agent === agent);
+  }
+
+  function setTelegram(agent: string, on: boolean) {
+    const rest = (draft.telegram ?? []).filter((t) => t.agent !== agent);
+    draft.telegram = on
+      ? [
+          ...rest,
+          telegramOf(agent) ?? {
+            agent,
+            token: "",
+            has_token: false,
+            api_url: "https://api.telegram.org",
+            upload_mb: 20,
+            stream: true,
+          },
+        ]
+      : rest;
   }
 
   /** Matrix IDs typed as a list (commas, spaces or new lines between). */
@@ -406,6 +429,55 @@
           {/if}
         {/each}
       {/if}
+      <div class="row">
+        <div>
+          <div class="row-title">Telegram</div>
+          <div class="row-sub">
+            A bot of its own for each agent (make one with @BotFather). People ask to talk to it with a pairing code
+            you make in chummyd's terminal with <span class="mono">/pair</span>, and you let them in there. Telegram
+            isn't end-to-end encrypted: its servers can read these chats.
+          </div>
+        </div>
+      </div>
+      {#each draft.agents as id (id)}
+        {@const t = telegramOf(id)}
+        <div class="row sub-row">
+          <div><div class="row-title">{agentName(id)}'s bot</div></div>
+          <Toggle checked={!!t} label={`Telegram bot for ${agentName(id)}`} onchange={(v) => setTelegram(id, v)} />
+        </div>
+        {#if t}
+          <div class="row sub-row">
+            <div>
+              <div class="row-title">Bot token</div>
+              <div class="row-sub">From @BotFather, like 123456:ABC… It's the bot's whole login: kept in the bundle, encrypted.</div>
+            </div>
+            <input
+              class="input narrow mono"
+              type="password"
+              autocomplete="off"
+              spellcheck="false"
+              bind:value={t.token}
+              aria-label={`${agentName(id)}'s bot token`}
+              placeholder={t.has_token ? "Kept from the bundle" : ""}
+            />
+          </div>
+          <div class="row sub-row">
+            <div><div class="row-title">Show answers as they're written</div><div class="row-sub">Off: each answer comes when it's done.</div></div>
+            <Toggle checked={t.stream} label="Show answers as they're written" onchange={(v) => (t.stream = v)} />
+          </div>
+          <div class="row sub-row">
+            <div><div class="row-title">Largest file</div><div class="row-sub">Bots can get files of up to 20 MB from Telegram.</div></div>
+            <div class="stack">
+              <input class="input tiny" type="number" min="1" max="20" bind:value={t.upload_mb} aria-label="Largest file over Telegram, in MB" />
+              <span class="small muted">MB</span>
+            </div>
+          </div>
+          <div class="row sub-row">
+            <div><div class="row-title">Bot API server</div><div class="row-sub">Telegram's own, unless you run one.</div></div>
+            <input class="input narrow mono" bind:value={t.api_url} aria-label="Bot API server" spellcheck="false" />
+          </div>
+        {/if}
+      {/each}
     </div>
 
     <div class="section-label">Logs</div>

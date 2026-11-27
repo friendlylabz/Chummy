@@ -1019,7 +1019,7 @@ other versions aren't opened, so export the bundle again):
 | `agents` | `id`, `name`, `loop_id`, `model`, `tools` (by name: `{ "ask", "network" }`), `loop_config`, `model_options`, `channel_approvals` |
 | `loops` | the loops, by id: trusted because the bundle authenticates |
 | `jobs` | `chummy.job` documents |
-| `channels` | `terminal.enabled`; `matrix` (optional, below) |
+| `channels` | `terminal.enabled`; `matrix` (optional, below); `telegram` (below; left out when empty) |
 | `logging` | `message_text` |
 | `state_key` | 32 bytes, base64: seals the state folder |
 
@@ -1028,6 +1028,12 @@ the local network), `user_id` (chummyd's account, `@name:server`),
 `password` (to log in the first time and for cross-signing's password
 check), `users` (agent id → Matrix IDs allowed to talk to it), `report_to`
 (job id → one of its agent's users), `upload_mb` (1–1024, default 100).
+
+`channels.telegram`: one bot per agent, each `agent`, `token` (from
+@BotFather, `<digits>:<20–100 of A–Z a–z 0–9 _ ->`), `api_url` (default
+`https://api.telegram.org`; https, or http only nearby), `upload_mb` (1–20,
+default 20), `stream` (default true). Errors: an agent not in the bundle,
+two bots for one agent, two agents sharing a bot, a token that isn't one.
 
 `Config::check()` gives errors (chummyd won't start; the app won't export)
 and warnings: no channel; a model connection without its key; an agent with
@@ -1059,5 +1065,9 @@ bundle's `limits` allow; a Matrix room's conversation is
 the bundle has Matrix: the bot's `user_id`, its `session` (access token and
 device), whether it's `cross_signed` and has `synced`, and its `rooms`, one
 `{agent, user, room}` each). If the bot's ID changes, the Matrix state and
-stores are thrown away and it logs in afresh. A state file that
+stores are thrown away and it logs in afresh. `telegram` (when there are
+bots: by agent id, each bot's `bot_id`, the next update `offset`, and the
+`people` let in, `{id, name, since}`; another bot starts with nobody). A
+Telegram person's conversation is `m-` and 16 hex digits of SHA-256 of
+`telegram`, a zero byte and their Telegram id. A state file that
 doesn't open stops chummyd; it's never replaced by a fresh one.

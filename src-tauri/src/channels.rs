@@ -1,25 +1,34 @@
 //! Channels in the app (Settings → Channels): talking to an agent from
 //! outside Chummy, through the same code as chummyd (`chummy-channel`):
 //! [`Conversations`] for how conversations behave, and one implementation
-//! per kind of channel (Matrix so far).
+//! per kind of channel (Matrix and Telegram).
 //!
-//! - Each channel's password, and a key that seals its login
-//!   (`channels/<id>/login.sealed`) and opens its Matrix stores
-//!   (`channels/<id>/matrix/`), are in the keychain. So channels connect
-//!   again when Chummy starts, without asking anything.
+//! - Each channel's secret (Matrix: the bot's password; Telegram: the bot's
+//!   token) is in the keychain, with a key that seals what the channel
+//!   keeps (`channels/<id>/login.sealed`: Matrix's session and rooms,
+//!   Telegram's people let in) and opens Matrix's stores
+//!   (`channels/<id>/matrix/`). So channels connect again when Chummy
+//!   starts, without asking anything.
 //! - One task handles what people send, the session's updates and the
 //!   questions, in order. Runs started from a channel are ordinary chat
 //!   runs: they show in the sessions pane, and their chat (one per person,
 //!   `m-…`) in the agent's chats.
 //! - Approvals from a channel's runs are answered in Chummy's window unless
-//!   the channel allows them over Matrix.
+//!   the channel allows them there.
+//! - What waits for the user (Matrix emoji to compare, people asking to be
+//!   let in to a Telegram bot) shows in Settings → Channels, with a
+//!   notification.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use chummy_channel::matrix::{MatrixHandle, MatrixHost, MatrixSettings, Status, VerifyEvent};
-use chummy_channel::{Approvals, Conversations, FromMatrix, Hub, MatrixOutlet, Outlet};
+use chummy_channel::matrix::MatrixSettings;
+use chummy_channel::telegram::TelegramSettings;
+use chummy_channel::{
+    Approvals, ChannelHost, ChannelOutlet, Code, Conversations, Event, FromChannel, Handle, Hub,
+    Outlet, Person, Status, ToChannel,
+};
 use chummy_scheduler::{AskEvent, JobView};
 use chummy_session::Update;
 use serde::Serialize;
@@ -36,13 +45,14 @@ use crate::state::{AppState, lock};
 enum Input {
     Add(String, Arc<dyn Outlet>),
     Remove(String),
-    Matrix(String, FromMatrix),
+    Channel(String, FromChannel),
     Update(Box<Update>),
     Ask(AskEvent),
 }
 
-/// The keychain entries of a channel.
-pub fn password_key(id: &str) -> String {
+/// The keychain entries of a channel: its secret (password or token), and
+/// the key that seals what it keeps.
+pub fn secret_key(id: &str) -> String {
     format!("channel:{id}:password")
 }
 fn seal_key(id: &str) -> String {
@@ -54,29 +64,76 @@ pub fn dir(state: &AppState, id: &str) -> PathBuf {
     state.dirs.root.join("channels").join(id)
 }
 
+fn kept_path(state: &AppState, id: &str) -> PathBuf {
+    dir(state, id).join("login.sealed")
+}
+
+fn aad(id: &str) -> String {
+    format!("chummy.channel-login/1\n{id}")
+}
+
+/// What a channel kept (sealed), if anything.
+fn read_kept(state: &AppState, id: &str) -> Option<serde_json::Value> {
+    let plain = chummy_store::sealed::open(
+        state.secrets.as_ref(),
+        &seal_key(id),
+        &kept_path(state, id),
+        &aad(id),
+    )
+    .ok()
+    .flatten()?;
+    serde_json::from_slice(&plain).ok()
+}
+
+fn write_kept(state: &AppState, id: &str, kept: &serde_json::Value) -> Result<(), String> {
+    let plain = Zeroizing::new(serde_json::to_vec(kept).unwrap_or_default());
+    chummy_channel::make_private_dir(&dir(state, id))?;
+    chummy_store::sealed::seal(
+        state.secrets.as_ref(),
+        &seal_key(id),
+        &kept_path(state, id),
+        &aad(id),
+        &plain,
+    )
+}
+
+/// The people let in to a Telegram channel (kept even while it's off).
+pub fn people(state: &AppState, id: &str) -> Vec<Person> {
+    read_kept(state, id)
+        .map(|k| chummy_channel::telegram::people(&k))
+        .unwrap_or_default()
+}
+
 /// A channel as the window shows it: its state now.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Live {
     /// "off", "connecting", "connected", "problem".
     pub state: String,
     pub message: Option<String>,
-    /// Emoji verifications waiting for an answer.
-    pub verifications: Vec<Waiting>,
-    /// The latest thing said about verifying.
+    /// What waits for an answer: emoji to compare, people to let in.
+    pub pending: Vec<Pending>,
+    /// The latest thing said about verifying or pairing.
     pub note: Option<String>,
+    /// The bot, as people find it ("@helper_bot").
+    pub account: Option<String>,
+    /// The pairing code made last (Telegram).
+    pub code: Option<Code>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct Waiting {
+pub struct Pending {
     pub n: u32,
+    /// "emoji" or "pairing".
+    pub kind: &'static str,
     pub who: String,
+    /// Emoji to compare, and their names.
     pub emoji: Vec<(String, String)>,
 }
 
 struct Running {
     config: ChannelConfig,
-    password: Zeroizing<String>,
-    handle: MatrixHandle,
+    secret: Zeroizing<String>,
+    handle: Handle,
 }
 
 /// The channels running in the app.
@@ -92,14 +149,51 @@ impl Channels {
         lock(&self.live).clone()
     }
 
-    /// Answers an emoji verification.
-    pub fn verify(&self, channel: &str, n: u32, matches: bool) -> Result<(), String> {
+    /// What waits as `n` on a channel.
+    pub fn pending(&self, channel: &str, n: u32) -> Option<Pending> {
+        lock(&self.live)
+            .get(channel)
+            .and_then(|l| l.pending.iter().find(|p| p.n == n).cloned())
+    }
+
+    /// Answers what waits: emoji that match (or don't), someone to let in
+    /// (or not).
+    pub fn answer(&self, channel: &str, n: u32, yes: bool) -> Result<(), String> {
         let running = lock(&self.running);
         let r = running.get(channel).ok_or("That channel isn't running.")?;
-        r.handle.verify(Some(n), matches);
+        r.handle.answer(Some(n), yes);
         drop(running);
-        self.set_live(channel, |l| l.verifications.retain(|w| w.n != n));
+        self.set_live(channel, |l| l.pending.retain(|w| w.n != n));
         Ok(())
+    }
+
+    fn sender(&self, channel: &str) -> Option<UnboundedSender<ToChannel>> {
+        lock(&self.running).get(channel).map(|r| r.handle.sender())
+    }
+
+    /// A new pairing code for a Telegram channel.
+    pub async fn pairing_code(&self, channel: &str) -> Result<Code, String> {
+        let tx = self
+            .sender(channel)
+            .ok_or("Turn the channel on first: the code goes to its bot.")?;
+        let (otx, orx) = tokio::sync::oneshot::channel();
+        tx.send(ToChannel::NewCode(otx))
+            .map_err(|_| "The channel isn't running.".to_string())?;
+        let code = tokio::time::timeout(std::time::Duration::from_secs(10), orx)
+            .await
+            .map_err(|_| "The channel didn't answer.".to_string())?
+            .map_err(|_| "The channel isn't running.".to_string())??;
+        self.set_live(channel, |l| l.code = Some(code.clone()));
+        Ok(code)
+    }
+
+    /// Stops someone talking through a running channel; `false`: it isn't
+    /// running.
+    pub fn remove_person(&self, channel: &str, id: &str) -> bool {
+        match self.sender(channel) {
+            Some(tx) => tx.send(ToChannel::Remove { id: id.into() }).is_ok(),
+            None => false,
+        }
     }
 
     /// Updates from the session go to the channels too.
@@ -112,6 +206,22 @@ impl Channels {
     fn set_live(&self, channel: &str, f: impl FnOnce(&mut Live)) {
         f(lock(&self.live).entry(channel.to_string()).or_default());
     }
+}
+
+/// Stops someone talking to a Telegram channel's agent: through the
+/// channel when it runs (they're told), else in what it keeps.
+pub fn remove_person(app: &AppHandle, channel: &str, id: &str) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let ch = state.channels.get().ok_or("Channels aren't running yet.")?;
+    if !ch.remove_person(channel, id) {
+        let mut kept = read_kept(&state, channel).ok_or("Nobody is let in to that channel.")?;
+        if let Some(people) = kept.get_mut("people").and_then(|p| p.as_array_mut()) {
+            people.retain(|p| p.get("id").and_then(|v| v.as_str()) != Some(id));
+        }
+        write_kept(&state, channel, &kept)?;
+    }
+    changed(app);
+    Ok(())
 }
 
 /// The app's rules for conversations.
@@ -209,10 +319,10 @@ pub fn start(app: &AppHandle) {
             match input {
                 Input::Add(id, outlet) => convs.add_channel(&id, outlet),
                 Input::Remove(id) => convs.remove_channel(&id),
-                Input::Matrix(id, FromMatrix::Ready { convs: c }) => convs.set_convs(&id, c),
-                Input::Matrix(
+                Input::Channel(id, FromChannel::Ready { convs: c }) => convs.set_convs(&id, c),
+                Input::Channel(
                     _,
-                    FromMatrix::Message {
+                    FromChannel::Message {
                         conv,
                         text,
                         answers,
@@ -271,10 +381,10 @@ fn sync_now(app: &AppHandle) {
                         r.config == *c
                             && state
                                 .secrets
-                                .get(&password_key(&id))
+                                .get(&secret_key(&id))
                                 .ok()
                                 .flatten()
-                                .is_some_and(|p| p == *r.password)
+                                .is_some_and(|p| p == *r.secret)
                     })
             });
         if !keep && let Some(r) = running.remove(&id) {
@@ -300,12 +410,15 @@ fn sync_now(app: &AppHandle) {
             );
             continue;
         };
-        let password = match state.secrets.get(&password_key(&c.id)) {
+        let secret = match state.secrets.get(&secret_key(&c.id)) {
             Ok(Some(p)) => Zeroizing::new(p),
             Ok(None) => {
                 live.insert(
                     c.id.clone(),
-                    problem("No password saved: edit it to enter one."),
+                    problem(match c.kind {
+                        ChannelKind::Matrix(_) => "No password saved: edit it to enter one.",
+                        ChannelKind::Telegram(_) => "No bot token saved: edit it to enter one.",
+                    }),
                 );
                 continue;
             }
@@ -314,46 +427,69 @@ fn sync_now(app: &AppHandle) {
                 continue;
             }
         };
-        let key = match chummy_store::sealed::key(state.secrets.as_ref(), &seal_key(&c.id)) {
-            Ok(k) => k,
-            Err(e) => {
-                live.insert(c.id.clone(), problem(&e));
-                continue;
-            }
-        };
-        let ChannelKind::Matrix(m) = &c.kind;
-        let settings = MatrixSettings {
-            channel: c.id.clone(),
-            homeserver: m.homeserver.clone(),
-            user_id: m.user_id.clone(),
-            password: password.clone(),
-            users: [(agent.id.clone(), m.users.clone())].into(),
-            upload_mb: m.upload_mb,
-            label: "Chummy".into(),
-            device: format!("Chummy ({})", c.name),
-            chat_scope: c.id.clone(),
-            name: "Chummy".into(),
-        };
-        let host = Arc::new(AppMatrix {
+        let host = Arc::new(AppChannel {
             app: app.clone(),
             channel: c.id.clone(),
         });
-        let handle = chummy_channel::matrix::start(
-            host,
-            settings,
-            dir(&state, &c.id).join("matrix"),
-            chummy_channel::matrix::store_passphrase(&key),
-        );
+        let handle = match &c.kind {
+            ChannelKind::Matrix(m) => {
+                let key = match chummy_store::sealed::key(state.secrets.as_ref(), &seal_key(&c.id))
+                {
+                    Ok(k) => k,
+                    Err(e) => {
+                        live.insert(c.id.clone(), problem(&e));
+                        continue;
+                    }
+                };
+                let settings = MatrixSettings {
+                    channel: c.id.clone(),
+                    homeserver: m.homeserver.clone(),
+                    user_id: m.user_id.clone(),
+                    password: secret.clone(),
+                    users: [(agent.id.clone(), m.users.clone())].into(),
+                    upload_mb: m.upload_mb,
+                    label: "Chummy".into(),
+                    device: format!("Chummy ({})", c.name),
+                    chat_scope: c.id.clone(),
+                    name: "Chummy".into(),
+                };
+                chummy_channel::matrix::start(
+                    host,
+                    settings,
+                    dir(&state, &c.id).join("matrix"),
+                    chummy_channel::matrix::store_passphrase(&key),
+                )
+            }
+            ChannelKind::Telegram(t) => {
+                let settings = TelegramSettings {
+                    channel: c.id.clone(),
+                    api_url: t.api_url.clone(),
+                    token: secret.clone(),
+                    agent: agent.id.clone(),
+                    upload_mb: t.upload_mb,
+                    stream: t.stream,
+                    chat_scope: c.id.clone(),
+                    name: "Chummy".into(),
+                };
+                match chummy_channel::telegram::start(host, settings) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        live.insert(c.id.clone(), problem(&e));
+                        continue;
+                    }
+                }
+            }
+        };
         let _ = ch.inbox.send(Input::Add(
             c.id.clone(),
-            Arc::new(MatrixOutlet(handle.sender())),
+            Arc::new(ChannelOutlet(handle.sender())),
         ));
         chummy_log::system::info("channels", format!("Started the channel {}", c.name));
         running.insert(
             c.id.clone(),
             Running {
                 config: c.clone(),
-                password,
+                secret,
                 handle,
             },
         );
@@ -385,37 +521,30 @@ fn problem(message: &str) -> Live {
     }
 }
 
-/// Forgets a channel's login, keys and stores (when it's deleted).
+/// Forgets a channel's secret, what it kept and its stores (when it's
+/// deleted).
 pub fn forget(state: &AppState, id: &str) {
-    let _ = state.secrets.delete(&password_key(id));
+    let _ = state.secrets.delete(&secret_key(id));
     let _ = state.secrets.delete(&seal_key(id));
     let _ = std::fs::remove_dir_all(dir(state, id));
 }
 
 /// Tells the windows the channels' state changed.
-fn changed(app: &AppHandle) {
+pub fn changed(app: &AppHandle) {
     if let Some(ch) = app.state::<AppState>().channels.get() {
         let _ = app.emit(events::CHANNELS_CHANGED, ch.live());
     }
 }
 
-/// The app's side of one Matrix channel.
-struct AppMatrix {
+/// The app's side of one channel (Matrix or Telegram).
+struct AppChannel {
     app: AppHandle,
     channel: String,
 }
 
-impl AppMatrix {
+impl AppChannel {
     fn state(&self) -> &AppState {
         self.app.state::<AppState>().inner()
-    }
-
-    fn login_path(&self) -> PathBuf {
-        dir(self.state(), &self.channel).join("login.sealed")
-    }
-
-    fn aad(&self) -> String {
-        format!("chummy.channel-login/1\n{}", self.channel)
     }
 
     fn set_live(&self, f: impl FnOnce(&mut Live)) {
@@ -424,53 +553,45 @@ impl AppMatrix {
             changed(&self.app);
         }
     }
+
+    fn agent_name(&self) -> String {
+        let s = self.state().settings();
+        s.channels
+            .iter()
+            .find(|c| c.id == self.channel)
+            .and_then(|c| s.agent(&c.agent))
+            .map(|a| a.name.clone())
+            .unwrap_or_else(|| "an agent".into())
+    }
 }
 
-impl MatrixHost for AppMatrix {
+impl ChannelHost for AppChannel {
     fn agent_name(&self, id: &str) -> Option<String> {
         self.state().settings().agent(id).map(|a| a.name.clone())
     }
 
     fn kept(&self) -> Option<serde_json::Value> {
-        let state = self.state();
-        let plain = chummy_store::sealed::open(
-            state.secrets.as_ref(),
-            &seal_key(&self.channel),
-            &self.login_path(),
-            &self.aad(),
-        )
-        .ok()
-        .flatten()?;
-        serde_json::from_slice(&plain).ok()
+        read_kept(self.state(), &self.channel)
     }
 
     fn keep(&self, kept: serde_json::Value) {
-        let state = self.state();
-        let plain = Zeroizing::new(serde_json::to_vec(&kept).unwrap_or_default());
-        let r =
-            chummy_channel::matrix::make_private_dir(&dir(state, &self.channel)).and_then(|()| {
-                chummy_store::sealed::seal(
-                    state.secrets.as_ref(),
-                    &seal_key(&self.channel),
-                    &self.login_path(),
-                    &self.aad(),
-                    &plain,
-                )
-            });
-        if let Err(e) = r {
-            chummy_log::system::error("channels", format!("Couldn't keep a channel's login: {e}"));
+        if let Err(e) = write_kept(self.state(), &self.channel, &kept) {
+            chummy_log::system::error(
+                "channels",
+                format!("Couldn't keep what a channel keeps: {e}"),
+            );
         }
     }
 
-    fn received(&self, m: FromMatrix) {
+    fn received(&self, m: FromChannel) {
         if let Some(ch) = self.state().channels.get() {
-            let _ = ch.inbox.send(Input::Matrix(self.channel.clone(), m));
+            let _ = ch.inbox.send(Input::Channel(self.channel.clone(), m));
         }
     }
 
-    fn verification(&self, v: VerifyEvent) {
-        match v {
-            VerifyEvent::Waiting { n, who, emoji } => {
+    fn event(&self, e: Event) {
+        match e {
+            Event::Emoji { n, who, emoji } => {
                 crate::notify::show(
                     &self.app,
                     "Verify Chummy in Matrix",
@@ -479,12 +600,41 @@ impl MatrixHost for AppMatrix {
                     ),
                 );
                 self.set_live(|l| {
-                    l.verifications.push(Waiting { n, who, emoji });
+                    l.pending.push(Pending {
+                        n,
+                        kind: "emoji",
+                        who,
+                        emoji,
+                    });
                     l.note = None;
                 });
             }
-            VerifyEvent::Over { n } => self.set_live(|l| l.verifications.retain(|w| w.n != n)),
-            VerifyEvent::Note { text } => self.set_live(|l| l.note = Some(text)),
+            Event::Pairing { n, who } => {
+                crate::notify::show(
+                    &self.app,
+                    "Someone wants to talk to an agent",
+                    &format!(
+                        "{who} sent the pairing code for {} in Telegram: let them in, or not, in Settings → Channels.",
+                        self.agent_name()
+                    ),
+                );
+                self.set_live(|l| {
+                    l.pending.push(Pending {
+                        n,
+                        kind: "pairing",
+                        who,
+                        emoji: vec![],
+                    });
+                    // The code is used up.
+                    l.code = None;
+                    l.note = None;
+                });
+            }
+            Event::Over { n } => self.set_live(|l| l.pending.retain(|w| w.n != n)),
+            Event::Note { text } => self.set_live(|l| l.note = Some(text)),
+            // The window reads who's let in from what the channel keeps.
+            Event::People { .. } => changed(&self.app),
+            Event::Account { name } => self.set_live(|l| l.account = Some(name)),
         }
     }
 
@@ -506,6 +656,6 @@ impl MatrixHost for AppMatrix {
     }
 
     fn save_upload(&self, agent: &str, name: &str, data: &[u8]) -> Result<String, String> {
-        chummy_channel::matrix::save_to_folder(&AppPlatform::new(&self.app), agent, name, data)
+        chummy_channel::save_to_folder(&AppPlatform::new(&self.app), agent, name, data)
     }
 }

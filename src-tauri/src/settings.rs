@@ -198,6 +198,41 @@ pub enum ChannelKind {
     /// End-to-end encrypted Matrix rooms, one per allowed person, with the
     /// bot's account.
     Matrix(MatrixChannel),
+    /// A Telegram bot for the agent; people pair with a code. Not
+    /// end-to-end encrypted.
+    Telegram(TelegramChannel),
+}
+
+impl ChannelKind {
+    /// "Matrix", "Telegram".
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Matrix(_) => "Matrix",
+            Self::Telegram(_) => "Telegram",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TelegramChannel {
+    /// The Bot API server (Telegram's own unless someone runs one). The
+    /// bot's token is in the keychain; who was let in, in its sealed file.
+    #[serde(default = "telegram_api")]
+    pub api_url: String,
+    /// Largest file accepted, in MB (bots get 20 MB at most).
+    #[serde(default = "telegram_upload_mb")]
+    pub upload_mb: u32,
+    /// Show answers as they're written.
+    #[serde(default = "yes")]
+    pub stream: bool,
+}
+
+fn telegram_api() -> String {
+    chummy_bundle::TELEGRAM_API.into()
+}
+
+fn telegram_upload_mb() -> u32 {
+    chummy_bundle::MAX_TELEGRAM_UPLOAD_MB
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -227,6 +227,57 @@ fn the_matrix_channel_is_checked() {
 }
 
 #[test]
+fn telegram_bots_are_checked() {
+    let mut c = config();
+    let token = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw";
+    c.channels.telegram.push(TelegramBot {
+        agent: "helper".into(),
+        token: token.into(),
+        api_url: TELEGRAM_API.into(),
+        upload_mb: 20,
+        stream: true,
+    });
+    let r = c.check();
+    assert!(r.ok() && r.warnings.is_empty(), "{r:?}");
+    let sealed = seal(&c, PASSWORD).unwrap();
+    assert_eq!(open(&sealed, &key(&c)).unwrap(), c);
+    // Defaults when only the agent and token are given.
+    let t: TelegramBot =
+        serde_json::from_value(serde_json::json!({ "agent": "helper", "token": token })).unwrap();
+    assert_eq!(t, c.channels.telegram[0]);
+
+    // A second bot for the same agent, with the same token, a bad server
+    // and too large a file; and one for an agent that isn't there.
+    c.channels.telegram.push(TelegramBot {
+        agent: "helper".into(),
+        token: token.into(),
+        api_url: "http://telegram.example.org".into(),
+        upload_mb: 50,
+        stream: false,
+    });
+    c.channels.telegram.push(TelegramBot {
+        agent: "gone".into(),
+        token: "not a token".into(),
+        api_url: TELEGRAM_API.into(),
+        upload_mb: 1,
+        stream: true,
+    });
+    let r = c.check();
+    assert_eq!(r.errors.len(), 5, "{r:?}");
+
+    assert!(valid_telegram_token(token));
+    assert!(!valid_telegram_token("123456789"));
+    assert!(!valid_telegram_token(
+        "abc:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"
+    ));
+    assert!(!valid_telegram_token("123:short"));
+    assert!(!valid_telegram_token(
+        "123:AAHdqTcvCH1vGWJxfSeofSAs0K5PALD saw"
+    ));
+    assert_eq!(telegram_bot_id(token), Some("123456789"));
+}
+
+#[test]
 fn only_this_configuration_version_opens() {
     let mut c = config();
     assert!(c.check().ok());

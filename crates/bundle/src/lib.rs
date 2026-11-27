@@ -34,8 +34,9 @@ use zeroize::Zeroizing;
 
 pub use config::{
     BundleAgent, CONFIG_FORMAT, CONFIG_VERSION, Channels, Config, Instance, Limits, Logging,
-    MAX_CHAT_MESSAGES, MAX_CHATS, MAX_RUNS, MAX_UPLOAD_MB, MatrixChannel, Report, TerminalChannel,
-    valid_id, valid_matrix_id,
+    MAX_CHAT_MESSAGES, MAX_CHATS, MAX_RUNS, MAX_TELEGRAM_UPLOAD_MB, MAX_UPLOAD_MB, MatrixChannel,
+    Report, TELEGRAM_API, TelegramBot, TerminalChannel, telegram_bot_id, valid_id, valid_matrix_id,
+    valid_telegram_token,
 };
 pub use password::{generate_password, password_problem};
 

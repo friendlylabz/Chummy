@@ -79,8 +79,10 @@ with the reason.
 ## Channels
 
 Talk to an agent from outside Chummy (your phone, say) while Chummy runs.
-Matrix is the only kind of channel so far; it's the same channel chummyd
-has, with the same commands.
+There are two kinds of channel, Matrix and Telegram; they're the same
+channels chummyd has, with the same commands.
+
+### Matrix
 
 **New channel** asks for:
 
@@ -112,6 +114,37 @@ replying to a question answers it; `/help` lists the commands (`/stop`,
 `/pause`, `/resume`, `/new`, `/status`, `/jobs`, `/run`…). The connection
 to the homeserver is Chummy's own, like model connections, so the Internet
 permission doesn't apply to it.
+
+### Telegram
+
+Telegram isn't end-to-end encrypted: Telegram's servers can read what's
+said to the bot and what the agent answers. Choose Matrix for anything
+private.
+
+1. **Make a bot** in Telegram: talk to @BotFather, send `/newbot`, and copy
+   the token it gives (it looks like `123456:ABC-def…`). In its **Bot
+   Settings**, turning **Allow Groups** off is best (the bot leaves groups
+   anyway). Give each channel its own bot, and don't use one a chummyd uses.
+2. **New channel**: type **Telegram**, a name, the agent, and the token.
+   **Show answers as they're written** (on by default) shows the answer
+   growing as the agent writes it; off, it comes when it's done. **Bot API
+   server** stays Telegram's own unless you run one. Files people send can
+   be up to 20 MB (Telegram's limit for bots). **Answer tool approvals in
+   Telegram** (off by default) puts Allow and Deny buttons in the chat.
+3. **Let people in.** Once the channel is connected, **Add a person**
+   makes a six-digit code that works once, for ten minutes. The person
+   sends `/start <code>` to the bot; their name and Telegram id show in the
+   channel's card (with a notification), and you choose **Let them in** or
+   **Refuse**. Messages from anyone else get no answer at all.
+
+The people let in are listed in the card, each with **Remove**. The token
+is kept in your system keychain and the people let in are sealed in the
+Chummy folder, so the channel connects again whenever Chummy starts. A
+different bot token starts with nobody let in.
+
+In the chat, a message starts a run; replying to a question answers it;
+the menu next to the message box lists the commands (`/new`, `/status`,
+`/stop`…).
 
 ## Security and Privacy
 

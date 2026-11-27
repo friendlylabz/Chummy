@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Mutex;
 
-use chummy_bundle::{BundleAgent, Config, MatrixChannel, Report};
+use chummy_bundle::{BundleAgent, Config, MatrixChannel, Report, TelegramBot};
 use chummy_log::system::{self as syslog, Level};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State, WebviewWindow};
@@ -71,6 +71,9 @@ pub struct Draft {
     /// The Matrix channel, if it's on.
     #[serde(default)]
     pub matrix: Option<MatrixDraft>,
+    /// Agents' Telegram bots (one each).
+    #[serde(default)]
+    pub telegram: Vec<TelegramDraft>,
     pub message_text: bool,
     /// An opened bundle this one replaces (its token).
     #[serde(default)]
@@ -103,6 +106,22 @@ pub struct MatrixDraft {
     #[serde(default)]
     pub report_to: BTreeMap<String, String>,
     pub upload_mb: u32,
+}
+
+/// An agent's Telegram bot as the window edits it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TelegramDraft {
+    pub agent: String,
+    /// Typed in the window; empty keeps the opened bundle's. Never sent
+    /// back to the window.
+    #[serde(default)]
+    pub token: String,
+    /// The opened bundle has a token for this agent's bot.
+    #[serde(default)]
+    pub has_token: bool,
+    pub api_url: String,
+    pub upload_mb: u32,
+    pub stream: bool,
 }
 
 /// A bundle opened to change it.
@@ -181,6 +200,7 @@ fn build(state: &AppState, d: &Draft) -> Result<Config, String> {
     let name = d.name.trim();
     let mut c = Config::new_instance(name, d.time_zone.trim())?;
     let mut base_matrix_password = None;
+    let mut base_telegram_tokens = BTreeMap::new();
     let base_secrets = match d.base.as_deref() {
         Some(token) => {
             let guard = opened();
@@ -197,6 +217,13 @@ fn build(state: &AppState, d: &Draft) -> Result<Config, String> {
                 .matrix
                 .as_ref()
                 .map(|m| m.password.clone());
+            base_telegram_tokens = base
+                .config
+                .channels
+                .telegram
+                .iter()
+                .map(|t| (t.agent.clone(), t.token.clone()))
+                .collect();
             base.config.secrets.clone()
         }
         None => Default::default(),
@@ -207,6 +234,26 @@ fn build(state: &AppState, d: &Draft) -> Result<Config, String> {
     c.permissions = s.permissions.clone();
     c.channels.terminal.enabled = d.terminal;
     c.logging.message_text = d.message_text;
+    // Only for agents included: unticking one drops its bot.
+    c.channels.telegram = d
+        .telegram
+        .iter()
+        .filter(|t| d.agents.contains(&t.agent))
+        .map(|t| TelegramBot {
+            agent: t.agent.clone(),
+            token: if t.token.trim().is_empty() {
+                base_telegram_tokens
+                    .get(&t.agent)
+                    .cloned()
+                    .unwrap_or_default()
+            } else {
+                t.token.trim().to_string()
+            },
+            api_url: t.api_url.trim().trim_end_matches('/').to_string(),
+            upload_mb: t.upload_mb,
+            stream: t.stream,
+        })
+        .collect();
     if let Some(m) = &d.matrix {
         let password = if m.password.is_empty() {
             base_matrix_password.unwrap_or_default()
@@ -487,6 +534,19 @@ pub async fn chummyd_open_bundle(
             report_to: m.report_to.clone(),
             upload_mb: m.upload_mb,
         }),
+        telegram: config
+            .channels
+            .telegram
+            .iter()
+            .map(|t| TelegramDraft {
+                agent: t.agent.clone(),
+                token: String::new(),
+                has_token: !t.token.is_empty(),
+                api_url: t.api_url.clone(),
+                upload_mb: t.upload_mb,
+                stream: t.stream,
+            })
+            .collect(),
         message_text: config.logging.message_text,
         base: Some(chummy_store::random_id(8)),
     };

@@ -121,12 +121,72 @@ pub struct Channels {
     /// Talking to agents in Matrix (end-to-end encrypted rooms).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matrix: Option<MatrixChannel>,
+    /// Talking to agents in Telegram: one bot per agent.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub telegram: Vec<TelegramBot>,
 }
 
 impl Channels {
     pub fn any(&self) -> bool {
-        self.terminal.enabled || self.matrix.is_some()
+        self.terminal.enabled || self.matrix.is_some() || !self.telegram.is_empty()
     }
+}
+
+/// Telegram's own Bot API server.
+pub const TELEGRAM_API: &str = "https://api.telegram.org";
+
+/// The largest file a bot can download from Telegram's Bot API, in MB.
+pub const MAX_TELEGRAM_UPLOAD_MB: u32 = 20;
+
+/// A Telegram bot (from @BotFather) for one agent. People pair with it
+/// in chummyd's terminal (`/pair`); who was let in is kept in the state.
+/// Telegram isn't end-to-end encrypted: its servers can read the chats.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TelegramBot {
+    /// The agent people talk to.
+    pub agent: String,
+    /// The bot's token (`123456:ABC…`): its whole login.
+    pub token: String,
+    /// The Bot API server.
+    #[serde(default = "default_telegram_api")]
+    pub api_url: String,
+    /// Largest file accepted, in MB (at most [`MAX_TELEGRAM_UPLOAD_MB`]).
+    #[serde(default = "default_telegram_upload_mb")]
+    pub upload_mb: u32,
+    /// Show answers as they're written.
+    #[serde(default = "yes")]
+    pub stream: bool,
+}
+
+fn default_telegram_api() -> String {
+    TELEGRAM_API.into()
+}
+fn default_telegram_upload_mb() -> u32 {
+    MAX_TELEGRAM_UPLOAD_MB
+}
+fn yes() -> bool {
+    true
+}
+
+/// Whether a token looks like one from @BotFather (`123456:ABC-def…`).
+pub fn valid_telegram_token(token: &str) -> bool {
+    match token.split_once(':') {
+        Some((id, secret)) => {
+            (1..=20).contains(&id.len())
+                && id.bytes().all(|b| b.is_ascii_digit())
+                && (20..=100).contains(&secret.len())
+                && secret
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        }
+        None => false,
+    }
+}
+
+/// A bot's id: its token's first part (not a secret).
+pub fn telegram_bot_id(token: &str) -> Option<&str> {
+    token.split_once(':').map(|(id, _)| id)
 }
 
 /// Most a file sent over a channel may be, in MB.
@@ -446,6 +506,45 @@ impl Config {
                         j.name
                     ));
                 }
+            }
+        }
+
+        // Telegram bots.
+        let mut seen_agents = BTreeSet::new();
+        let mut seen_bots = BTreeSet::new();
+        for t in &self.channels.telegram {
+            let name = self
+                .agents
+                .iter()
+                .find(|a| a.id == t.agent)
+                .map(|a| a.name.clone());
+            let Some(name) = name else {
+                err("A Telegram bot talks for an agent that isn't in the bundle.".into());
+                continue;
+            };
+            if !seen_agents.insert(t.agent.clone()) {
+                err(format!(
+                    "“{name}” has more than one Telegram bot: give it one."
+                ));
+            }
+            if !valid_telegram_token(&t.token) {
+                err(format!(
+                    "“{name}”'s Telegram bot token isn't valid (it looks like 123456:ABC…, from @BotFather)."
+                ));
+            } else if !seen_bots.insert(telegram_bot_id(&t.token).unwrap_or("").to_string()) {
+                err("Two agents share a Telegram bot: give each its own.".into());
+            }
+            match chummy_llm::endpoint_problem(&t.api_url) {
+                Some(p) => err(format!("“{name}”'s Telegram Bot API server: {p}")),
+                None if chummy_llm::unencrypted_remote(&t.api_url) => err(format!(
+                    "“{name}”'s Telegram Bot API server must use https (plain http only on this computer or your local network)."
+                )),
+                None => {}
+            }
+            if !(1..=MAX_TELEGRAM_UPLOAD_MB).contains(&t.upload_mb) {
+                err(format!(
+                    "The largest file over Telegram must be between 1 and {MAX_TELEGRAM_UPLOAD_MB} MB."
+                ));
             }
         }
 

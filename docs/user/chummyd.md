@@ -278,7 +278,7 @@ allows it) goes to standard error; the conversation to standard output.
 
 (The Chummy app has the same Matrix channel, in Settings → Channels, for
 talking to agents while the app runs. Give chummyd and the app different
-bot accounts.)
+bot accounts. For Telegram, see section 5.)
 
 With the Matrix channel, each person you allow gets an end-to-end encrypted
 room with each agent, on your own homeserver (or any homeserver). chummyd
@@ -369,3 +369,46 @@ If the homeserver can't be reached, chummyd keeps running (jobs too) and
 tries again, waiting longer each time. If you remove a person or an agent
 from the bundle, chummyd leaves their room the next time it starts; someone
 who left their room is invited back.
+
+## 5. Talk to it in Telegram
+
+Each agent can have a Telegram bot of its own. Telegram isn't end-to-end
+encrypted: Telegram's servers can read what's said to the bot and what the
+agent answers. Choose Matrix for anything private.
+
+### Set it up
+
+1. **Make a bot** for the agent: talk to @BotFather in Telegram, send
+   `/newbot`, and copy the token. In its **Bot Settings**, turn **Allow
+   Groups** off (chummyd's bot leaves groups anyway). Don't use a bot the
+   Chummy app (or another chummyd) uses: only one program can read a bot's
+   messages.
+2. In **Configure chummyd**, under Channels → Telegram, switch on the
+   agent's bot and paste the token. **Show answers as they're written** is
+   on by default; files people send can be up to 20 MB.
+3. Export the bundle and run chummyd **with a terminal** (with Docker:
+   `docker compose up -d`, then `docker attach` to it): that's where you let
+   people in. `chummyd check` lists the bots by their id, never their token.
+
+### Let someone in
+
+In chummyd's terminal, talking to the agent (`/agent <name>` switches):
+
+- `/pair` makes a six-digit code for that agent's bot. It works once, for
+  ten minutes.
+- The person sends `/start <code>` to the bot. chummyd shows their name and
+  Telegram id, and asks: `/pair 1 yes` lets them in, `/pair 1 no` doesn't.
+  Only say yes to the person you gave the code to.
+- `/people` lists who may talk to the bot; `/unpair <id>` stops someone.
+
+The people let in are kept in the state folder (sealed), so they stay let
+in when chummyd starts again. Anyone else who writes to the bot gets no
+answer at all.
+
+### Talk
+
+As in Matrix: a message starts a run, shown as it's written; reply to a
+question to answer it; approvals (when the bundle allows them over channels
+for the agent) come with **Allow** and **Deny** buttons; files go to the
+agent's `uploads/`. The bot's menu lists the commands. Jobs don't report to
+Telegram yet.

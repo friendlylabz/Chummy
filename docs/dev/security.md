@@ -843,6 +843,27 @@ channels can't share a bot. Deleting a channel deletes its password, key,
 login and stores. A channel's chats (`m-…`) aren't renamed by the in-app
 model, and its runs are ordinary chat runs (logs, sessions panel, pane).
 
+**Telegram channels** (v0.1.6, the app and chummyd, one implementation in
+`chummy-channel`): one bot per agent, private chats only (it leaves groups).
+*Not end-to-end encrypted*: Telegram can read the chats; the form, the
+confirmations and `chummyd check` say so. The token is the bot's whole
+login: in the keychain (app) or the bundle (chummyd), and in the address of
+every call, so no address is ever logged or put in an error (reqwest errors
+lose their URL, and anything a server says has the token blanked out;
+tests check the token never shows). People are let in only by pairing: a
+six-digit code made in the program (once, for ten minutes; ten wrong tries
+end it), sent as `/start <code>`, then confirmed by the user (natively in
+the app, `/pair n yes` in chummyd's terminal). Messages and button presses
+from anyone else get no answer. Who was let in is kept sealed (the app's
+`channels/<id>/login.sealed`, chummyd's state) and starts empty for another
+bot. Messages older than ten minutes get a note, not a run. Approvals come
+with Allow and Deny buttons only when the channel (or the bundle, for the
+agent) allows approvals there; a press is checked against the person and
+the question still waiting. It polls Telegram (no webhook, nothing
+listening); a webhook on the bot or another program reading it is reported,
+never overridden. Files: at most 20 MB, through the agent's jail as for
+Matrix.
+
 chummyd, the background service being built, raises the stakes
 (unattended hosts, answers from messaging apps). Its design keeps it
 narrow: no listening API (only outgoing channel connections), a

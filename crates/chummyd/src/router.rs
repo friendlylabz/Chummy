@@ -1,17 +1,19 @@
-//! Where everything meets: what people send through channels (the terminal
-//! and Matrix), the session's updates, questions waiting, and jobs
-//! finishing. One task handles them in order.
+//! Where everything meets: what people send through channels (the
+//! terminal, Matrix and Telegram), the session's updates, questions
+//! waiting, and jobs finishing. One task handles them in order.
 //!
 //! How conversations behave is `chummy_channel::Conversations`, shared with
 //! the app; what's here is chummyd's: the terminal (a channel, and where the
-//! operator confirms Matrix verifications and stops chummyd), and the
-//! bundle's rules ([`DaemonHub`]).
+//! operator confirms Matrix verifications, lets people in to Telegram bots
+//! and stops chummyd), and the bundle's rules ([`DaemonHub`]).
 
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::sync::Arc;
 
 use chummy_channel::{
-    Approvals, Conv, Conversations, FromMatrix, Hub, Left, Line, Out, Outlet, ToMatrix,
+    Approvals, ChannelOutlet, Conv, Conversations, FromChannel, Hub, Left, Line, Out, Outlet,
+    ToChannel,
 };
 use chummy_scheduler::{AskEvent, Job, JobView, Manager, RunRecord};
 use chummy_session::Update;
@@ -19,7 +21,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::jobs::DaemonJobs;
 use crate::platform::DaemonPlatform;
-use crate::saver::Saver;
+use crate::saver::{Kept, Saver};
 
 /// The terminal's conversation with each agent.
 pub const TERMINAL_CHAT: &str = "terminal";
@@ -32,8 +34,18 @@ pub enum Input {
     Line(String),
     /// The terminal closed.
     Eof,
-    #[cfg_attr(not(feature = "matrix"), allow(dead_code))]
-    Matrix(FromMatrix),
+    /// From a channel (by id).
+    #[cfg_attr(not(any(feature = "matrix", feature = "telegram")), allow(dead_code))]
+    Channel(String, FromChannel),
+    /// Someone waits to be let in to a Telegram bot: pairing `n`.
+    #[cfg_attr(not(feature = "telegram"), allow(dead_code))]
+    Pairing {
+        channel: String,
+        n: u32,
+    },
+    /// Pairing (or verification) `n` doesn't wait any more.
+    #[cfg_attr(not(any(feature = "matrix", feature = "telegram")), allow(dead_code))]
+    Over(u32),
     Update(Box<Update>),
     Ask(AskEvent),
     JobFinished(Box<(Job, RunRecord)>),
@@ -102,6 +114,7 @@ pub struct DaemonHub {
     p: DaemonPlatform,
     jobs: Manager<DaemonJobs>,
     saver: Arc<Saver>,
+    help: String,
 }
 
 impl Hub for DaemonHub {
@@ -166,7 +179,7 @@ impl Hub for DaemonHub {
     }
 
     fn console_help(&self) -> &str {
-        "\n/agents          the agents you can talk to\n/agent <name>    talk to another agent\n/quit            stop chummyd"
+        &self.help
     }
 
     fn changed(&self, now: bool) {
@@ -178,13 +191,64 @@ impl Hub for DaemonHub {
     }
 }
 
+/// The terminal's own commands for the channels.
+#[derive(Debug, PartialEq)]
+enum Op {
+    /// `/pair`: a code for the current agent's Telegram bot.
+    Code,
+    /// `/pair [n] yes|no`.
+    Answer(Option<u32>, bool),
+    /// `/people`: who may talk to the current agent's bot.
+    People,
+    /// `/unpair <id>`.
+    Remove(String),
+}
+
+fn parse_op(text: &str) -> Option<Result<Op, String>> {
+    let t = text.trim();
+    let (first, rest) = t.split_once(char::is_whitespace).unwrap_or((t, ""));
+    let words: Vec<&str> = rest.split_whitespace().collect();
+    let answer = |w: &str| match w.to_lowercase().as_str() {
+        "yes" | "y" => Some(true),
+        "no" | "n" => Some(false),
+        _ => None,
+    };
+    let usage = || {
+        Err("Say /pair to make a code, then /pair yes or /pair no (with its number when several wait: /pair 2 yes).".to_string())
+    };
+    Some(match first {
+        "/pair" => match words.as_slice() {
+            [] => Ok(Op::Code),
+            [w] => answer(w)
+                .map(|a| Op::Answer(None, a))
+                .map_or_else(usage, Ok),
+            [n, w] => match (n.parse::<u32>(), answer(w)) {
+                (Ok(n), Some(a)) => Ok(Op::Answer(Some(n), a)),
+                _ => usage(),
+            },
+            _ => usage(),
+        },
+        "/people" if words.is_empty() => Ok(Op::People),
+        "/unpair" => match words.as_slice() {
+            [id] => Ok(Op::Remove(id.to_string())),
+            _ => Err("Say /unpair <id>, with the id /people shows.".into()),
+        },
+        _ => return None,
+    })
+}
+
 pub struct Router {
     convs: Conversations<DaemonHub>,
     terminal: bool,
     /// The agent the terminal talks to.
     current: String,
-    /// The Matrix channel, when there is one (for verifications).
-    matrix: Option<UnboundedSender<ToMatrix>>,
+    /// The channels running (Matrix, Telegram bots), by id.
+    channels: BTreeMap<String, UnboundedSender<ToChannel>>,
+    /// What each keeps (for `/people`).
+    #[cfg_attr(not(feature = "telegram"), allow(dead_code))]
+    kept: Kept,
+    /// Pairings waiting, and their channel.
+    pairings: BTreeMap<u32, String>,
     /// Asked to stop (`/quit`).
     quit: Arc<tokio::sync::Notify>,
 }
@@ -194,7 +258,8 @@ impl Router {
         p: DaemonPlatform,
         jobs: Manager<DaemonJobs>,
         saver: Arc<Saver>,
-        matrix: Option<UnboundedSender<ToMatrix>>,
+        channels: BTreeMap<String, UnboundedSender<ToChannel>>,
+        kept: Kept,
         quit: Arc<tokio::sync::Notify>,
     ) -> Self {
         let terminal = p.0.bundle.channels.terminal.enabled;
@@ -204,18 +269,32 @@ impl Router {
                 .first()
                 .map(|a| a.id.clone())
                 .unwrap_or_default();
-        let mut convs = Conversations::new(DaemonHub { p, jobs, saver });
+        let mut help =
+            "\n/agents          the agents you can talk to\n/agent <name>    talk to another agent"
+                .to_string();
+        if !p.0.bundle.channels.telegram.is_empty() {
+            help.push_str("\n/pair            a code to let someone talk to this agent's Telegram bot\n/people          who may talk to it\n/unpair <id>     stop someone talking to it");
+        }
+        help.push_str("\n/quit            stop chummyd");
+        let mut convs = Conversations::new(DaemonHub {
+            p,
+            jobs,
+            saver,
+            help,
+        });
         if terminal {
             convs.add_channel(TERMINAL, Arc::new(TerminalOutlet));
         }
-        if let Some(tx) = &matrix {
-            convs.add_channel(MATRIX, Arc::new(chummy_channel::MatrixOutlet(tx.clone())));
+        for (id, tx) in &channels {
+            convs.add_channel(id, Arc::new(ChannelOutlet(tx.clone())));
         }
         Self {
             convs,
             terminal,
             current,
-            matrix,
+            channels,
+            kept,
+            pairings: BTreeMap::new(),
             quit,
         }
     }
@@ -255,20 +334,29 @@ impl Router {
                         "The terminal closed; chummyd keeps running. Stop it with Ctrl-C (or SIGTERM).",
                     );
                 }
-                if self.matrix.is_some() {
+                if !self.channels.is_empty() {
                     chummy_log::system::warn(
-                        "matrix",
-                        "chummyd has no terminal (standard input closed), so Matrix verifications can't be confirmed until it runs with one",
+                        "app",
+                        "chummyd has no terminal (standard input closed), so Matrix verifications can't be confirmed, nor people let in to Telegram bots, until it runs with one",
                     );
                 }
             }
-            Input::Matrix(FromMatrix::Ready { convs }) => self.convs.set_convs(MATRIX, convs),
-            Input::Matrix(FromMatrix::Message {
-                conv,
-                text,
-                answers,
-            }) => {
+            Input::Channel(id, FromChannel::Ready { convs }) => self.convs.set_convs(&id, convs),
+            Input::Channel(
+                _,
+                FromChannel::Message {
+                    conv,
+                    text,
+                    answers,
+                },
+            ) => {
                 self.convs.receive(&conv, &text, answers);
+            }
+            Input::Pairing { channel, n } => {
+                self.pairings.insert(n, channel);
+            }
+            Input::Over(n) => {
+                self.pairings.remove(&n);
             }
             Input::Update(u) => self.convs.update(&u),
             Input::Ask(AskEvent::Asked { pending }) => self.convs.asked(&pending),
@@ -278,20 +366,28 @@ impl Router {
         }
     }
 
-    /// A line from the terminal. The operator's `/verify` and `/quit` work
-    /// even when the terminal isn't a channel.
+    /// A line from the terminal. The operator's `/verify`, `/pair`,
+    /// `/people`, `/unpair` and `/quit` work even when the terminal isn't a
+    /// channel.
     fn line(&mut self, text: &str) {
         if text.is_empty() {
             return;
         }
         if let Some(v) = chummy_channel::parse_verify(text) {
             match v {
-                Ok((n, matches)) => match &self.matrix {
+                Ok((n, yes)) => match self.channels.get(MATRIX) {
                     Some(m) => {
-                        let _ = m.send(ToMatrix::Verify { n, matches });
+                        let _ = m.send(ToChannel::Answer { n, yes });
                     }
                     None => note("There's no Matrix channel."),
                 },
+                Err(e) => note(&e),
+            }
+            return;
+        }
+        if let Some(op) = parse_op(text) {
+            match op {
+                Ok(op) => self.op(op),
                 Err(e) => note(&e),
             }
             return;
@@ -304,7 +400,7 @@ impl Router {
                 self.left(Left::Quit);
             } else {
                 note(
-                    "The terminal only takes /verify and /quit: it isn't a channel in this bundle.",
+                    "The terminal only takes /verify, /pair, /people, /unpair and /quit: it isn't a channel in this bundle.",
                 );
             }
             return;
@@ -312,6 +408,96 @@ impl Router {
         let to = self.terminal_conv();
         if let Some(l) = self.convs.receive(&to, text, None) {
             self.left(l);
+        }
+    }
+
+    /// `/pair`, `/people`, `/unpair`: for the current agent's Telegram bot
+    /// (answers go to whichever bot the pairing is for).
+    fn op(&mut self, op: Op) {
+        let agent = self.agent_name(&self.current);
+        let id = crate::channels::telegram_id(&self.current);
+        let bot = self.channels.get(&id).cloned();
+        let no_bot = || {
+            note(&format!(
+                "{agent} has no Telegram bot in this bundle (/agent switches agents)."
+            ))
+        };
+        match op {
+            Op::Code => {
+                let Some(bot) = bot else { return no_bot() };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                let _ = bot.send(ToChannel::NewCode(tx));
+                tokio::spawn(async move {
+                    match rx.await {
+                        Ok(Ok(c)) => note(&format!(
+                            "Pairing code for {agent}'s Telegram bot: {}\nAsk the person to send /start {} to the bot within 10 minutes; then you'll be asked here whether to let them in.",
+                            c.code, c.code
+                        )),
+                        Ok(Err(e)) => note(&e),
+                        Err(_) => note("The Telegram bot isn't running."),
+                    }
+                });
+            }
+            Op::Answer(n, yes) => {
+                let n = match n {
+                    Some(n) => n,
+                    None if self.pairings.len() == 1 => *self.pairings.keys().next().expect("one"),
+                    None if self.pairings.is_empty() => return note("No pairing is waiting."),
+                    None => {
+                        return note(&format!(
+                            "Several pairings are waiting ({}): say which, like /pair {} yes.",
+                            self.pairings
+                                .keys()
+                                .map(|k| k.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            self.pairings.keys().next().expect("some")
+                        ));
+                    }
+                };
+                match self.pairings.get(&n).and_then(|c| self.channels.get(c)) {
+                    Some(ch) => {
+                        let _ = ch.send(ToChannel::Answer { n: Some(n), yes });
+                    }
+                    None => note(&format!("There's no pairing {n} waiting.")),
+                }
+            }
+            Op::People => {
+                if bot.is_none() {
+                    return no_bot();
+                }
+                #[cfg(feature = "telegram")]
+                let people = self
+                    .kept
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(&id)
+                    .map(chummy_channel::telegram::people)
+                    .unwrap_or_default();
+                #[cfg(not(feature = "telegram"))]
+                let people: Vec<chummy_channel::Person> = vec![];
+                if people.is_empty() {
+                    note(&format!(
+                        "Nobody may talk to {agent}'s Telegram bot yet: /pair makes a code."
+                    ));
+                } else {
+                    let list: Vec<String> = people
+                        .iter()
+                        .map(|p| format!("{} (id {})", p.name, p.id))
+                        .collect();
+                    note(&format!(
+                        "Who may talk to {agent}'s Telegram bot:\n{}\n/unpair <id> stops someone.",
+                        list.join("\n")
+                    ));
+                }
+            }
+            Op::Remove(who) => {
+                let Some(bot) = bot else { return no_bot() };
+                let _ = bot.send(ToChannel::Remove { id: who.clone() });
+                note(&format!(
+                    "{who} can't talk to {agent}'s Telegram bot any more."
+                ));
+            }
         }
     }
 
@@ -379,4 +565,25 @@ pub fn read_terminal(inbox: tokio::sync::mpsc::UnboundedSender<Input>) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pairing_commands_read_right() {
+        assert_eq!(parse_op("hello"), None);
+        assert_eq!(parse_op("/pair"), Some(Ok(Op::Code)));
+        assert_eq!(parse_op("/pair yes"), Some(Ok(Op::Answer(None, true))));
+        assert_eq!(
+            parse_op(" /pair 3 NO "),
+            Some(Ok(Op::Answer(Some(3), false)))
+        );
+        assert!(matches!(parse_op("/pair maybe"), Some(Err(_))));
+        assert_eq!(parse_op("/people"), Some(Ok(Op::People)));
+        assert_eq!(parse_op("/unpair 42"), Some(Ok(Op::Remove("42".into()))));
+        assert!(matches!(parse_op("/unpair"), Some(Err(_))));
+        assert_eq!(parse_op("/pairs"), None);
+    }
 }
