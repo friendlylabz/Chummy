@@ -104,21 +104,14 @@ pub fn describe(c: &Config) -> Vec<String> {
         };
         let internet = perm.tools && perm.network && a.tools.values().any(|t| t.network);
         out.push(format!(
-            "  {} [{}]: loop “{loop_name}”, model {model}; tools: {}; internet: {}; approvals over channels: {}",
+            "  {} [{}]: loop “{loop_name}”, model {model}; tools: {}; internet: {}",
             a.name,
             a.id,
             some(&tools, 4),
             yes(internet),
-            yes(a.channel_approvals)
         ));
         if internet {
             look.push(format!("{} may use the internet", a.name));
-        }
-        if a.channel_approvals {
-            look.push(format!(
-                "{}'s tool approvals can be given over channels",
-                a.name
-            ));
         }
     }
 
@@ -141,60 +134,63 @@ pub fn describe(c: &Config) -> Vec<String> {
         }
     }
 
+    // Channels, each described by its kind (never with its secrets).
     let mut channels = vec![];
     if c.channels.terminal.enabled {
-        channels.push("terminal".to_string());
-    }
-    if let Some(m) = &c.channels.matrix {
-        channels.push(format!("Matrix as {} on {}", m.user_id, m.homeserver));
-    }
-    for t in &c.channels.telegram {
-        let agent = c
-            .agents
-            .iter()
-            .find(|a| a.id == t.agent)
-            .map(|a| a.name.as_str())
-            .unwrap_or(&t.agent);
-        let server = if t.api_url == chummy_bundle::TELEGRAM_API {
-            String::new()
-        } else {
-            format!(", through {}", t.api_url)
-        };
         channels.push(format!(
-            "Telegram bot {} for {agent}{server}",
-            chummy_bundle::telegram_bot_id(&t.token).unwrap_or("?")
+            "  terminal; approvals here: {}",
+            yes(c.channels.terminal.approvals)
         ));
     }
-    out.push(format!(
-        "Channels: {}",
-        if channels.is_empty() {
-            "none".into()
-        } else {
-            channels.join("; ")
-        }
-    ));
-    if let Some(m) = &c.channels.matrix {
-        for (agent, users) in &m.users {
-            out.push(format!("  {agent} talks to: {}", some(users, 4)));
-        }
-        let people: std::collections::BTreeSet<&String> = m.users.values().flatten().collect();
-        if !people.is_empty() {
+    for ch in &c.channels.list {
+        let agent = chummy_channel::kind::names(
+            &ch.agents
+                .iter()
+                .map(|id| {
+                    c.agents
+                        .iter()
+                        .find(|a| a.id == *id)
+                        .map(|a| a.name.clone())
+                        .unwrap_or_else(|| id.clone())
+                })
+                .collect::<Vec<_>>(),
+        );
+        let Some(k) = chummy_channel::kind(&ch.kind) else {
+            channels.push(format!(
+                "  {} [{}]: unknown kind {}",
+                ch.name, ch.id, ch.kind
+            ));
+            continue;
+        };
+        let options = chummy_channel::kind::tidy(k, &ch.options);
+        let secrets = chummy_channel::kind::secrets_of(&ch.secrets);
+        let setup = chummy_channel::Setup {
+            agent: &agent,
+            options: &options,
+            secrets: &secrets,
+            program: "chummyd",
+        };
+        channels.push(format!(
+            "  {} [{}], {} for {agent}: {}; approvals here: {}",
+            ch.name,
+            ch.id,
+            k.label(),
+            k.summary(&setup),
+            yes(ch.approvals)
+        ));
+        look.extend(k.cautions(&setup));
+        if ch.approvals {
             look.push(format!(
-                "{} {} can talk to agents in Matrix",
-                people.len(),
-                if people.len() == 1 {
-                    "person"
-                } else {
-                    "people"
-                }
+                "{agent}'s tool approvals can be given in “{}”",
+                ch.name
             ));
         }
     }
-    if !c.channels.telegram.is_empty() {
-        look.push(
-            "Telegram isn't end-to-end encrypted: Telegram can read what people and agents say there (people are let in with /pair in the terminal)"
-                .into(),
-        );
+    if channels.is_empty() {
+        out.push("Channels: none".into());
+    } else {
+        out.push("Channels:".into());
+        out.extend(channels);
     }
     out.push(format!(
         "Logs: message text {}",
@@ -250,7 +246,6 @@ mod tests {
             .into(),
             loop_config: Default::default(),
             model_options: Default::default(),
-            channel_approvals: true,
         });
         c.permissions.tools = true;
         c.permissions.network = true;
@@ -267,10 +262,6 @@ mod tests {
         assert!(text.contains("Look at:"), "{text}");
         assert!(text.contains("plain http"), "{text}");
         assert!(text.contains("Helper may use the internet"), "{text}");
-        assert!(
-            text.contains("approvals can be given over channels"),
-            "{text}"
-        );
 
         // Without the bundle's permission, the agent gets neither.
         c.permissions.tools = false;
@@ -279,21 +270,29 @@ mod tests {
         assert!(text.contains("tools: none; internet: no"), "{text}");
         assert!(!text.contains("may use the internet"), "{text}");
 
-        // A Telegram bot: its id (never its token), and a word on privacy.
+        // Channels: each described by its kind (a Telegram bot by its id,
+        // never its token), with what's worth a look.
         let token = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw";
-        c.channels.telegram.push(chummy_bundle::TelegramBot {
-            agent: "helper".into(),
-            token: token.into(),
-            api_url: chummy_bundle::TELEGRAM_API.into(),
-            upload_mb: 20,
-            stream: true,
+        c.channels.list.push(chummy_bundle::BundleChannel {
+            id: "tg".into(),
+            name: "Phone".into(),
+            kind: "telegram".into(),
+            agents: vec!["helper".into()],
+            approvals: true,
+            options: Default::default(),
+            secrets: [("token".to_string(), token.to_string())].into(),
+            reports: Default::default(),
         });
         let text = describe(&c).join("\n");
-        assert!(text.contains("Telegram bot 123456789 for Helper"), "{text}");
+        assert!(
+            text.contains("Phone [tg], Telegram for Helper: Telegram bot 123456789, not end-to-end encrypted; approvals here: yes"),
+            "{text}"
+        );
         assert!(
             text.contains("Telegram isn't end-to-end encrypted"),
             "{text}"
         );
+        assert!(text.contains("approvals can be given in “Phone”"), "{text}");
         assert!(!text.contains("AAHdq"), "{text}");
     }
 }

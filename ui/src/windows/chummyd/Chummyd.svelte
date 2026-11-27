@@ -3,16 +3,17 @@
   import {
     commands,
     errorText,
+    type ChannelKindInfo,
+    type ChummydChannel,
     type ChummydDraft,
-    type ChummydMatrix,
     type ChummydReport,
     type ChummydSources,
-    type ChummydTelegram,
   } from "$lib/ipc";
   import Button from "$lib/components/Button.svelte";
   import Icon from "$lib/components/Icon.svelte";
   import Modal from "$lib/components/Modal.svelte";
   import Toggle from "$lib/components/Toggle.svelte";
+  import ChannelFields from "../settings/ChannelFields.svelte";
 
   let sources = $state<ChummydSources>({ agents: [], jobs: [], time_zone: "UTC" });
   let draft = $state<ChummydDraft>({
@@ -22,10 +23,10 @@
     chat_messages: 2000,
     chats: 50,
     agents: [],
-    approvals: [],
     jobs: [],
     terminal: true,
-    telegram: [],
+    terminal_approvals: false,
+    channels: [],
     message_text: false,
     base: null,
   });
@@ -42,80 +43,54 @@
   let busy = $state(false);
   let opening = $state(false);
   let openPassword = $state("");
-  /** What checking the homeserver said. */
-  let hsResult = $state<{ ok: boolean; text: string } | null>(null);
-  let hsBusy = $state(false);
+  /** Every kind of channel: the forms are drawn from them. */
+  let kinds = $state.raw<ChannelKindInfo[]>([]);
+  const kindOf = (t: string) => kinds.find((k) => k.id === t);
+  /** The kind a new channel will be. */
+  let newKind = $state("");
 
-  function newMatrix(): ChummydMatrix {
-    return {
-      homeserver: "https://",
-      user_id: "",
-      password: "",
-      has_password: false,
-      users: {},
-      report_to: {},
-      upload_mb: 100,
-    };
+  function addChannel() {
+    const k = kindOf(newKind) ?? kinds[0];
+    if (!k) return;
+    const options: Record<string, unknown> = {};
+    for (const f of k.fields) if (f.input !== "secret") options[f.key] = $state.snapshot(f.default);
+    const id = `ch-${Math.random().toString(36).slice(2, 8)}`;
+    const agent = draft.agents[0];
+    draft.channels = [
+      ...draft.channels,
+      {
+        id,
+        name: k.label,
+        type: k.id,
+        agents: agent ? [agent] : [],
+        approvals: false,
+        options,
+        secrets: {},
+        saved_secrets: [],
+        reports: {},
+      },
+    ];
   }
 
-  function setMatrix(on: boolean) {
-    draft.matrix = on ? (draft.matrix ?? newMatrix()) : null;
-    hsResult = null;
+  function removeChannel(id: string) {
+    draft.channels = draft.channels.filter((c) => c.id !== id);
   }
 
-  function telegramOf(agent: string): ChummydTelegram | undefined {
-    return (draft.telegram ?? []).find((t) => t.agent === agent);
+  function setChannelAgent(c: ChummydChannel, id: string, on: boolean) {
+    const many = kindOf(c.type)?.many_agents;
+    c.agents = many ? toggle(c.agents, id, on) : on ? [id] : [];
   }
 
-  function setTelegram(agent: string, on: boolean) {
-    const rest = (draft.telegram ?? []).filter((t) => t.agent !== agent);
-    draft.telegram = on
-      ? [
-          ...rest,
-          telegramOf(agent) ?? {
-            agent,
-            token: "",
-            has_token: false,
-            api_url: "https://api.telegram.org",
-            upload_mb: 20,
-            stream: true,
-          },
-        ]
-      : rest;
-  }
-
-  /** Matrix IDs typed as a list (commas, spaces or new lines between). */
-  function setUsers(agent: string, text: string) {
-    if (!draft.matrix) return;
-    const ids = text
-      .split(/[\s,]+/)
-      .map((x) => x.trim())
-      .filter(Boolean);
-    draft.matrix.users = { ...draft.matrix.users, [agent]: ids };
-  }
-
-  function setReportTo(job: string, user: string) {
-    if (!draft.matrix) return;
-    const r = { ...draft.matrix.report_to };
-    if (user) r[job] = user;
+  function setReport(c: ChummydChannel, job: string, who: string) {
+    const r = { ...c.reports };
+    if (who.trim()) r[job] = who.trim();
     else delete r[job];
-    draft.matrix.report_to = r;
-  }
-
-  async function checkHomeserver() {
-    if (!draft.matrix) return;
-    hsBusy = true;
-    hsResult = null;
-    try {
-      hsResult = { ok: true, text: await commands.chummydCheckHomeserver(draft.matrix.homeserver) };
-    } catch (e) {
-      hsResult = { ok: false, text: errorText(e) };
-    } finally {
-      hsBusy = false;
-    }
+    c.reports = r;
   }
 
   onMount(async () => {
+    kinds = await commands.channelKinds();
+    newKind = kinds[0]?.id ?? "";
     sources = await commands.chummydSources();
     draft.time_zone = sources.time_zone;
     draft.name = "My chummyd";
@@ -151,7 +126,6 @@
   function includeAgent(id: string, on: boolean) {
     draft.agents = toggle(draft.agents, id, on);
     if (!on) {
-      draft.approvals = toggle(draft.approvals, id, false);
       draft.jobs = draft.jobs.filter((j) => sources.jobs.find((x) => x.id === j)?.agent !== id);
     }
   }
@@ -289,23 +263,6 @@
             </div>
             <Toggle checked={on} label={`Include ${a.name}`} onchange={(v) => includeAgent(a.id, v)} />
           </div>
-          {#if on}
-            <div class="row sub-row">
-              <div>
-                <div class="row-title">Answer its approvals over channels</div>
-                <div class="row-sub">
-                  Tool approvals and daily-limit questions can be answered from a channel. Off: they're refused there,
-                  so tools that ask first won't run. A remote “allow” is what a prompt injection would want: turn on
-                  only if you need it.
-                </div>
-              </div>
-              <Toggle
-                checked={draft.approvals.includes(a.id)}
-                label={`Approvals over channels for ${a.name}`}
-                onchange={(v) => (draft.approvals = toggle(draft.approvals, a.id, v))}
-              />
-            </div>
-          {/if}
         {/each}
       </div>
     {/if}
@@ -342,142 +299,88 @@
         </div>
         <Toggle checked={draft.terminal} label="Terminal channel" onchange={(v) => (draft.terminal = v)} />
       </div>
-      <div class="row">
-        <div>
-          <div class="row-title">Matrix</div>
-          <div class="row-sub">
-            chummyd logs in as its own Matrix account, makes an end-to-end encrypted room for each agent and each
-            person allowed to talk to it, and invites them. People verify chummyd by emoji from their Matrix app; you
-            confirm the emoji in chummyd's terminal with <span class="mono">/verify</span>.
-          </div>
-        </div>
-        <Toggle checked={!!draft.matrix} label="Matrix channel" onchange={setMatrix} />
-      </div>
-      {#if draft.matrix}
-        {@const m = draft.matrix}
-        <div class="row sub-row">
-          <div><div class="row-title">Homeserver</div><div class="row-sub">Its address, like https://matrix.example.org.</div></div>
-          <div class="stack">
-            <input class="input narrow mono" bind:value={m.homeserver} aria-label="Homeserver" spellcheck="false" />
-            <Button variant="ghost" disabled={hsBusy || !m.homeserver} onclick={checkHomeserver}>Check the homeserver</Button>
-          </div>
-        </div>
-        {#if hsResult}
-          <div class="row sub-row">
-            <span class="small" class:good={hsResult.ok} class:warn-text={!hsResult.ok}>{hsResult.text}</span>
-          </div>
-        {/if}
-        <div class="row sub-row">
-          <div><div class="row-title">chummyd's Matrix ID</div><div class="row-sub">An account just for chummyd, like @chummyd:example.org.</div></div>
-          <input class="input narrow mono" bind:value={m.user_id} aria-label="chummyd's Matrix ID" spellcheck="false" placeholder="@chummyd:example.org" />
-        </div>
+      {#if draft.terminal}
         <div class="row sub-row">
           <div>
-            <div class="row-title">Its password</div>
-            <div class="row-sub">To log in the first time and set up its cross-signing. It's kept in the bundle, encrypted.</div>
+            <div class="row-title">Answer approvals in the terminal</div>
+            <div class="row-sub">Tool approvals and daily-limit questions. Off: they're refused, so tools that ask first won't run.</div>
           </div>
-          <input
-            class="input narrow"
-            type="password"
-            autocomplete="off"
-            bind:value={m.password}
-            aria-label="chummyd's Matrix password"
-            placeholder={m.has_password ? "Kept from the bundle" : ""}
-          />
+          <Toggle checked={draft.terminal_approvals} label="Approvals in the terminal" onchange={(v) => (draft.terminal_approvals = v)} />
         </div>
-        <div class="row sub-row">
-          <div><div class="row-title">Largest file</div><div class="row-sub">Files people send go to the agent's <span class="mono">uploads/</span> folder.</div></div>
-          <div class="stack">
-            <input class="input tiny" type="number" min="1" max="1024" bind:value={m.upload_mb} aria-label="Largest file, in MB" />
-            <span class="small muted">MB</span>
-          </div>
-        </div>
-        {#each draft.agents as id (id)}
-          <div class="row sub-row">
-            <div>
-              <div class="row-title">Who may talk to {agentName(id)}</div>
-              <div class="row-sub">Matrix IDs, separated by commas. Each gets a room of their own.</div>
-            </div>
-            <input
-              class="input narrow mono"
-              value={(m.users[id] ?? []).join(", ")}
-              onchange={(e) => setUsers(id, e.currentTarget.value)}
-              aria-label={`Who may talk to ${agentName(id)}`}
-              spellcheck="false"
-              placeholder="@you:example.org"
-            />
-          </div>
-        {/each}
-        {#each draft.jobs as jid (jid)}
-          {@const j = sources.jobs.find((x) => x.id === jid)}
-          {#if j}
-            <div class="row sub-row">
-              <div>
-                <div class="row-title">“{j.name}” reports to</div>
-                <div class="row-sub">Its results and questions go to this person's room with {agentName(j.agent)}.</div>
-              </div>
-              <select
-                class="input narrow"
-                value={m.report_to[jid] ?? ""}
-                onchange={(e) => setReportTo(jid, e.currentTarget.value)}
-                aria-label={`Who “${j.name}” reports to`}
-              >
-                <option value="">Nobody</option>
-                {#each m.users[j.agent] ?? [] as u (u)}<option value={u}>{u}</option>{/each}
-              </select>
-            </div>
-          {/if}
-        {/each}
       {/if}
       <div class="row">
         <div>
-          <div class="row-title">Telegram</div>
           <div class="row-sub">
-            A bot of its own for each agent (make one with @BotFather). People ask to talk to it with a pairing code
-            you make in chummyd's terminal with <span class="mono">/pair</span>, and you let them in there. Telegram
-            isn't end-to-end encrypted: its servers can read these chats.
+            Other channels let people talk to the agents from elsewhere. What they ask you to check (emoji to compare,
+            someone to let in) shows in chummyd's terminal, and you answer with <span class="mono">/verify</span>;
+            <span class="mono">/invite</span> makes an invitation where people join by one.
           </div>
         </div>
       </div>
-      {#each draft.agents as id (id)}
-        {@const t = telegramOf(id)}
-        <div class="row sub-row">
-          <div><div class="row-title">{agentName(id)}'s bot</div></div>
-          <Toggle checked={!!t} label={`Telegram bot for ${agentName(id)}`} onchange={(v) => setTelegram(id, v)} />
+    </div>
+
+    {#each draft.channels as c (c.id)}
+      {@const k = kindOf(c.type)}
+      <div class="card card-pad channel">
+        <div class="ch-head">
+          <input class="input ch-name" bind:value={c.name} aria-label="Channel name" maxlength="60" />
+          <span class="badge">{k?.label ?? c.type}</span>
+          <span class="spacer"></span>
+          <Button variant="ghost" icon="trash" iconOnly aria-label="Remove channel" onclick={() => removeChannel(c.id)} />
         </div>
-        {#if t}
-          <div class="row sub-row">
-            <div>
-              <div class="row-title">Bot token</div>
-              <div class="row-sub">From @BotFather, like 123456:ABC… It's the bot's whole login: kept in the bundle, encrypted.</div>
+        {#if k}<p class="row-sub">{k.about}</p>{/if}
+        <div class="field">
+          <span class="label">{k?.many_agents ? "Agents" : "Agent"}</span>
+          {#if draft.agents.length === 0}
+            <span class="hint">Include an agent above first.</span>
+          {:else if k?.many_agents}
+            <div class="agents">
+              {#each draft.agents as id (id)}
+                <label class="agent-pick">
+                  <input type="checkbox" checked={c.agents.includes(id)} onchange={(e) => setChannelAgent(c, id, e.currentTarget.checked)} />
+                  {agentName(id)}
+                </label>
+              {/each}
             </div>
+          {:else}
+            <select class="input" aria-label="Agent" value={c.agents[0] ?? ""} onchange={(e) => setChannelAgent(c, e.currentTarget.value, true)}>
+              {#each draft.agents as id (id)}<option value={id}>{agentName(id)}</option>{/each}
+            </select>
+          {/if}
+        </div>
+        {#if k}
+          <ChannelFields kind={k} bind:options={c.options} bind:secrets={c.secrets} saved={c.saved_secrets} prefix={c.id} />
+        {/if}
+        <div class="row toggle-line">
+          <div>
+            <div class="row-title">Answer approvals in it</div>
+            <div class="row-sub">
+              Off: they're refused there. A remote “allow” is what a prompt injection would want: turn on only if you need it.
+            </div>
+          </div>
+          <Toggle checked={c.approvals} label={`Approvals in ${c.name}`} onchange={(v) => (c.approvals = v)} />
+        </div>
+        {#each sources.jobs.filter((j) => draft.jobs.includes(j.id) && c.agents.includes(j.agent)) as j (j.id)}
+          <div class="field">
+            <label for={`${c.id}-report-${j.id}`}>“{j.name}” reports to</label>
             <input
-              class="input narrow mono"
-              type="password"
-              autocomplete="off"
+              id={`${c.id}-report-${j.id}`}
+              class="input mono"
+              value={c.reports[j.id] ?? ""}
+              oninput={(e) => setReport(c, j.id, e.currentTarget.value)}
+              placeholder="Nobody (a person's id in the channel)"
               spellcheck="false"
-              bind:value={t.token}
-              aria-label={`${agentName(id)}'s bot token`}
-              placeholder={t.has_token ? "Kept from the bundle" : ""}
             />
           </div>
-          <div class="row sub-row">
-            <div><div class="row-title">Show answers as they're written</div><div class="row-sub">Off: each answer comes when it's done.</div></div>
-            <Toggle checked={t.stream} label="Show answers as they're written" onchange={(v) => (t.stream = v)} />
-          </div>
-          <div class="row sub-row">
-            <div><div class="row-title">Largest file</div><div class="row-sub">Bots can get files of up to 20 MB from Telegram.</div></div>
-            <div class="stack">
-              <input class="input tiny" type="number" min="1" max="20" bind:value={t.upload_mb} aria-label="Largest file over Telegram, in MB" />
-              <span class="small muted">MB</span>
-            </div>
-          </div>
-          <div class="row sub-row">
-            <div><div class="row-title">Bot API server</div><div class="row-sub">Telegram's own, unless you run one.</div></div>
-            <input class="input narrow mono" bind:value={t.api_url} aria-label="Bot API server" spellcheck="false" />
-          </div>
-        {/if}
-      {/each}
+        {/each}
+      </div>
+    {/each}
+
+    <div class="add-channel">
+      <select class="input" aria-label="Kind of channel" bind:value={newKind}>
+        {#each kinds as k (k.id)}<option value={k.id}>{k.label}</option>{/each}
+      </select>
+      <Button icon="plus" onclick={addChannel} disabled={!kinds.length}>Add channel</Button>
     </div>
 
     <div class="section-label">Logs</div>
@@ -580,6 +483,58 @@
   .bottom {
     margin-top: var(--space-5);
   }
+  .channel {
+    margin-top: var(--space-3);
+  }
+  .ch-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-bottom: var(--space-2);
+  }
+  .ch-name {
+    max-width: 260px;
+    font-weight: 600;
+  }
+  .badge {
+    padding: 0 6px;
+    border-radius: var(--radius-full);
+    background: var(--surface-2);
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+  }
+  .spacer {
+    flex: 1;
+  }
+  .channel .field {
+    margin-top: var(--space-3);
+  }
+  .channel .field .label {
+    font-size: var(--text-sm);
+    font-weight: 550;
+  }
+  .agents {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-4);
+  }
+  .agent-pick {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    font-weight: 400;
+  }
+  .toggle-line {
+    padding: var(--space-3) 0 0;
+  }
+  .add-channel {
+    display: flex;
+    gap: var(--space-2);
+    margin-top: var(--space-3);
+  }
+  .add-channel select {
+    width: 180px;
+  }
   .sub-row {
     padding-left: var(--space-6);
     background: var(--surface-2, transparent);
@@ -593,19 +548,6 @@
   }
   .warn-text {
     color: var(--warn, #b26b00);
-  }
-  .stack {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    flex-wrap: wrap;
-    justify-content: flex-end;
-  }
-  .tiny {
-    width: 6em;
-  }
-  .good {
-    color: var(--ok, var(--accent));
   }
   .explain {
     margin-bottom: var(--space-3);

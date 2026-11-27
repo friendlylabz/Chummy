@@ -166,7 +166,7 @@ async fn handle(ctx: &Arc<Ctx>, runs: &mut HashMap<String, RunMsg>, m: ToChannel
             }
         }
         ToChannel::Answer { n, yes } => super::answer_pairing(ctx, n, yes).await,
-        ToChannel::NewCode(answer) => {
+        ToChannel::Invite(answer) => {
             let _ = answer.send(Ok(ctx.new_code()));
         }
         ToChannel::Remove { id } => super::remove_person(ctx, &id).await,

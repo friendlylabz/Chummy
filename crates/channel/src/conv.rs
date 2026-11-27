@@ -30,8 +30,12 @@ pub struct Conv {
     pub agent: String,
     /// The agent's chat it continues.
     pub chat: String,
-    /// Who's talking: a Matrix ID, or "Terminal". The chat's title.
+    /// Who's talking, as people read it: a Matrix ID, "Alice (@alice)",
+    /// "Terminal". The chat's title.
     pub who: String,
+    /// Who's talking, by their id in the channel (a Matrix ID, a Telegram
+    /// id): what jobs report to.
+    pub person: String,
     /// The operator's console (chummyd's terminal): it answers questions in
     /// turn, sees every agent's runs and jobs, and may switch agents.
     pub console: bool,
@@ -335,7 +339,7 @@ impl<H: Hub> Conversations<H> {
                         out.extend(
                             all()
                                 .filter(|c| {
-                                    c.channel == channel && c.who == who && c.agent == agent
+                                    c.channel == channel && c.person == who && c.agent == agent
                                 })
                                 .cloned(),
                         );
@@ -656,6 +660,7 @@ impl<H: Hub> Conversations<H> {
                     agent: String::new(),
                     chat: String::new(),
                     who: String::new(),
+                    person: String::new(),
                     console: false,
                 },
                 Out::Closed {
@@ -686,7 +691,7 @@ impl<H: Hub> Conversations<H> {
             let reported = to.agent == job.agent
                 && reports
                     .iter()
-                    .any(|(ch, who)| *ch == to.channel && *who == to.who);
+                    .any(|(ch, who)| *ch == to.channel && *who == to.person);
             if !to.console && !reported {
                 continue;
             }

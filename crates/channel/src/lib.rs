@@ -4,11 +4,15 @@
 //! - [`Conversations`]: how conversations through any channel behave
 //!   (messages, answers, the commands people send ([`Command`]), runs shown
 //!   as they go ([`RunView`]), questions, approvals and jobs' reports).
-//! - One implementation per kind of channel, which finds conversations and
-//!   carries text: [`matrix`] (with the `matrix` feature) and [`telegram`]
-//!   (with the `telegram` feature). Each runs behind a [`ChannelHost`] (what
-//!   differs between the programs) and is driven through a [`Handle`] and
-//!   [`ChannelOutlet`].
+//! - [`ChannelKind`]: a kind of channel, the one place it's described
+//!   ([`kind`]): what to ask when one is set up, how it's checked and
+//!   described, and how it runs. [`matrix::Matrix`] and
+//!   [`telegram::Telegram`] (running them needs the `matrix` and
+//!   `telegram` features). The programs never name a kind: they list
+//!   [`kinds`] and run one through a [`ChannelHost`] (what differs between
+//!   them), a [`Handle`] and a [`ChannelOutlet`]. Each kind verifies people
+//!   its own way and asks the program with an [`Event::Verify`], which the
+//!   programs show and answer the same way for every kind.
 //!
 //! A channel only ever does two things for a person: start a run of an
 //! agent's own loop with their message, or carry out one of the commands.
@@ -18,10 +22,9 @@ mod command;
 mod conv;
 pub mod files;
 mod host;
+pub mod kind;
 pub mod link;
-#[cfg(feature = "matrix")]
 pub mod matrix;
-#[cfg(feature = "telegram")]
 pub mod telegram;
 mod view;
 
@@ -31,7 +34,11 @@ pub use conv::{
 };
 pub use files::save_to_folder;
 pub use host::{
-    ChannelHost, Code, Event, Handle, Person, STALE, Status, make_private_dir, next_number, now_ms,
+    ChannelHost, Event, Handle, Invite, Person, STALE, Status, Verify, invite, make_private_dir,
+    next_number, now_ms,
+};
+pub use kind::{
+    ChannelKind, Field, Input, KindInfo, Options, Secrets, Setup, Start, check_bundle, kind, kinds,
 };
 pub use link::{ChannelOutlet, FromChannel, ToChannel, parse_verify};
 pub use view::{Line, RunView, figures, split, stopwatch};

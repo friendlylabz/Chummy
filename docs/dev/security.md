@@ -806,7 +806,8 @@ own folder, are protected places for every agent's jail); the state is
 sealed and bound to the instance, and one that doesn't open stops chummyd; it
 refuses root and Administrator; it listens on nothing; channel commands are
 parsed before anything reaches a model and only come from what people type;
-approvals over channels are off per agent and refused automatically; logs go
+approvals are off for each channel (and the terminal) and refused there
+automatically; logs go
 to standard error with no message text unless the bundle allows it.
 
 **chummyd's Matrix channel** (M2): end-to-end encrypted rooms only, made by
@@ -819,7 +820,8 @@ comparing emoji, chummyd's side confirmed by the operator in its terminal, and
 is accepted only from allowed people. Edits, reactions, redactions, other
 people, crowded rooms and messages older than ten minutes are ignored;
 invites are refused. The access token is in the sealed state; the SDK's keys
-are in SQLite stores encrypted with a passphrase from the state key; key
+are in SQLite stores encrypted with a passphrase from the channel's key
+(derived from the state key and the channel id); key
 backup is off. Uploads go through the agent's jail, with cleaned,
 de-duplicated names, under a size cap. *Known limits:* the bot password sits
 in the bundle (needed for cross-signing's password check); restoring an old
@@ -828,11 +830,11 @@ state folder rolls the Matrix keys back (people may need to verify again).
 **Channels in the app** (v0.1.6, Settings → Channels): the same Matrix
 implementation and conversation rules as chummyd (`chummy-channel`), so
 everything above about rooms, verification and what's acted on holds. What
-differs: each channel is one agent and the people allowed to it; the bot's
-password is in the keychain (never in settings); its session (an access
-token) is sealed in `channels/<id>/login.sealed` with XChaCha20-Poly1305 and
-a key kept only in the keychain (`channel:<id>:key`), which also gives the
-passphrase of its SQLite stores (`channels/<id>/matrix/`), all inside the
+differs: the bot's password is in the keychain (`channel:<id>:password`,
+never in settings); what the channel keeps (its session, an access token)
+is sealed in `channels/<id>/kept.sealed` with XChaCha20-Poly1305 and a key
+kept only in the keychain (`channel:<id>:key`), which also gives the
+passphrase of its SQLite stores (`channels/<id>/store/`), all inside the
 Chummy folder that agents can't reach. Emoji are confirmed in the channel's
 card (a notification says when one waits). Adding a channel, turning one on,
 adding people, changing the agent or homeserver, and moving approvals to
@@ -842,6 +844,19 @@ Plain http to a homeserver off the local network is refused, and two
 channels can't share a bot. Deleting a channel deletes its password, key,
 login and stores. A channel's chats (`m-…`) aren't renamed by the in-app
 model, and its runs are ordinary chat runs (logs, sessions panel, pane).
+
+**Every kind of channel goes through one base** (`chummy_channel::ChannelKind`,
+`kind.rs`): a kind says what it asks (fields; secrets are typed as `secret`
+and only ever go to the keychain or the sealed bundle), checks it, names
+the account it logs in as (no two channels share one), says when a change
+lets more or other people in (the app asks natively again), and runs.
+Anything a kind needs the user to confirm (a Matrix emoji verification,
+someone asking in on Telegram) comes to the program as one generic
+`Event::Verify` and is answered with `Handle::answer`, so the app (the
+channel's card, plus a native confirm when the kind gives `confirm` text)
+and chummyd (`/verify n yes|no` in its terminal) treat every kind the same.
+Each channel gets its own private folder and its own key (from the app's
+keychain or derived from chummyd's state key and the channel id).
 
 **Telegram channels** (v0.1.6, the app and chummyd, one implementation in
 `chummy-channel`): one bot per agent, private chats only (it leaves groups).
@@ -853,12 +868,11 @@ lose their URL, and anything a server says has the token blanked out;
 tests check the token never shows). People are let in only by pairing: a
 six-digit code made in the program (once, for ten minutes; ten wrong tries
 end it), sent as `/start <code>`, then confirmed by the user (natively in
-the app, `/pair n yes` in chummyd's terminal). Messages and button presses
+the app, `/verify n yes` in chummyd's terminal). Messages and button presses
 from anyone else get no answer. Who was let in is kept sealed (the app's
-`channels/<id>/login.sealed`, chummyd's state) and starts empty for another
+`channels/<id>/kept.sealed`, chummyd's state) and starts empty for another
 bot. Messages older than ten minutes get a note, not a run. Approvals come
-with Allow and Deny buttons only when the channel (or the bundle, for the
-agent) allows approvals there; a press is checked against the person and
+with Allow and Deny buttons only when the channel allows approvals there; a press is checked against the person and
 the question still waiting. It polls Telegram (no webhook, nothing
 listening); a webhook on the bot or another program reading it is reported,
 never overridden. Files: at most 20 MB, through the agent's jail as for

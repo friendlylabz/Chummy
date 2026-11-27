@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use super::*;
 use chummy_flow::{Block, Link, LoopFile, Position};
 
@@ -36,7 +38,6 @@ fn config() -> Config {
         tools: Default::default(),
         loop_config: Default::default(),
         model_options: Default::default(),
-        channel_approvals: false,
     });
     c.channels.terminal.enabled = true;
     c
@@ -165,9 +166,12 @@ fn warnings_say_what_wont_work() {
     let r = c.check();
     assert!(r.ok());
     assert_eq!(r.warnings.len(), 2, "{r:?}");
-    // Allowing approvals over channels removes that warning.
-    c.agents[0].channel_approvals = true;
+    // A channel for it that takes approvals removes that warning (and the
+    // one about no channel).
+    c.channels.list.push(channel("helper"));
     assert_eq!(c.check().warnings.len(), 1);
+    c.channels.list[0].approvals = true;
+    assert_eq!(c.check().warnings.len(), 0);
 }
 
 #[test]
@@ -183,98 +187,42 @@ fn unknown_fields_and_other_instances_are_refused() {
     assert!(!other.check().ok());
 }
 
-#[test]
-fn the_matrix_channel_is_checked() {
-    let mut c = config();
-    c.jobs.push({
-        let mut j = chummy_scheduler::Job::new("digest", "Digest", "helper");
-        j.message = "hi".into();
-        j
-    });
-    c.channels.matrix = Some(MatrixChannel {
-        homeserver: "https://matrix.example.org".into(),
-        user_id: "@chummyd:example.org".into(),
-        password: "bot password".into(),
-        users: [("helper".to_string(), vec!["@me:example.org".to_string()])].into(),
-        report_to: [("digest".to_string(), "@me:example.org".to_string())].into(),
-        upload_mb: 100,
-    });
-    let r = c.check();
-    assert!(r.ok() && r.warnings.is_empty(), "{r:?}");
-    // It seals and opens like the rest.
-    let sealed = seal(&c, PASSWORD).unwrap();
-    assert_eq!(open(&sealed, &key(&c)).unwrap(), c);
-
-    let m = c.channels.matrix.as_mut().unwrap();
-    m.homeserver = "http://matrix.example.org".into();
-    m.user_id = "chummyd".into();
-    m.users.insert(
-        "helper".into(),
-        vec!["@chummyd:example.org".into(), "@Me:x".into()],
-    );
-    m.report_to
-        .insert("digest".into(), "@stranger:example.org".into());
-    m.upload_mb = 0;
-    let r = c.check();
-    assert_eq!(r.errors.len(), 5, "{r:?}");
-    // Plain http is fine on the local network.
-    let m = c.channels.matrix.as_mut().unwrap();
-    m.homeserver = "http://127.0.0.1:8008".into();
-    assert!(!c.check().errors.iter().any(|e| e.contains("https")));
-
-    assert!(valid_matrix_id("@alice:localhost:8008"));
-    assert!(!valid_matrix_id("@:x") && !valid_matrix_id("alice:x") && !valid_matrix_id("@a b:x"));
+fn channel(agent: &str) -> BundleChannel {
+    BundleChannel {
+        id: "phone".into(),
+        name: "Phone".into(),
+        kind: "matrix".into(),
+        agents: vec![agent.into()],
+        approvals: false,
+        options: serde_json::Map::new(),
+        secrets: BTreeMap::new(),
+        reports: BTreeMap::new(),
+    }
 }
 
 #[test]
-fn telegram_bots_are_checked() {
+fn channels_are_checked_for_their_shape() {
     let mut c = config();
-    let token = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw";
-    c.channels.telegram.push(TelegramBot {
-        agent: "helper".into(),
-        token: token.into(),
-        api_url: TELEGRAM_API.into(),
-        upload_mb: 20,
-        stream: true,
-    });
+    c.channels.list.push(channel("helper"));
+    c.channels.list[0]
+        .secrets
+        .insert("password".into(), "secret".into());
     let r = c.check();
-    assert!(r.ok() && r.warnings.is_empty(), "{r:?}");
+    assert!(r.ok(), "{r:?}");
     let sealed = seal(&c, PASSWORD).unwrap();
     assert_eq!(open(&sealed, &key(&c)).unwrap(), c);
-    // Defaults when only the agent and token are given.
-    let t: TelegramBot =
-        serde_json::from_value(serde_json::json!({ "agent": "helper", "token": token })).unwrap();
-    assert_eq!(t, c.channels.telegram[0]);
 
-    // A second bot for the same agent, with the same token, a bad server
-    // and too large a file; and one for an agent that isn't there.
-    c.channels.telegram.push(TelegramBot {
-        agent: "helper".into(),
-        token: token.into(),
-        api_url: "http://telegram.example.org".into(),
-        upload_mb: 50,
-        stream: false,
-    });
-    c.channels.telegram.push(TelegramBot {
-        agent: "gone".into(),
-        token: "not a token".into(),
-        api_url: TELEGRAM_API.into(),
-        upload_mb: 1,
-        stream: true,
-    });
+    // The same id twice, an agent that isn't there, a job that isn't.
+    let mut other = channel("gone");
+    other
+        .reports
+        .insert("nope".into(), "@me:example.org".into());
+    c.channels.list.push(other);
     let r = c.check();
-    assert_eq!(r.errors.len(), 5, "{r:?}");
+    assert_eq!(r.errors.len(), 3, "{r:?}");
 
-    assert!(valid_telegram_token(token));
-    assert!(!valid_telegram_token("123456789"));
-    assert!(!valid_telegram_token(
-        "abc:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"
-    ));
-    assert!(!valid_telegram_token("123:short"));
-    assert!(!valid_telegram_token(
-        "123:AAHdqTcvCH1vGWJxfSeofSAs0K5PALD saw"
-    ));
-    assert_eq!(telegram_bot_id(token), Some("123456789"));
+    assert!(valid_matrix_id("@alice:localhost:8008"));
+    assert!(!valid_matrix_id("@:x") && !valid_matrix_id("alice:x") && !valid_matrix_id("@a b:x"));
 }
 
 #[test]

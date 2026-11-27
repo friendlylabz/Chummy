@@ -127,7 +127,16 @@ fn open_bundle(
         format!("Opening the bundle for instance {}", header.instance_id),
     );
     let key = password::key(&bytes, password_file)?;
-    chummy_bundle::open(&bytes, &key).map_err(|e| e.to_string())
+    let c = chummy_bundle::open(&bytes, &key).map_err(|e| e.to_string())?;
+    // What its channels take, as their kinds check it.
+    let r = chummy_channel::check_bundle(&c);
+    if !r.ok() {
+        return Err(format!(
+            "The bundle's configuration has problems: {}",
+            r.errors.join(" ")
+        ));
+    }
+    Ok(c)
 }
 
 /// `chummyd hash-password`: the line a password file holds, once the
@@ -151,7 +160,7 @@ fn check(a: CheckArgs) -> Result<(), String> {
     for line in inspect::describe(&c) {
         println!("{line}");
     }
-    for w in &c.check().warnings {
+    for w in &chummy_channel::check_bundle(&c).warnings {
         println!("Note: {w}");
     }
     println!("The bundle is fine.");
@@ -163,13 +172,8 @@ fn channel_names(c: &chummy_bundle::Config) -> String {
     if c.channels.terminal.enabled {
         names.push("terminal".into());
     }
-    if c.channels.matrix.is_some() {
-        names.push("matrix".to_string());
-    }
-    match c.channels.telegram.len() {
-        0 => {}
-        1 => names.push("telegram (1 bot)".into()),
-        n => names.push(format!("telegram ({n} bots)")),
+    for ch in &c.channels.list {
+        names.push(format!("{} ({})", ch.name, ch.kind));
     }
     if names.is_empty() {
         "none".into()
@@ -181,19 +185,7 @@ fn channel_names(c: &chummy_bundle::Config) -> String {
 async fn run(a: RunArgs) -> Result<(), String> {
     checks::not_root()?;
     let config = Arc::new(open_bundle(&a.bundle, a.password_file.as_deref())?);
-    #[cfg(not(feature = "matrix"))]
-    if config.channels.matrix.is_some() {
-        return Err(
-            "the bundle has a Matrix channel, but this chummyd was built without Matrix".into(),
-        );
-    }
-    #[cfg(not(feature = "telegram"))]
-    if !config.channels.telegram.is_empty() {
-        return Err(
-            "the bundle has Telegram bots, but this chummyd was built without Telegram".into(),
-        );
-    }
-    for w in config.check().warnings {
+    for w in chummy_channel::check_bundle(&config).warnings {
         syslog::warn("app", w);
     }
 
@@ -222,25 +214,14 @@ async fn run(a: RunArgs) -> Result<(), String> {
     let key = config
         .state_key_bytes()
         .ok_or("the bundle's state key isn't valid")?;
-    #[cfg(feature = "matrix")]
-    let matrix_key = config
+    let channel_key = config
         .state_key_bytes()
         .ok_or("the bundle's state key isn't valid")?;
     let (state, saved) = StateDir::open(&paths.state, key, &config.instance.id)?;
     let saved = saved.unwrap_or_else(|| state.blank());
     let tool_paths = ToolPaths::new(state.dir.join("tools"));
-    #[cfg(feature = "matrix")]
-    let matrix_store = state.dir.join("matrix");
-    let kept: saver::Kept = {
-        let mut k = std::collections::BTreeMap::new();
-        if let Some(m) = &saved.matrix {
-            k.insert(router::MATRIX.to_string(), m.clone());
-        }
-        for (agent, v) in &saved.telegram {
-            k.insert(channels::telegram_id(agent), v.clone());
-        }
-        Arc::new(std::sync::Mutex::new(k))
-    };
+    let kept: saver::Kept = Arc::new(std::sync::Mutex::new(saved.channels.clone()));
+    let state_dir = state.dir.clone();
 
     let (inbox, mut rx) = tokio::sync::mpsc::unbounded_channel::<Input>();
     let p = DaemonPlatform(Arc::new(Inner {
@@ -304,21 +285,12 @@ async fn run(a: RunArgs) -> Result<(), String> {
         });
     }
 
-    // The channels: Matrix, and a Telegram bot for each agent that has one.
-    #[allow(unused_mut)]
+    // The bundle's channels, whatever their kind.
     let mut handles: Vec<chummy_channel::Handle> = vec![];
-    #[allow(unused_mut)]
     let mut senders = std::collections::BTreeMap::new();
-    #[cfg(feature = "matrix")]
-    if config.channels.matrix.is_some() {
-        let h = channels::start_matrix(&p, &saver, &kept, matrix_store, matrix_key, &inbox);
-        senders.insert(router::MATRIX.to_string(), h.sender());
-        handles.push(h);
-    }
-    #[cfg(feature = "telegram")]
-    for bot in &config.channels.telegram {
-        let h = channels::start_telegram(&p, &saver, &kept, bot, &inbox)?;
-        senders.insert(channels::telegram_id(&bot.agent), h.sender());
+    for c in &config.channels.list {
+        let h = channels::start(&p, &saver, &kept, &state_dir, &*channel_key, c, &inbox)?;
+        senders.insert(c.id.clone(), h.sender());
         handles.push(h);
     }
     let any_channel = !senders.is_empty();
@@ -338,8 +310,8 @@ async fn run(a: RunArgs) -> Result<(), String> {
             router.handle(input).await;
         }
     });
-    // The terminal: a channel, or (with Matrix or Telegram) where the
-    // operator confirms verifications and lets people in.
+    // The terminal: a channel, or (with other channels) where the operator
+    // answers what they ask.
     if config.channels.terminal.enabled || any_channel {
         router::read_terminal(inbox.clone());
     }

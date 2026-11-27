@@ -10,8 +10,9 @@ mod fake;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use chummy_channel::telegram::{self, TelegramSettings};
-use chummy_channel::{ChannelHost, Event, FromChannel, Handle, Status, ToChannel};
+use chummy_channel::{
+    ChannelHost, Event, FromChannel, Handle, Options, Secrets, Start, Status, ToChannel, Verify,
+};
 use fake::{Fake, TOKEN, user};
 use serde_json::{Value, json};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -66,16 +67,32 @@ struct Bot {
     host: Arc<TestHost>,
 }
 
-fn settings(fake: &Fake, token: &str, stream: bool) -> TelegramSettings {
-    TelegramSettings {
+/// A Telegram channel as the programs start one: through its kind.
+fn settings(fake: &Fake, token: &str, stream: bool) -> Start {
+    let mut options = Options::new();
+    options.insert("api_url".into(), fake.url.clone().into());
+    options.insert("upload_mb".into(), 1.into());
+    options.insert("stream".into(), stream.into());
+    let mut secrets = Secrets::new();
+    secrets.insert("token".into(), zeroize::Zeroizing::new(token.into()));
+    Start {
         channel: "ch-t".into(),
-        api_url: fake.url.clone(),
-        token: zeroize::Zeroizing::new(token.into()),
-        agent: "helper".into(),
-        upload_mb: 1,
-        stream,
-        chat_scope: "ch-t".into(),
-        name: "Chummy".into(),
+        agents: vec!["helper".into()],
+        options,
+        secrets,
+        folder: std::env::temp_dir(),
+        key: zeroize::Zeroizing::new([7; 32]),
+        program: "Chummy".into(),
+        place: "Chummy".into(),
+    }
+}
+
+fn verify_n(e: &Event) -> Option<(u32, String)> {
+    match e {
+        Event::Verify(Verify {
+            n, who, confirm, ..
+        }) if confirm.is_some() => Some((*n, who.clone())),
+        _ => None,
     }
 }
 
@@ -87,7 +104,10 @@ async fn start_with(fake: Fake, token: &str, stream: bool, kept: Option<Value>) 
         seen: seen.clone(),
         tx,
     });
-    let handle = telegram::start(host.clone(), settings(&fake, token, stream)).unwrap();
+    let kind = chummy_channel::kind("telegram").unwrap();
+    let handle = kind
+        .start(host.clone(), settings(&fake, token, stream))
+        .unwrap();
     Bot {
         fake,
         handle,
@@ -154,19 +174,22 @@ impl Bot {
     /// Lets Alice (id 42) in through a pairing code.
     async fn pair_alice(&mut self) -> Value {
         let alice = user(42, "Alice", "alice");
-        let code = self.handle.pairing_code().await.unwrap();
+        let code = self.handle.invite().await.unwrap();
+        assert!(
+            code.text.contains(&format!("/start {}", code.code)),
+            "{}",
+            code.text
+        );
         self.fake.say(&alice, &format!("/start {}", code.code));
         let n = until("the pairing", || {
-            self.event(|e| matches!(e, Event::Pairing { .. }))
-                .map(|e| match e {
-                    Event::Pairing { n, who } => {
-                        assert!(
-                            who.contains("Alice (@alice)") && who.contains("42"),
-                            "{who}"
-                        );
-                        n
-                    }
-                    _ => unreachable!(),
+            self.event(|e| verify_n(e).is_some())
+                .and_then(|e| verify_n(&e))
+                .map(|(n, who)| {
+                    assert!(
+                        who.contains("Alice (@alice)") && who.contains("42"),
+                        "{who}"
+                    );
+                    n
                 })
         })
         .await;
@@ -207,8 +230,9 @@ async fn people_pair_with_a_code_and_then_talk() {
     // Strangers get nothing: not a hello, not a wrong code.
     let eve = user(66, "Eve", "eve");
     fake.say(&eve, "hello");
-    let code = bot.handle.pairing_code().await.unwrap();
+    let code = bot.handle.invite().await.unwrap();
     assert_eq!(code.code.len(), 6);
+    assert!(code.text.contains("@helper_bot"), "{}", code.text);
     let wrong = if code.code == "000000" {
         "111111"
     } else {
@@ -217,17 +241,15 @@ async fn people_pair_with_a_code_and_then_talk() {
     fake.say(&eve, &format!("/start {wrong}"));
     tokio::time::sleep(Duration::from_millis(800)).await;
     assert!(fake.sent_to(66).is_empty(), "{:?}", fake.sent_to(66));
-    assert!(bot.event(|e| matches!(e, Event::Pairing { .. })).is_none());
+    assert!(bot.event(|e| verify_n(e).is_some()).is_none());
 
     // The right code: they ask, and wait to be let in.
     let alice = user(42, "Alice", "alice");
     fake.say(&alice, &format!("/start {}", code.code));
     let n = until("the pairing", || {
-        bot.event(|e| matches!(e, Event::Pairing { .. }))
-            .map(|e| match e {
-                Event::Pairing { n, .. } => n,
-                _ => unreachable!(),
-            })
+        bot.event(|e| verify_n(e).is_some())
+            .and_then(|e| verify_n(&e))
+            .map(|(n, _)| n)
     })
     .await;
     fake.wait_call("sendMessage", |b| {
@@ -250,7 +272,7 @@ async fn people_pair_with_a_code_and_then_talk() {
     })
     .await;
     let kept = bot.host.kept().unwrap();
-    assert_eq!(telegram::people(&kept)[0].id, "42");
+    assert_eq!(chummy_channel::telegram::kept_people(&kept)[0].id, "42");
 
     // Alice talks: her message is passed on, as her conversation.
     fake.say(&alice, "hi there");

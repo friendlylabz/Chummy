@@ -71,7 +71,6 @@ fn agent(id: &str, name: &str, loop_id: &str) -> BundleAgent {
         tools: Default::default(),
         loop_config: Default::default(),
         model_options: Default::default(),
-        channel_approvals: false,
     }
 }
 

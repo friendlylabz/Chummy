@@ -12,9 +12,9 @@ use chummy_scheduler::Job;
 use serde::{Deserialize, Serialize};
 
 pub const CONFIG_FORMAT: &str = "chummyd.config";
-/// The version new bundles are written as. Version 1 (before the Matrix
-/// channel) still opens.
-pub const CONFIG_VERSION: u32 = 3;
+/// The version new bundles are written as (4: channels as a list of
+/// kinds, approvals per channel). Only this version opens.
+pub const CONFIG_VERSION: u32 = 4;
 /// Most job runs going at once.
 pub const MAX_RUNS: u32 = 8;
 /// The most messages a chat can keep (`limits.chat_messages`).
@@ -108,118 +108,55 @@ pub struct BundleAgent {
     pub loop_config: BTreeMap<String, chummy_flow::Overrides>,
     #[serde(default, skip_serializing_if = "chummy_llm::ModelOverrides::is_empty")]
     pub model_options: chummy_llm::ModelOverrides,
-    /// Tool approvals and daily-limit questions may be answered over a
-    /// channel. Off: they're refused there.
-    #[serde(default)]
-    pub channel_approvals: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Channels {
     pub terminal: TerminalChannel,
-    /// Talking to agents in Matrix (end-to-end encrypted rooms).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub matrix: Option<MatrixChannel>,
-    /// Talking to agents in Telegram: one bot per agent.
+    /// Channels outside chummyd (Matrix, Telegram…), each for its agents.
+    /// What each kind of channel takes (its options and secrets) is
+    /// `chummy-channel`'s to say: this crate only knows their shape.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub telegram: Vec<TelegramBot>,
+    pub list: Vec<BundleChannel>,
 }
 
 impl Channels {
     pub fn any(&self) -> bool {
-        self.terminal.enabled || self.matrix.is_some() || !self.telegram.is_empty()
+        self.terminal.enabled || !self.list.is_empty()
     }
 }
 
-/// Telegram's own Bot API server.
-pub const TELEGRAM_API: &str = "https://api.telegram.org";
-
-/// The largest file a bot can download from Telegram's Bot API, in MB.
-pub const MAX_TELEGRAM_UPLOAD_MB: u32 = 20;
-
-/// A Telegram bot (from @BotFather) for one agent. People pair with it
-/// in chummyd's terminal (`/pair`); who was let in is kept in the state.
-/// Telegram isn't end-to-end encrypted: its servers can read the chats.
+/// A channel outside chummyd, for its agents: a kind of channel
+/// (`chummy-channel`'s `ChannelKind`) with its answers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct TelegramBot {
-    /// The agent people talk to.
-    pub agent: String,
-    /// The bot's token (`123456:ABC…`): its whole login.
-    pub token: String,
-    /// The Bot API server.
-    #[serde(default = "default_telegram_api")]
-    pub api_url: String,
-    /// Largest file accepted, in MB (at most [`MAX_TELEGRAM_UPLOAD_MB`]).
-    #[serde(default = "default_telegram_upload_mb")]
-    pub upload_mb: u32,
-    /// Show answers as they're written.
-    #[serde(default = "yes")]
-    pub stream: bool,
-}
-
-fn default_telegram_api() -> String {
-    TELEGRAM_API.into()
-}
-fn default_telegram_upload_mb() -> u32 {
-    MAX_TELEGRAM_UPLOAD_MB
-}
-fn yes() -> bool {
-    true
-}
-
-/// Whether a token looks like one from @BotFather (`123456:ABC-def…`).
-pub fn valid_telegram_token(token: &str) -> bool {
-    match token.split_once(':') {
-        Some((id, secret)) => {
-            (1..=20).contains(&id.len())
-                && id.bytes().all(|b| b.is_ascii_digit())
-                && (20..=100).contains(&secret.len())
-                && secret
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-        }
-        None => false,
-    }
-}
-
-/// A bot's id: its token's first part (not a secret).
-pub fn telegram_bot_id(token: &str) -> Option<&str> {
-    token.split_once(':').map(|(id, _)| id)
+pub struct BundleChannel {
+    pub id: String,
+    pub name: String,
+    /// The kind of channel ("matrix", "telegram").
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// The agents people talk to (one, unless its kind takes several).
+    pub agents: Vec<String>,
+    /// Tool approvals and daily-limit questions may be answered in it.
+    /// Off: they're refused there.
+    #[serde(default)]
+    pub approvals: bool,
+    /// Its options, by field key (not secret).
+    #[serde(default)]
+    pub options: serde_json::Map<String, serde_json::Value>,
+    /// Its secrets, by field key (a password, a bot token).
+    #[serde(default)]
+    pub secrets: BTreeMap<String, String>,
+    /// Who each of its agent's jobs reports to: job id → a person's id in
+    /// the channel (a Matrix ID, a Telegram id).
+    #[serde(default)]
+    pub reports: BTreeMap<String, String>,
 }
 
 /// Most a file sent over a channel may be, in MB.
 pub const MAX_UPLOAD_MB: u32 = 1024;
-
-/// The Matrix channel: chummyd logs in as its own account (the bot) and
-/// makes one encrypted room for each agent and each person allowed to talk
-/// to it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct MatrixChannel {
-    /// The homeserver's address (https, or http only on this computer or
-    /// the local network).
-    pub homeserver: String,
-    /// The bot's Matrix ID (`@name:server`).
-    pub user_id: String,
-    /// The bot's password: to log in the first time, and to set up its
-    /// cross-signing.
-    pub password: String,
-    /// Who may talk to each agent, by agent id (Matrix IDs).
-    #[serde(default)]
-    pub users: BTreeMap<String, Vec<String>>,
-    /// Who each job reports to, by job id (one of its agent's users).
-    #[serde(default)]
-    pub report_to: BTreeMap<String, String>,
-    /// Largest file accepted, in MB.
-    #[serde(default = "default_upload_mb")]
-    pub upload_mb: u32,
-}
-
-fn default_upload_mb() -> u32 {
-    100
-}
 
 /// A Matrix ID (`@localpart:server`): its rough shape, checked before it's
 /// used anywhere.
@@ -243,6 +180,8 @@ pub fn valid_matrix_id(id: &str) -> bool {
 #[serde(deny_unknown_fields, default)]
 pub struct TerminalChannel {
     pub enabled: bool,
+    /// Tool approvals and daily-limit questions may be answered in it.
+    pub approvals: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -446,111 +385,39 @@ impl Config {
             }
         }
 
-        // The Matrix channel.
-        let mut matrix_warnings = vec![];
-        if let Some(m) = &self.channels.matrix {
-            match chummy_llm::endpoint_problem(&m.homeserver) {
-                Some(p) => err(format!("The Matrix homeserver: {p}")),
-                None if chummy_llm::unencrypted_remote(&m.homeserver) => err(
-                    "The Matrix homeserver must use https (plain http only on this computer or your local network)."
-                        .into(),
-                ),
-                None => {}
-            }
-            if !valid_matrix_id(&m.user_id) {
-                err("chummyd's Matrix ID isn't valid (it looks like @name:server).".into());
-            }
-            if m.password.is_empty() {
-                err("Enter chummyd's Matrix password.".into());
-            }
-            if !(1..=MAX_UPLOAD_MB).contains(&m.upload_mb) {
+        // Channels outside chummyd: their shape (what each kind takes is
+        // checked by chummy-channel).
+        let mut channel_ids = BTreeSet::new();
+        for c in &self.channels.list {
+            if !valid_id(&c.id) || !channel_ids.insert(c.id.as_str()) {
                 err(format!(
-                    "The largest upload must be between 1 and {MAX_UPLOAD_MB} MB."
+                    "The channel id “{}” isn't valid, or is used twice.",
+                    c.id
                 ));
             }
-            for (agent, users) in &m.users {
-                if !ids.contains(agent.as_str()) {
-                    err("People are allowed to talk to an agent that isn't in the bundle.".into());
-                }
-                for u in users {
-                    if !valid_matrix_id(u) {
-                        err(format!(
-                            "“{u}” isn't a valid Matrix ID (it looks like @name:server)."
-                        ));
-                    } else if *u == m.user_id {
-                        err("chummyd's own Matrix ID can't be one of the people allowed to talk to agents.".into());
-                    }
-                }
+            if c.name.trim().is_empty() {
+                err("A channel has no name.".into());
             }
-            for a in &self.agents {
-                if m.users.get(&a.id).is_none_or(|u| u.is_empty()) {
-                    matrix_warnings.push(format!("Nobody may talk to “{}” in Matrix.", a.name));
-                }
-            }
-            for (job, user) in &m.report_to {
-                let Some(j) = self.jobs.iter().find(|j| j.id == *job) else {
-                    err("A job that isn't in the bundle reports to someone.".into());
-                    continue;
-                };
-                if !m.users.get(&j.agent).is_some_and(|u| u.contains(user)) {
-                    err(format!(
-                        "The job “{}” reports to {user}, who isn't allowed to talk to its agent.",
-                        j.name
-                    ));
-                }
-            }
-            for j in &self.jobs {
-                if !m.report_to.contains_key(&j.id) {
-                    matrix_warnings.push(format!(
-                        "The job “{}” doesn't report to anyone in Matrix.",
-                        j.name
-                    ));
-                }
-            }
-        }
-
-        // Telegram bots.
-        let mut seen_agents = BTreeSet::new();
-        let mut seen_bots = BTreeSet::new();
-        for t in &self.channels.telegram {
-            let name = self
-                .agents
-                .iter()
-                .find(|a| a.id == t.agent)
-                .map(|a| a.name.clone());
-            let Some(name) = name else {
-                err("A Telegram bot talks for an agent that isn't in the bundle.".into());
-                continue;
-            };
-            if !seen_agents.insert(t.agent.clone()) {
+            if c.agents.is_empty() || c.agents.iter().any(|a| !ids.contains(a.as_str())) {
                 err(format!(
-                    "“{name}” has more than one Telegram bot: give it one."
+                    "“{}” talks for no agent, or one that isn't in the bundle.",
+                    c.name
                 ));
             }
-            if !valid_telegram_token(&t.token) {
-                err(format!(
-                    "“{name}”'s Telegram bot token isn't valid (it looks like 123456:ABC…, from @BotFather)."
-                ));
-            } else if !seen_bots.insert(telegram_bot_id(&t.token).unwrap_or("").to_string()) {
-                err("Two agents share a Telegram bot: give each its own.".into());
-            }
-            match chummy_llm::endpoint_problem(&t.api_url) {
-                Some(p) => err(format!("“{name}”'s Telegram Bot API server: {p}")),
-                None if chummy_llm::unencrypted_remote(&t.api_url) => err(format!(
-                    "“{name}”'s Telegram Bot API server must use https (plain http only on this computer or your local network)."
-                )),
-                None => {}
-            }
-            if !(1..=MAX_TELEGRAM_UPLOAD_MB).contains(&t.upload_mb) {
-                err(format!(
-                    "The largest file over Telegram must be between 1 and {MAX_TELEGRAM_UPLOAD_MB} MB."
-                ));
+            for job in c.reports.keys() {
+                match self.jobs.iter().find(|j| j.id == *job) {
+                    None => err("A job that isn't in the bundle reports to someone.".into()),
+                    Some(j) if !c.agents.contains(&j.agent) => err(format!(
+                        "The job “{}” reports in “{}”, which doesn't talk for its agent.",
+                        j.name, c.name
+                    )),
+                    Some(_) => {}
+                }
             }
         }
 
         // Worth knowing.
         let warn = &mut r.warnings;
-        warn.extend(matrix_warnings);
         if !self.channels.any() {
             warn.push("No channel is on, so nobody can talk to the agents: only jobs run.".into());
         }
@@ -564,7 +431,14 @@ impl Config {
             }
         }
         for a in &self.agents {
-            if a.channel_approvals || !self.permissions.tools || a.tools.is_empty() {
+            let approved_somewhere = (self.channels.terminal.enabled
+                && self.channels.terminal.approvals)
+                || self
+                    .channels
+                    .list
+                    .iter()
+                    .any(|c| c.agents.contains(&a.id) && c.approvals);
+            if approved_somewhere || !self.permissions.tools || a.tools.is_empty() {
                 continue;
             }
             let asks = a.tools.values().any(|t| {
@@ -575,7 +449,7 @@ impl Config {
             });
             if asks {
                 warn.push(format!(
-                    "Some of “{}”'s tools ask before they're used, and approvals aren't allowed over channels for it: those calls will always be refused.",
+                    "Some of “{}”'s tools ask before they're used, and none of its channels takes approvals: those calls will always be refused.",
                     a.name
                 ));
             }

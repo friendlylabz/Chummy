@@ -44,19 +44,33 @@ release will say.
   of line (they moved to each agent).
 - **Channels in the app** (Settings → Channels): talk to an agent from
   Matrix while Chummy runs, with the same channel and commands as chummyd
-  (now shared code, so both behave the same). Each channel has a type
-  (Matrix for now), an agent, a bot account and the people allowed. People
+  (now shared code, so both behave the same). Each channel has a type, the
+  agents it serves, a bot account and the people allowed. People
   verify the bot by emoji, which you confirm in the channel's card. The
   password stays in the keychain and the login is sealed, so channels
   connect again by themselves. Their runs show in the sessions panel.
 - **Telegram channels**, in the app (Settings → Channels) and in chummyd
   (Configure chummyd): a bot of its own (from @BotFather) for each agent.
-  People ask to talk to it with a pairing code you make, and you let them
-  in (in the channel's card, or with `/pair` in chummyd's terminal); anyone
-  else gets no answer. Answers show as they're written, approvals have
+  People ask to talk to it with a code you make (**Add a person**, or
+  `/invite` in chummyd's terminal), and you let them in (in the channel's
+  card, or with `/verify` in chummyd's terminal); anyone else gets no
+  answer. Answers show as they're written, approvals have
   Allow and Deny buttons, and files up to 20 MB are saved to the agent's
   `uploads/`. Private chats only: the bot leaves groups. Telegram isn't
   end-to-end encrypted, and the app says so where you set it up.
+- **Breaking:** channels are now one kind of thing with a type, in the app
+  and in chummyd, so new types (Signal, say) can be added without touching
+  the rest. In chummyd, a Matrix channel lists its agents and its people
+  (one per line), and each channel (and the terminal) has its own **Answer
+  approvals in it** switch, instead of one per agent. chummyd's terminal
+  answers whatever a channel asks with `/verify n yes|no` (Matrix emoji,
+  someone asking in on Telegram), makes Telegram codes with `/invite`, and
+  `/remove <id>` replaces `/unpair`. Bundles and chummyd's state folder are
+  new versions: export the bundle again and start chummyd with a new state
+  folder. Channels set up in the app before this are dropped: add them
+  again (their bots need verifying again).
+- **Check** next to a channel's server address (homeserver, Bot API
+  server) says whether it answers like one.
 - Sessions panel: each run has a link to its full log, the pane button has
   a thought-bubble icon, and **Recent runs** keeps each agent's three
   latest runs with their pane and log. Paused runs are under **Paused

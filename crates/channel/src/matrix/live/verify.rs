@@ -91,14 +91,21 @@ async fn follow_sas(ctx: std::sync::Arc<Ctx>, sas: SasVerification) {
                 };
                 let n = ctx.add_verification(sas.clone());
                 shown = Some(n);
-                ctx.host.event(Event::Emoji {
+                ctx.host.event(Event::Verify(crate::Verify {
                     n,
                     who: who.clone(),
-                    emoji: emoji
+                    ask: format!(
+                        "wants to verify {}'s bot. Check that they see these emoji, in this order:",
+                        ctx.cfg.name
+                    ),
+                    items: emoji
                         .iter()
                         .map(|e| (e.symbol.to_string(), e.description.to_string()))
                         .collect(),
-                });
+                    yes: "They match".into(),
+                    no: "They don't match".into(),
+                    confirm: None,
+                }));
                 chummy_log::system::info(
                     "matrix",
                     format!("Verification {n} with {who} waits for the operator"),

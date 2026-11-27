@@ -196,7 +196,6 @@ fn agent(id: &str, name: &str, loop_id: &str) -> BundleAgent {
         tools: Default::default(),
         loop_config: Default::default(),
         model_options: Default::default(),
-        channel_approvals: false,
     }
 }
 
@@ -502,17 +501,20 @@ async fn people_verify_chummyd_then_talk_to_agents_in_their_rooms() {
     c.agents.push(agent("echoer", "Echoer", "echo"));
     c.agents.push(agent("asker", "Asker", "asker"));
     c.channels.terminal.enabled = false;
-    c.channels.matrix = Some(
+    // One Matrix channel (one bot) for the three agents.
+    c.channels.list.push(
         serde_json::from_value(serde_json::json!({
-            "homeserver": hs.url,
-            "user_id": "@bot:localhost",
-            "password": BOT_PW,
-            "users": {
-                "echoer": ["@alice:localhost"],
-                "asker": ["@alice:localhost"],
-                "thinker": ["@alice:localhost"],
+            "id": "phone",
+            "name": "Phone",
+            "type": "matrix",
+            "agents": ["thinker", "echoer", "asker"],
+            "options": {
+                "homeserver": hs.url,
+                "user_id": "@bot:localhost",
+                "people": ["@alice:localhost"],
+                "upload_mb": 1,
             },
-            "upload_mb": 1,
+            "secrets": { "password": BOT_PW },
         }))
         .unwrap(),
     );

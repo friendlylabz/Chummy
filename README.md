@@ -70,7 +70,7 @@ until you say so.
   live while it runs. A run's pane shows what the loop reports as it goes,
   the sessions panel keeps each agent's three latest runs with their pane
   and log, and the Logs window searches every run.
-- **Talk to agents from your phone.** Settings → Channels connects an agent
+- **Talk to agents from your phone.** Settings → Channels connects agents
   to end-to-end encrypted Matrix rooms (with a bot account you choose) or a
   Telegram bot, the same channels chummyd has and the same code. People you
   allow verify the Matrix bot by emoji, or pair with the Telegram bot by a

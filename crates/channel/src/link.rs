@@ -3,7 +3,7 @@
 
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::{Code, Conv, Out, Outlet};
+use crate::{Conv, Invite, Out, Outlet};
 
 /// From a channel to the program.
 #[derive(Debug, Clone)]
@@ -50,11 +50,10 @@ pub enum ToChannel {
     },
     /// That question doesn't wait any more.
     Closed { ask_id: String },
-    /// The answer to what waits for the program: emoji that match (or
-    /// don't), someone to let in (or not).
+    /// The answer to what waits for the program ([`crate::Verify`]).
     Answer { n: Option<u32>, yes: bool },
-    /// A new pairing code, for channels where people pair.
-    NewCode(tokio::sync::oneshot::Sender<Result<Code, String>>),
+    /// A new invitation, for channels where people join by one.
+    Invite(tokio::sync::oneshot::Sender<Result<Invite, String>>),
     /// Stop letting someone in (by their id).
     Remove { id: String },
     /// Send everything still waiting, then answer.
@@ -149,6 +148,7 @@ mod tests {
             agent: "a".into(),
             chat: "m-1".into(),
             who: "@p:hs".into(),
+            person: "@p:hs".into(),
             console: false,
         };
         ChannelOutlet(tx).send(
