@@ -164,11 +164,27 @@ pub struct Settings {
     /// Where tool calls run (Security and Privacy → Sandbox).
     pub sandbox: chummy_tools::SandboxSettings,
     /// Outside channels agents can be talked to through (Settings →
-    /// Channels). Their passwords and logins are in the keychain.
+    /// Channels). Their passwords and logins are in the keychain. One
+    /// that doesn't read (made by an older version) is left out, rather
+    /// than the whole settings file being set aside.
+    #[serde(deserialize_with = "readable_channels")]
     pub channels: Vec<ChannelConfig>,
 }
 
-/// A channel: a way to talk to one agent from outside Chummy.
+fn readable_channels<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Vec<ChannelConfig>, D::Error> {
+    let all = Vec::<serde_json::Value>::deserialize(d)?;
+    Ok(all
+        .into_iter()
+        .filter_map(|v| serde_json::from_value(v).ok())
+        .collect())
+}
+
+/// A channel: a way to talk to agents from outside Chummy. What it takes
+/// is its kind's to say (`chummy_channel::ChannelKind`): its options are
+/// kept here, its secrets in the keychain (by field), what it keeps (a
+/// login, the people let in) sealed in its folder.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChannelConfig {
     pub id: String,
@@ -176,83 +192,23 @@ pub struct ChannelConfig {
     /// Off: not connected, but kept as it is.
     #[serde(default = "yes")]
     pub enabled: bool,
-    /// The agent people talk to through it.
-    pub agent: String,
-    /// Approvals from the agent's runs may be answered in the channel (off:
-    /// only in Chummy's window).
+    /// The kind of channel ("matrix", "telegram").
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// The agents people talk to through it (one, unless its kind takes
+    /// several).
+    pub agents: Vec<String>,
+    /// Approvals from the agents' runs may be answered in the channel
+    /// (off: only in Chummy's window).
     #[serde(default)]
     pub approvals: bool,
-    #[serde(flatten)]
-    pub kind: ChannelKind,
+    /// Its options, by field key (never secrets).
+    #[serde(default)]
+    pub options: serde_json::Map<String, serde_json::Value>,
 }
 
 fn yes() -> bool {
     true
-}
-
-/// What carries the messages. One implementation of each, shared with
-/// chummyd (`chummy-channel`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ChannelKind {
-    /// End-to-end encrypted Matrix rooms, one per allowed person, with the
-    /// bot's account.
-    Matrix(MatrixChannel),
-    /// A Telegram bot for the agent; people pair with a code. Not
-    /// end-to-end encrypted.
-    Telegram(TelegramChannel),
-}
-
-impl ChannelKind {
-    /// "Matrix", "Telegram".
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::Matrix(_) => "Matrix",
-            Self::Telegram(_) => "Telegram",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TelegramChannel {
-    /// The Bot API server (Telegram's own unless someone runs one). The
-    /// bot's token is in the keychain; who was let in, in its sealed file.
-    #[serde(default = "telegram_api")]
-    pub api_url: String,
-    /// Largest file accepted, in MB (bots get 20 MB at most).
-    #[serde(default = "telegram_upload_mb")]
-    pub upload_mb: u32,
-    /// Show answers as they're written.
-    #[serde(default = "yes")]
-    pub stream: bool,
-}
-
-fn telegram_api() -> String {
-    chummy_bundle::TELEGRAM_API.into()
-}
-
-fn telegram_upload_mb() -> u32 {
-    chummy_bundle::MAX_TELEGRAM_UPLOAD_MB
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct MatrixChannel {
-    /// The homeserver's address (https, or http only on this computer or
-    /// the local network).
-    pub homeserver: String,
-    /// The bot's Matrix ID (`@name:server`). Its password is in the
-    /// keychain.
-    pub user_id: String,
-    /// Who may talk to the agent (Matrix IDs).
-    #[serde(default)]
-    pub users: Vec<String>,
-    /// Largest file accepted, in MB.
-    #[serde(default = "upload_mb")]
-    pub upload_mb: u32,
-}
-
-fn upload_mb() -> u32 {
-    100
 }
 
 impl Default for Settings {
@@ -540,6 +496,19 @@ fn tool_changes(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn channels_that_dont_read_are_left_out() {
+        let s: Settings = serde_json::from_value(serde_json::json!({
+            "channels": [
+                { "id": "old", "name": "Old", "type": "matrix", "agent": "a", "homeserver": "https://x" },
+                { "id": "new", "name": "New", "type": "telegram", "agents": ["a"] }
+            ]
+        }))
+        .unwrap();
+        assert_eq!(s.channels.len(), 1);
+        assert_eq!(s.channels[0].id, "new");
+    }
+
     use super::*;
 
     #[test]

@@ -153,9 +153,10 @@ async fn handle(ctx: &Ctx, c: &Client, runs: &mut HashMap<String, RunMsg>, m: To
         }
         ToChannel::Closed { ask_id } => ctx.forget_question(&ask_id),
         ToChannel::Answer { n, yes } => super::verify::answer(ctx, n, yes).await,
-        ToChannel::NewCode(answer) => {
+        ToChannel::Invite(answer) => {
             let _ = answer.send(Err(
-                "Matrix channels don't use pairing codes: people verify by emoji.".into(),
+                "Matrix channels don't take invitations: add people in the channel's settings."
+                    .into(),
             ));
         }
         ToChannel::Remove { .. } => {}

@@ -80,15 +80,20 @@ with the reason.
 
 Talk to an agent from outside Chummy (your phone, say) while Chummy runs.
 There are two kinds of channel, Matrix and Telegram; they're the same
-channels chummyd has, with the same commands.
+channels chummyd has, with the same commands. Every kind is set up the same
+way: **New channel**, its type, a name, the agents it serves and what that
+kind asks for. When someone new wants in, the channel's card shows what to
+check and asks you (the emoji for Matrix, the person for Telegram).
 
 ### Matrix
 
 **New channel** asks for:
 
-- **Type** (Matrix), a **name** and the **agent** people talk to.
+- **Type** (Matrix), a **name** and the **agents** people talk to (one bot
+  can serve several: each person gets a room with each agent).
 - **The bot's account**: the homeserver (https, or plain http only on this
-  computer or your local network), the bot's Matrix ID and its password.
+  computer or your local network; **Check** says whether it answers), the
+  bot's Matrix ID and its password.
   Use an account just for this: not yours, and not one a chummyd uses.
 - **People** who may talk to it (Matrix IDs, one per line), and the largest
   file they may send (saved in the agent's folder, under `uploads/`).
@@ -98,7 +103,7 @@ channels chummyd has, with the same commands.
 
 Adding a channel, letting more people in or moving approvals to Matrix
 asks you first. Chummy then logs in as the bot, sets up its cross-signing
-and makes an encrypted room with each person. Before anyone can talk to the
+and makes an encrypted room with each person and agent. Before anyone can talk to the
 agent, they verify the bot from their Matrix app: the emoji show in the
 channel's card, and you choose **They match** if they're the same.
 
@@ -128,7 +133,8 @@ private.
 2. **New channel**: type **Telegram**, a name, the agent, and the token.
    **Show answers as they're written** (on by default) shows the answer
    growing as the agent writes it; off, it comes when it's done. **Bot API
-   server** stays Telegram's own unless you run one. Files people send can
+   server** stays Telegram's own unless you run one (**Check** says
+   whether it answers like one). Files people send can
    be up to 20 MB (Telegram's limit for bots). **Answer tool approvals in
    Telegram** (off by default) puts Allow and Deny buttons in the chat.
 3. **Let people in.** Once the channel is connected, **Add a person**

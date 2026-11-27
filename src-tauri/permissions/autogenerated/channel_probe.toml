@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-channel-probe"
+description = "Enables the channel_probe command without any pre-configured scope."
+commands.allow = ["channel_probe"]
+
+[[permission]]
+identifier = "deny-channel-probe"
+description = "Denies the channel_probe command without any pre-configured scope."
+commands.deny = ["channel_probe"]

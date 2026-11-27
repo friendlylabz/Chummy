@@ -11,7 +11,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 
-use chummy_bundle::{BundleAgent, Config, TelegramBot};
+use chummy_bundle::{BundleAgent, Config};
 use chummy_flow::{Block, Link, LoopFile, Position};
 use fake::{Fake, TOKEN, user};
 use serde_json::json;
@@ -67,15 +67,18 @@ fn setup(url: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
         tools: Default::default(),
         loop_config: Default::default(),
         model_options: Default::default(),
-        channel_approvals: false,
     });
-    c.channels.telegram.push(TelegramBot {
-        agent: "echoer".into(),
-        token: TOKEN.into(),
-        api_url: url.into(),
-        upload_mb: 20,
-        stream: true,
-    });
+    c.channels.list.push(
+        serde_json::from_value(json!({
+            "id": "phone",
+            "name": "Phone",
+            "type": "telegram",
+            "agents": ["echoer"],
+            "options": { "api_url": url, "upload_mb": 20, "stream": true },
+            "secrets": { "token": TOKEN },
+        }))
+        .unwrap(),
+    );
     assert!(c.check().ok(), "{:?}", c.check());
     let bundle = tmp.path().join("test.chummyd");
     std::fs::write(&bundle, chummy_bundle::seal(&c, PASSWORD).unwrap()).unwrap();
@@ -188,16 +191,17 @@ async fn people_paired_at_the_terminal_talk_to_the_agent() {
     let alice = user(42, "Alice", "alice");
 
     let mut d = Daemon::start(&bundle, &password);
-    d.expect("Echoer's Telegram bot is @helper_bot");
+    d.expect("[Phone] People reach Echoer as @helper_bot.");
     d.send("/people");
-    d.expect("Nobody may talk to Echoer's Telegram bot yet");
-    d.send("/pair");
-    let line = d.expect("Pairing code for Echoer's Telegram bot:");
+    d.expect("[Phone] Nobody yet.");
+    d.send("/invite");
+    let line = d.expect("[Phone] Invitation code:");
     let code = line.rsplit(' ').next().unwrap().to_string();
     assert_eq!(code.len(), 6, "{line}");
     fake.say(&alice, &format!("/start {code}"));
     d.expect("Alice (@alice), Telegram id 42 sent the pairing code");
-    d.send("/pair yes");
+    d.expect("/verify 1 yes (let them in)");
+    d.send("/verify yes");
     fake.wait_call("sendMessage", |b| {
         b["chat_id"] == json!(42)
             && b["text"]
@@ -217,7 +221,7 @@ async fn people_paired_at_the_terminal_talk_to_the_agent() {
     })
     .await;
     d.send("/people");
-    d.expect("Alice (@alice) (id 42)");
+    d.expect("[Phone] Alice (@alice) (id 42)");
     let seen = d.quit();
     assert!(
         !seen
@@ -228,14 +232,14 @@ async fn people_paired_at_the_terminal_talk_to_the_agent() {
 
     // Started again: Alice is still let in.
     let mut d = Daemon::start(&bundle, &password);
-    d.expect("Echoer's Telegram bot is @helper_bot");
+    d.expect("[Phone] People reach Echoer as @helper_bot.");
     fake.say(&alice, "still here");
     fake.wait_call("sendMessage", |b| {
         b["chat_id"] == json!(42) && b["text"].as_str().unwrap().starts_with("still here\n\n")
     })
     .await;
-    d.send("/unpair 42");
-    d.expect("42 can't talk to Echoer's Telegram bot any more");
+    d.send("/remove 42");
+    d.expect("[Phone] 42 can't talk to Echoer there any more.");
     d.quit();
     let sealed = std::fs::read(bundle.with_file_name("test.chummyd.state/state.sealed")).unwrap();
     assert!(!String::from_utf8_lossy(&sealed).contains("Alice"));

@@ -1006,7 +1006,7 @@ by a rough estimate); the app can generate one (five groups of five from a
 disk. Version 1 (`CHUMMYD\x01`, a random salt in the header) isn't opened any
 more: export it again.
 
-The configuration (`chummyd.config` v3, strict: unknown fields are refused;
+The configuration (`chummyd.config` v4, strict: unknown fields are refused;
 other versions aren't opened, so export the bundle again):
 
 | Field | |
@@ -1016,32 +1016,45 @@ other versions aren't opened, so export the bundle again):
 | `permissions` | as in the app's settings |
 | `providers`, `default_provider` | model connections (never the built-in engine) |
 | `secrets` | by name, `provider:<id>` for a connection's key |
-| `agents` | `id`, `name`, `loop_id`, `model`, `tools` (by name: `{ "ask", "network" }`), `loop_config`, `model_options`, `channel_approvals` |
+| `agents` | `id`, `name`, `loop_id`, `model`, `tools` (by name: `{ "ask", "network" }`), `loop_config`, `model_options` |
 | `loops` | the loops, by id: trusted because the bundle authenticates |
 | `jobs` | `chummy.job` documents |
-| `channels` | `terminal.enabled`; `matrix` (optional, below); `telegram` (below; left out when empty) |
+| `channels` | `terminal` (`enabled`, `approvals`); `list` (below; left out when empty) |
 | `logging` | `message_text` |
 | `state_key` | 32 bytes, base64: seals the state folder |
 
-`channels.matrix`: `homeserver` (https, or http only to this computer or
-the local network), `user_id` (chummyd's account, `@name:server`),
-`password` (to log in the first time and for cross-signing's password
-check), `users` (agent id → Matrix IDs allowed to talk to it), `report_to`
-(job id → one of its agent's users), `upload_mb` (1–1024, default 100).
+Each of `channels.list`: `id` (unique), `name` (unique), `type` (a kind of
+channel: `matrix`, `telegram`), `agents` (agent ids; one unless the kind
+serves several), `approvals` (tool approvals and daily-limit questions may
+be answered in it; off: refused there), `options` (by field key, as the
+kind's fields say), `secrets` (by field key: a password, a bot token) and
+`reports` (job id → a person's id in the channel). The bundle crate knows
+only this shape; what goes in `options` and `secrets` is the kind's
+(`chummy_channel::ChannelKind::fields`, below), and
+`chummy_channel::check_bundle` checks it.
 
-`channels.telegram`: one bot per agent, each `agent`, `token` (from
-@BotFather, `<digits>:<20–100 of A–Z a–z 0–9 _ ->`), `api_url` (default
-`https://api.telegram.org`; https, or http only nearby), `upload_mb` (1–20,
-default 20), `stream` (default true). Errors: an agent not in the bundle,
-two bots for one agent, two agents sharing a bot, a token that isn't one.
+- `matrix`: options `homeserver` (https, or http only to this computer or
+  the local network), `user_id` (the bot's account, `@name:server`),
+  `people` (Matrix IDs, a room each with each agent), `upload_mb` (1–1024,
+  default 100); secret `password` (to log in the first time and for
+  cross-signing's password check). Serves several agents.
+- `telegram`: options `api_url` (default `https://api.telegram.org`;
+  https, or http only nearby), `upload_mb` (1–20, default 20), `stream`
+  (default true); secret `token` (from @BotFather, `<digits>:<20–100 of A–Z
+  a–z 0–9 _ ->`). One agent. The people let in are kept in the state, not
+  the bundle.
 
-`Config::check()` gives errors (chummyd won't start; the app won't export)
-and warnings: no channel; a model connection without its key; an agent with
-tools that ask first but no approvals over channels (they'd always be
-refused); for Matrix, nobody allowed to talk to an agent, or a job that
-reports to no one. Errors include an invalid homeserver or Matrix ID, users
-for agents not in the bundle, chummyd's own ID among the users, and
-`report_to` naming a missing job or someone not allowed for its agent.
+`chummy_channel::check_bundle` gives errors (chummyd won't start; the app
+won't export) and warnings, on top of `Config::check()`'s (no channel; a
+model connection without its key; an agent with tools that ask first but no
+channel or terminal that answers approvals, so they'd always be refused).
+Errors: a kind that doesn't exist, missing or duplicate ids and names,
+agents not in the bundle or more than the kind serves, a field that fails
+its checks (required, a number out of range, an invalid address, ID or
+token), two channels on the same account (the kind's `identity`: the Matrix
+ID, the Telegram bot), and a report naming a missing job, a job of another
+agent, or someone the kind says can't be reached. Warnings are the kind's
+`cautions` (for Matrix: nobody to talk to, a job that reports to no one).
 
 ### The state folder (`--state`)
 
@@ -1051,23 +1064,26 @@ state.sealed    "CHUMMYD-STATE\x01", a 24-byte nonce, XChaCha20-Poly1305 of
                 the state's JSON with the state key; associated data: the
                 magic and the instance id
 tools/          the tools' Python and built-in tools (not secret)
-matrix/         the Matrix SDK's SQLite stores (end-to-end keys, room
+channels/<id>/  each channel's own folder (mode 700): for Matrix, `store/`,
+                the Matrix SDK's SQLite stores (end-to-end keys, room
                 state), encrypted with the passphrase
-                hex(SHA-256("chummyd matrix store" ‖ state key))
+                hex(SHA-256("chummyd matrix store" ‖ channel key))
 ```
 
-The state (`chummyd.state` v1, strict): `instance_id`, `saved_at`, `chats`
+A channel's key is SHA-256("chummy channel key\0" ‖ state key ‖ channel
+id) (`chummy_channel::derive_key`), so channels never share one.
+
+The state (`chummyd.state` v2, strict): `instance_id`, `saved_at`, `chats`
 (conversations: each agent's chat index and messages, as many as the
-bundle's `limits` allow; a Matrix room's conversation is
-`m-` and 16 hex digits of SHA-256 of the person's Matrix ID), `paused` (paused runs by
-`agent/chat`, base64 of the session's `chummy.paused-run` document), `jobs`
-(job state and history), `usage` (the day's model use) and `matrix` (when
-the bundle has Matrix: the bot's `user_id`, its `session` (access token and
+bundle's `limits` allow; a channel person's conversation is `m-` and 16 hex
+digits of SHA-256 of the channel id, a zero byte and their id in the
+channel), `paused` (paused runs by `agent/chat`, base64 of the session's
+`chummy.paused-run` document), `jobs` (job state and history), `usage` (the
+day's model use) and `channels` (by channel id, what each keeps, as its kind
+says). Matrix keeps the bot's `user_id`, its `session` (access token and
 device), whether it's `cross_signed` and has `synced`, and its `rooms`, one
-`{agent, user, room}` each). If the bot's ID changes, the Matrix state and
-stores are thrown away and it logs in afresh. `telegram` (when there are
-bots: by agent id, each bot's `bot_id`, the next update `offset`, and the
-`people` let in, `{id, name, since}`; another bot starts with nobody). A
-Telegram person's conversation is `m-` and 16 hex digits of SHA-256 of
-`telegram`, a zero byte and their Telegram id. A state file that
-doesn't open stops chummyd; it's never replaced by a fresh one.
+`{agent, user, room}` each; if the bot's ID changes, what it kept and its
+stores are thrown away and it logs in afresh. Telegram keeps the `bot_id`,
+the next update `offset`, and the `people` let in, `{id, name, since}`;
+another bot starts with nobody. A state file that doesn't open stops
+chummyd; it's never replaced by a fresh one.

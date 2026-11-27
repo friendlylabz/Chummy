@@ -1,52 +1,54 @@
 <script lang="ts">
   /**
-   * Settings → Channels: ways to talk to an agent from outside Chummy
-   * (Matrix and Telegram), the same channels chummyd has. Each channel is
-   * one agent and the people who may talk to it; its secret (password or
-   * bot token) stays in the keychain and what it keeps is sealed, so it
-   * connects again whenever Chummy starts.
+   * Settings → Channels: ways to talk to agents from outside Chummy, the
+   * same channels chummyd has. Nothing here names a kind of channel: the
+   * form is drawn from what each kind asks (its fields), and what a channel
+   * asks to verify (emoji to compare, someone to let in…) shows the same
+   * way for every kind. Secrets stay in the keychain, what a channel keeps
+   * is sealed, so it connects again whenever Chummy starts.
    */
   import { onMount } from "svelte";
-  import { commands, errorText, events, type ChannelConfig, type ChannelView } from "$lib/ipc";
+  import {
+    commands,
+    errorText,
+    events,
+    type ChannelConfig,
+    type ChannelKindInfo,
+    type ChannelView,
+  } from "$lib/ipc";
   import { settings } from "$lib/stores/settings.svelte";
   import Button from "$lib/components/Button.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
   import Icon from "$lib/components/Icon.svelte";
   import Toggle from "$lib/components/Toggle.svelte";
+  import ChannelFields from "./ChannelFields.svelte";
 
   let { gotoAgents }: { gotoAgents: () => void } = $props();
 
-  /** The kinds of channel there are; each has one implementation, shared with chummyd. */
-  const kinds = [
-    { type: "matrix", label: "Matrix" },
-    { type: "telegram", label: "Telegram" },
-  ] as const;
-  type Kind = (typeof kinds)[number]["type"];
-  const kindLabel = (t: Kind) => kinds.find((k) => k.type === t)?.label ?? t;
-  const TELEGRAM_API = "https://api.telegram.org";
-
+  let kinds = $state.raw<ChannelKindInfo[]>([]);
   let list = $state<ChannelView[]>([]);
   let editing = $state<ChannelView | "new" | null>(null);
   let error = $state("");
   let busy = $state(false);
-  /** Now, for how long codes still work (ticks while one shows). */
+  /** Now, for how long invitations still work (ticks while one shows). */
   let now = $state(Date.now());
 
   // The form.
-  let type = $state<Kind>("matrix");
+  let type = $state("");
   let name = $state("");
-  let agent = $state("");
-  let homeserver = $state("");
-  let userId = $state("");
-  let password = $state("");
-  let users = $state("");
-  let uploadMb = $state(100);
+  let chosen = $state<string[]>([]);
   let approvals = $state(false);
-  let apiUrl = $state(TELEGRAM_API);
-  let stream = $state(true);
+  let options = $state<Record<string, unknown>>({});
+  let secrets = $state<Record<string, string>>({});
 
   const agents = $derived(settings.current.agents);
   const agentName = (id: string) => agents.find((a) => a.id === id)?.name ?? "Missing agent";
+  const kindOf = (t: string) => kinds.find((k) => k.id === t);
+  const kind = $derived(kindOf(type));
+  const names = (ids: string[]) => {
+    const n = ids.map(agentName);
+    return n.length > 1 ? `${n.slice(0, -1).join(", ")} and ${n[n.length - 1]}` : (n[0] ?? "");
+  };
 
   async function load() {
     now = Date.now();
@@ -58,6 +60,7 @@
   }
 
   onMount(() => {
+    commands.channelKinds().then((k) => (kinds = k));
     load();
     const offs = [events.onChannelsChanged(() => load()), events.onSettingsChanged(() => load())];
     const tick = setInterval(() => (now = Date.now()), 15000);
@@ -67,69 +70,63 @@
     };
   });
 
-  function setType(t: Kind) {
+  /** A kind's fields with their defaults. */
+  function defaults(k: ChannelKindInfo | undefined): Record<string, unknown> {
+    const o: Record<string, unknown> = {};
+    for (const f of k?.fields ?? []) if (f.input !== "secret") o[f.key] = $state.snapshot(f.default);
+    return o;
+  }
+
+  function setType(t: string) {
     if (editing !== "new") return;
-    if (name === kindLabel(type) || !name) name = list.length ? "" : kindLabel(t);
+    if (!name || name === kindOf(type)?.label) name = kindOf(t)?.label ?? "";
     type = t;
-    uploadMb = t === "telegram" ? 20 : 100;
+    options = defaults(kindOf(t));
+    secrets = {};
+    if (!kindOf(t)?.many_agents) chosen = chosen.slice(0, 1);
   }
 
   function open(c: ChannelView | "new") {
     editing = c;
     error = "";
-    password = "";
+    secrets = {};
     if (c === "new") {
-      type = "matrix";
-      name = list.length ? "" : "Matrix";
-      agent = settings.current.active_agent ?? agents[0]?.id ?? "";
-      homeserver = "https://";
-      userId = "";
-      users = "";
-      uploadMb = 100;
+      type = "";
+      name = "";
+      chosen = [settings.current.active_agent ?? agents[0]?.id ?? ""].filter(Boolean);
       approvals = false;
-      apiUrl = TELEGRAM_API;
-      stream = true;
+      setType(kinds[0]?.id ?? "");
     } else {
       type = c.type;
       name = c.name;
-      agent = c.agent;
+      chosen = [...c.agents];
       approvals = c.approvals;
-      uploadMb = c.upload_mb;
-      if (c.type === "matrix") {
-        homeserver = c.homeserver;
-        userId = c.user_id;
-        users = c.users.join("\n");
-      } else {
-        apiUrl = c.api_url;
-        stream = c.stream;
-      }
+      options = { ...defaults(kindOf(c.type)), ...$state.snapshot(c.options) };
     }
   }
 
-  const ready = $derived(
-    !!name.trim() &&
-      !!agent &&
-      (type === "matrix" ? !!userId.trim() : !!password.trim() || (editing !== "new" && !!editing?.has_secret)),
-  );
+  function toggleAgent(id: string, on: boolean) {
+    if (!kind?.many_agents) chosen = on ? [id] : [];
+    else chosen = on ? [...chosen.filter((a) => a !== id), id] : chosen.filter((a) => a !== id);
+  }
+
+  const ready = $derived(!!name.trim() && chosen.length > 0 && !!kind);
 
   async function save() {
     busy = true;
     error = "";
     const old = editing !== "new" ? editing : null;
-    const base = { id: old?.id ?? "", name, enabled: old?.enabled ?? true, agent, approvals };
-    const channel: ChannelConfig =
-      type === "matrix"
-        ? {
-            ...base,
-            type,
-            homeserver,
-            user_id: userId,
-            users: users.split(/[\s,]+/).filter(Boolean),
-            upload_mb: Number(uploadMb) || 100,
-          }
-        : { ...base, type, api_url: apiUrl, upload_mb: Number(uploadMb) || 20, stream };
+    const channel: ChannelConfig = {
+      id: old?.id ?? "",
+      name,
+      enabled: old?.enabled ?? true,
+      type,
+      agents: chosen,
+      approvals,
+      options,
+    };
     try {
-      const id = await commands.saveChannel(channel, password || null);
+      const id = await commands.saveChannel(channel, secrets);
       if (id) editing = null;
     } catch (e) {
       error = errorText(e);
@@ -150,13 +147,8 @@
   const toggle = (c: ChannelView, on: boolean) => run(() => commands.setChannelEnabled(c.id, on));
   const remove = (c: ChannelView) => run(() => commands.deleteChannel(c.id));
   const answer = (c: ChannelView, n: number, yes: boolean) => run(() => commands.answerChannelPending(c.id, n, yes));
-  const makeCode = (c: ChannelView) => run(() => commands.channelPairingCode(c.id));
+  const invite = (c: ChannelView) => run(() => commands.channelInvite(c.id));
   const removePerson = (c: ChannelView, id: string) => run(() => commands.removeChannelPerson(c.id, id));
-
-  function minutesLeft(ms: number): string {
-    const m = Math.ceil((ms - now) / 60000);
-    return m <= 1 ? "a minute" : `${m} minutes`;
-  }
 
   const stateLabel: Record<string, string> = {
     connected: "Connected",
@@ -170,7 +162,7 @@
 {#if editing}
   <button class="back" type="button" onclick={() => (editing = null)}><Icon name="chevron-left" size={16} />Channels</button>
   <h1>{editing === "new" ? "New channel" : `Edit ${editing.name}`}</h1>
-  <p class="pane-sub">One agent, and the people who may talk to it from outside Chummy.</p>
+  <p class="pane-sub">Agents, and the people who may talk to them from outside Chummy.</p>
 
   <div class="card card-pad">
     <div class="field">
@@ -179,20 +171,12 @@
         id="ch-type"
         class="input"
         value={type}
-        onchange={(e) => setType(e.currentTarget.value as Kind)}
+        onchange={(e) => setType(e.currentTarget.value)}
         disabled={editing !== "new"}
       >
-        {#each kinds as k (k.type)}<option value={k.type}>{k.label}</option>{/each}
+        {#each kinds as k (k.id)}<option value={k.id}>{k.label}</option>{/each}
       </select>
-      <span class="hint">
-        {#if type === "matrix"}
-          End-to-end encrypted Matrix rooms: Chummy logs in as a bot account and makes a room with each person you allow.
-          The same as chummyd's Matrix channel.
-        {:else}
-          A Telegram bot for the agent: people you let in talk to it in a private chat. Not end-to-end encrypted:
-          Telegram's servers can read these chats. The same as chummyd's Telegram bots.
-        {/if}
-      </span>
+      {#if kind}<span class="hint">{kind.about}</span>{/if}
     </div>
 
     <div class="field">
@@ -201,12 +185,23 @@
     </div>
 
     <div class="field">
-      <label for="ch-agent">Agent</label>
+      <span class="label">{kind?.many_agents ? "Agents" : "Agent"}</span>
       {#if agents.length}
-        <select id="ch-agent" class="input" bind:value={agent}>
-          {#each agents as a (a.id)}<option value={a.id}>{a.name}</option>{/each}
-        </select>
-        <span class="hint">Every message starts a run of this agent's loop, with its tools, in its folder.</span>
+        {#if kind?.many_agents}
+          <div class="agents">
+            {#each agents as a (a.id)}
+              <label class="agent-pick">
+                <input type="checkbox" checked={chosen.includes(a.id)} onchange={(e) => toggleAgent(a.id, e.currentTarget.checked)} />
+                {a.name}
+              </label>
+            {/each}
+          </div>
+        {:else}
+          <select class="input" aria-label="Agent" value={chosen[0] ?? ""} onchange={(e) => toggleAgent(e.currentTarget.value, true)}>
+            {#each agents as a (a.id)}<option value={a.id}>{a.name}</option>{/each}
+          </select>
+        {/if}
+        <span class="hint">Every message starts a run of the agent's loop, with its tools, in its folder.</span>
       {:else}
         <div class="notice">
           <Icon name="bot" size={16} />
@@ -216,110 +211,25 @@
       {/if}
     </div>
 
-    {#if type === "matrix"}
-      <h2 class="group">The bot's account</h2>
-      <div class="field">
-        <label for="ch-hs">Homeserver</label>
-        <input id="ch-hs" class="input mono" bind:value={homeserver} spellcheck="false" placeholder="https://matrix.example.org" />
-        <span class="hint">https, or plain http only on this computer or your local network.</span>
-      </div>
-      <div class="field">
-        <label for="ch-user">Bot's Matrix ID</label>
-        <input id="ch-user" class="input mono" bind:value={userId} spellcheck="false" placeholder="@chummy-bot:example.org" />
-        <span class="hint">An account of its own: not yours, and not one a chummyd uses.</span>
-      </div>
-      <div class="field">
-        <label for="ch-pw">Bot's password</label>
-        <input
-          id="ch-pw"
-          class="input mono"
-          type="password"
-          autocomplete="off"
-          bind:value={password}
-          placeholder={editing !== "new" && editing.has_secret ? "Saved. Leave blank to keep it." : "The bot account's password"}
-        />
-        <span class="hint">
-          Kept in your system keychain. Chummy uses it to log in once and to set up the bot's cross-signing; after that it
-          keeps the session, sealed, and connects again whenever it starts.
-        </span>
-      </div>
-
-      <h2 class="group">Who may talk to it</h2>
-      <div class="field">
-        <label for="ch-users">People (Matrix IDs, one per line)</label>
-        <textarea id="ch-users" class="input mono" rows="3" bind:value={users} spellcheck="false" placeholder="@you:example.org"></textarea>
-        <span class="hint">
-          Each gets an encrypted room with the bot. Before they can talk to the agent, they verify the bot from their
-          Matrix app, and you compare the emoji here.
-        </span>
-      </div>
-    {:else}
-      <h2 class="group">The bot</h2>
-      <div class="field">
-        <label for="ch-token">Bot token</label>
-        <input
-          id="ch-token"
-          class="input mono"
-          type="password"
-          autocomplete="off"
-          spellcheck="false"
-          bind:value={password}
-          placeholder={editing !== "new" && editing.has_secret ? "Saved. Leave blank to keep it." : "123456:ABC-def…"}
-        />
-        <span class="hint">
-          Make a bot with @BotFather in Telegram (/newbot) and paste the token it gives. It's the bot's whole login:
-          kept in your system keychain. Use a bot of its own, not one a chummyd uses.
-        </span>
-      </div>
-      <div class="row toggle-row">
-        <div>
-          <div class="row-title">Show answers as they're written</div>
-          <div class="row-sub">Off: each answer comes when it's done.</div>
-        </div>
-        <Toggle checked={stream} label="Show answers as they're written" onchange={(v) => (stream = v)} />
-      </div>
-      <div class="field" style="margin-top: var(--space-4)">
-        <label for="ch-api">Bot API server</label>
-        <input id="ch-api" class="input mono" bind:value={apiUrl} spellcheck="false" />
-        <span class="hint">Telegram's own, unless you run one.</span>
-      </div>
-      <p class="faint xs pair-note">
-        People ask to talk to the agent with a pairing code you make here once the channel is on; you're asked before
-        anyone is let in.
-      </p>
+    {#if kind}
+      <h2 class="group">{kind.label}</h2>
+      <ChannelFields
+        {kind}
+        bind:options
+        bind:secrets
+        saved={editing !== "new" ? editing.saved_secrets : []}
+      />
     {/if}
 
-    <div class="field">
-      <label for="ch-mb">Largest file (MB)</label>
-      <input
-        id="ch-mb"
-        class="input"
-        style="width: 120px"
-        type="number"
-        min="1"
-        max={type === "telegram" ? 20 : 1024}
-        bind:value={uploadMb}
-      />
-      <span class="hint">
-        Files people send are saved in the agent's folder, under uploads/.{type === "telegram"
-          ? " Telegram gives bots files of up to 20 MB."
-          : ""}
-      </span>
-    </div>
     <div class="row toggle-row">
       <div>
-        <div class="row-title">Answer tool approvals in {kindLabel(type)}</div>
+        <div class="row-title">Answer tool approvals in {kind?.label ?? "the channel"}</div>
         <div class="row-sub">
-          {#if type === "matrix"}
-            Off: approvals wait for you here, in Chummy, and the room is told. On: /allow or /deny in the room answers
-            them, so whoever has those accounts can let the agent use its tools.
-          {:else}
-            Off: approvals wait for you here, in Chummy, and the chat is told. On: Allow and Deny buttons in the chat
-            answer them, so whoever you let in can let the agent use its tools.
-          {/if}
+          Off: approvals wait for you here, in Chummy, and the chat is told. On: they can be answered in the channel, so
+          whoever can talk to the agent there can let it use its tools.
         </div>
       </div>
-      <Toggle checked={approvals} label={`Answer tool approvals in ${kindLabel(type)}`} onchange={(v) => (approvals = v)} />
+      <Toggle checked={approvals} label={`Answer tool approvals in ${kind?.label ?? "the channel"}`} onchange={(v) => (approvals = v)} />
     </div>
 
     {#if error}<div class="notice danger" style="margin-top: var(--space-4)"><Icon name="x-circle" size={16} /><span>{error}</span></div>{/if}
@@ -346,10 +256,10 @@
   {#if !list.length}
     <div class="card empty">
       <EmptyState icon="channel" title="No channels yet">
-        Add one to talk to an agent from Matrix or Telegram: messages start runs of its loop, and its replies come back
-        as it works. Runs show in the sessions panel like any other.
+        Add one to talk to an agent from {kinds.map((k) => k.label).join(" or ") || "outside"}: messages start runs of its
+        loop, and its replies come back as it works. Runs show in the sessions panel like any other.
         {#snippet actions()}
-          <Button variant="primary" icon="plus" onclick={() => open("new")} disabled={!agents.length}>New channel</Button>
+          <Button variant="primary" icon="plus" onclick={() => open("new")} disabled={!agents.length || !kinds.length}>New channel</Button>
         {/snippet}
       </EmptyState>
     </div>
@@ -357,28 +267,23 @@
 
   {#each list as c (c.id)}
     {@const st = c.enabled ? c.live.state : "off"}
-    {@const count = c.type === "matrix" ? c.users.length : c.people.length}
+    {@const k = kindOf(c.type)}
+    {@const count = c.people.length}
     <div class="card card-pad channel">
       <div class="c-head">
         <div class="c-main">
           <div class="c-name">
             {c.name}
-            <span class="badge">{kindLabel(c.type)}</span>
+            <span class="badge">{k?.label ?? c.type}</span>
             <span class="status" class:ok={st === "connected"} class:bad={st === "problem"}>{stateLabel[st] ?? st}</span>
           </div>
           <div class="muted small">
-            <Icon name="bot" size={12} /> {agentName(c.agent)} · {count} {count === 1 ? "person" : "people"}
-            {#if c.approvals}· approvals in {kindLabel(c.type)}{/if}
+            <Icon name="bot" size={12} /> {names(c.agents)} · {count} {count === 1 ? "person" : "people"}
+            {#if c.approvals}· approvals in {k?.label ?? "it"}{/if}
           </div>
-          {#if c.type === "matrix"}
-            <div class="faint xs mono">{c.user_id} on {c.homeserver}</div>
-          {:else}
-            <div class="faint xs">
-              {#if c.live.account}<span class="mono">{c.live.account}</span>{" · "}{/if}not end-to-end encrypted{#if c.api_url !== TELEGRAM_API}{" · through "}<span
-                  class="mono">{c.api_url}</span
-                >{/if}
-            </div>
-          {/if}
+          <div class="faint xs">
+            {#if c.live.account}<span class="mono">{c.live.account}</span>{" · "}{/if}{c.summary}
+          </div>
           {#if c.enabled && c.live.message}<div class="xs problem">{c.live.message}</div>{/if}
         </div>
         <div class="c-actions">
@@ -388,64 +293,54 @@
         </div>
       </div>
 
+      <!-- What the channel asks to verify: the same for every kind. -->
       {#each c.live.pending as v (v.n)}
         <div class="verify">
-          {#if v.kind === "emoji"}
-            <div class="small"><b>{v.who}</b> wants to verify Chummy. Check that they see these emoji, in this order:</div>
+          <div class="small"><b>{v.who}</b> {v.ask}</div>
+          {#if v.items.length}
             <div class="emoji">
-              {#each v.emoji as [symbol, label], i (i)}
+              {#each v.items as [symbol, label], i (i)}
                 <span class="em"><span class="sym">{symbol}</span><span class="lab">{label}</span></span>
               {/each}
             </div>
-            <div class="v-actions">
-              <Button variant="primary" onclick={() => answer(c, v.n, true)}>They match</Button>
-              <Button variant="ghost" onclick={() => answer(c, v.n, false)}>They don't match</Button>
-            </div>
-          {:else}
-            <div class="small">
-              <b>{v.who}</b> sent the pairing code and wants to talk to {agentName(c.agent)}. Let them in only if it's the
-              person you gave it to.
-            </div>
-            <div class="v-actions" style="margin-top: var(--space-3)">
-              <Button variant="primary" onclick={() => answer(c, v.n, true)}>Let them in</Button>
-              <Button variant="ghost" onclick={() => answer(c, v.n, false)}>Refuse</Button>
-            </div>
           {/if}
+          <div class="v-actions">
+            <Button variant="primary" onclick={() => answer(c, v.n, true)}>{v.yes}</Button>
+            <Button variant="ghost" onclick={() => answer(c, v.n, false)}>{v.no}</Button>
+          </div>
         </div>
       {/each}
 
-      {#if c.type === "telegram"}
+      {#if k?.invites || (k?.removes_people && c.people.length)}
         <div class="people">
           {#each c.people as p (p.id)}
             <div class="person">
               <Icon name="person" size={13} />
               <span class="small">{p.name}</span>
-              <span class="faint xs mono">{p.id}</span>
+              {#if p.name !== p.id}<span class="faint xs mono">{p.id}</span>{/if}
               <span class="spacer"></span>
-              <Button variant="ghost" onclick={() => removePerson(c, p.id)}>Remove</Button>
+              {#if k?.removes_people}<Button variant="ghost" onclick={() => removePerson(c, p.id)}>Remove</Button>{/if}
             </div>
           {/each}
-          {#if c.live.code && c.live.code.expires_at > now}
+          {#if c.live.invite && c.live.invite.expires_at > now}
             <div class="code">
-              <div class="code-num mono">{c.live.code.code}</div>
-              <div class="small">
-                Ask them to send <span class="mono">/start {c.live.code.code}</span> to
-                {#if c.live.account}<span class="mono">{c.live.account}</span>{:else}the bot{/if} in Telegram, within
-                {minutesLeft(c.live.code.expires_at)}. You'll be asked here before they're let in. The code works once.
-              </div>
+              <div class="code-num mono">{c.live.invite.code}</div>
+              <div class="small">{c.live.invite.text}</div>
             </div>
           {/if}
-          <div class="p-actions">
-            <Button
-              variant={c.people.length ? "ghost" : "primary"}
-              icon="plus"
-              disabled={!c.enabled || st !== "connected"}
-              onclick={() => makeCode(c)}
-            >
-              {c.live.code && c.live.code.expires_at > now ? "New code" : "Add a person"}
-            </Button>
-            {#if !c.enabled || st !== "connected"}<span class="faint xs">The channel has to be connected to add people.</span>{/if}
-          </div>
+          {#if k?.invites}
+            <div class="p-actions">
+              <Button
+                variant={c.people.length ? "ghost" : "primary"}
+                icon="plus"
+                disabled={!c.enabled || st !== "connected"}
+                onclick={() => invite(c)}
+              >
+                {c.live.invite && c.live.invite.expires_at > now ? "New code" : k.invites}
+              </Button>
+              {#if !c.enabled || st !== "connected"}<span class="faint xs">The channel has to be connected for that.</span>{/if}
+            </div>
+          {/if}
         </div>
       {/if}
       {#if c.live.note}<div class="faint xs note">{c.live.note}</div>{/if}
@@ -454,9 +349,9 @@
 
   {#if list.length}
     <p class="faint xs" style="margin-top: var(--space-4)">
-      In a room or chat: send a message to talk to the agent, reply to its questions, and /help for the commands (/stop,
-      /new, /status…). Chummy connects to the homeserver or Telegram itself, like model connections: the Internet
-      permission doesn't apply.
+      In a chat: send a message to talk to the agent, reply to its questions, and /help for the commands (/stop, /new,
+      /status…). Chummy connects to the channel's servers itself, like model connections: the Internet permission
+      doesn't apply.
     </p>
   {/if}
 {/if}
@@ -492,11 +387,6 @@
   }
   .toggle-row > div {
     flex: 1;
-  }
-  textarea.input {
-    height: auto;
-    padding: var(--space-2) var(--space-3);
-    resize: vertical;
   }
   .c-head {
     display: flex;
@@ -580,8 +470,20 @@
   .note {
     margin-top: var(--space-2);
   }
-  .pair-note {
-    margin: var(--space-2) 0 var(--space-4);
+  .agents {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-4);
+  }
+  .agent-pick {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    font-weight: 400;
+  }
+  .field .label {
+    font-size: var(--text-sm);
+    font-weight: 550;
   }
   .people {
     display: grid;

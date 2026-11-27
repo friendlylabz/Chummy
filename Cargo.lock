@@ -896,8 +896,10 @@ name = "chummy-channel"
 version = "0.1.5"
 dependencies = [
  "chummy-agent",
+ "chummy-bundle",
  "chummy-flow",
  "chummy-http",
+ "chummy-llm",
  "chummy-log",
  "chummy-scheduler",
  "chummy-session",

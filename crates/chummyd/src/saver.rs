@@ -6,8 +6,8 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// What each channel keeps in the state, by channel id (Matrix's login and
-/// rooms, the people paired with each Telegram bot).
+/// What each channel keeps in the state, by channel id (a login, rooms,
+/// the people let in).
 pub type Kept = Arc<Mutex<BTreeMap<String, serde_json::Value>>>;
 
 use chummy_scheduler::JobStore;
@@ -49,14 +49,7 @@ impl Saver {
         s.paused = inner.paused.snapshot();
         s.jobs = self.jobs.snapshot();
         s.usage = inner.session.usage.snapshot();
-        {
-            let kept = self.kept.lock().unwrap_or_else(|e| e.into_inner());
-            s.matrix = kept.get(crate::router::MATRIX).cloned();
-            s.telegram = kept
-                .iter()
-                .filter_map(|(id, v)| Some((id.strip_prefix("telegram:")?.to_string(), v.clone())))
-                .collect();
-        }
+        s.channels = self.kept.lock().unwrap_or_else(|e| e.into_inner()).clone();
         if let Err(e) = self.state.save(&s) {
             inner.dirty.store(true, Ordering::Relaxed);
             chummy_log::system::error("state", format!("Couldn't save the state: {e}"));

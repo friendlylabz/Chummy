@@ -9,8 +9,8 @@ same code the app uses, until it stops.
   configuration while it runs. To change it, export a new bundle and start
   chummyd again.
 - **No way in from the network.** chummyd listens on nothing. You talk to its
-  agents through *channels*: the terminal it runs in, and end-to-end
-  encrypted Matrix rooms.
+  agents through *channels*: the terminal it runs in, end-to-end
+  encrypted Matrix rooms, and Telegram bots.
 - **Agents stay in their folders.** Each agent works only in
   `<jail dir>/<agent>/`, which never contains (and is never inside)
   chummyd's own files.
@@ -26,14 +26,17 @@ Open **Configure chummyd** from the main menu.
 2. Include the agents it runs. Each brings its loop, model connection, tools
    and settings. An agent that uses Chummy's built-in engine can't be included:
    chummyd has no built-in engine, so give it another model (Ollama, say).
-3. **Answer its approvals over channels** is off for each agent. Off, tool
-   approvals and daily-limit questions are refused when asked over a channel,
-   so tools that ask first won't run. Turn it on only for an agent that needs
-   it: a remote "allow" is what a prompt injection would hope for.
-4. Include the jobs it runs (their agent must be included).
-5. Choose the channels (for Matrix, see [below](#4-talk-to-it-in-matrix)),
-   and whether chummyd's logs may include message text (off: they say what
-   happened, never what was said).
+3. Include the jobs it runs (their agent must be included).
+4. Choose the channels: the terminal, and **Add channel** for each Matrix
+   bot or Telegram bot (see [Matrix](#4-talk-to-it-in-matrix) and
+   [Telegram](#5-talk-to-it-in-telegram)). Every channel has a name, the
+   agents it serves, what its kind asks for, and who each of its agents'
+   jobs **reports to**. Choose whether chummyd's logs may include message
+   text (off: they say what happened, never what was said).
+5. **Answer approvals in it** is off for each channel (and for the
+   terminal). Off, tool approvals and daily-limit questions asked there are
+   refused, so tools that ask first won't run. Turn it on only where it's
+   needed: a remote "allow" is what a prompt injection would hope for.
 6. **Check** shows what chummyd would say at start-up: errors to fix, and
    warnings worth knowing.
 7. Choose a password, or **Generate** one. The bundle holds the API keys of
@@ -190,8 +193,9 @@ docker compose up -d
 docker attach chummyd
 ```
 
-`docker attach` is chummyd's terminal: confirm Matrix verifications there
-(`/verify`), or talk to agents if the terminal channel is on. **Leave it
+`docker attach` is chummyd's terminal: confirm verifications and let people
+in there (`/verify`, `/invite`), or talk to agents if the terminal channel is
+on. **Leave it
 with Ctrl-P Ctrl-Q**: Ctrl-C stops chummyd. `docker logs chummyd` shows
 what it said.
 
@@ -201,7 +205,8 @@ What the Compose file sets up:
   folders in the volume `jails`, or your folder, at `/jails` (each agent in
   `/jails/agents/<agent>`: chummyd won't use a mount point, such as a volume's
   root, as the jail dir); the state folder in the volume `state` (`/state`).
-  Back up `state`: it holds the conversations and Matrix keys.
+  Back up `state`: it holds the conversations, Matrix keys and the Telegram
+  people let in.
 - Everything runs as user 65532: chummyd, and the agents' tools, which run
   inside it (WebAssembly). So everything in the agents' folders should
   belong to 65532. chummyd makes their folders itself; on each start it says
@@ -264,6 +269,9 @@ chat. If the agent asked you something, your next message is the answer.
 | `/jobs`, `/run <job>` | this agent's jobs; runs one now |
 | `/allow`, `/deny [reason]` | answers a tool approval (if allowed for the agent) |
 | `/agents`, `/agent <name>` | lists the agents; talks to another |
+| `/verify [n] yes`, `/verify [n] no` | answers what a channel asks (a Matrix verification, someone asking in on Telegram) |
+| `/invite [channel]` | an invitation for this agent's channel (Telegram's six-digit code) |
+| `/people`, `/remove <id>` | who may talk to this agent, by channel; stops someone (Telegram) |
 | `/quit` | stops chummyd |
 | `/help` | the list |
 
@@ -288,17 +296,18 @@ makes the rooms and invites people; you just accept the invite.
 
 1. **Make an account just for chummyd** on the homeserver, the same way you
    make any account (say `@chummyd:example.org`). chummyd logs in as it.
-2. In **Configure chummyd**, turn on **Matrix** and fill in:
+2. In **Configure chummyd**, **Add channel** of type **Matrix**, choose the
+   agents it serves, and fill in:
    - the **homeserver**'s address (https; plain http only on this computer or
-     your local network). **Check the homeserver** says whether it answers.
-   - **chummyd's Matrix ID** and **its password**. The password goes into the
+     your local network). **Check** says whether it answers.
+   - **the bot's Matrix ID** and **its password**. The password goes into the
      bundle, encrypted: chummyd uses it to log in the first time and to set up
      its cross-signing. When you open a bundle to change it, leave the password
      empty to keep the one it has.
-   - **Who may talk to** each agent: Matrix IDs, separated by commas. Each
-     person gets their own room with that agent.
-   - Who each job **reports to**: its results and its questions go to that
-     person's room with the job's agent.
+   - **People**: Matrix IDs, one per line. Each person gets their own room
+     with each of the channel's agents.
+   - Who each job **reports to** (a Matrix ID from People): its results and
+     its questions go to that person's room with the job's agent.
    - The **largest file** people can send (100 MB unless you change it).
 3. Export the bundle and start chummyd **with a terminal** (or `docker
    attach` to it): you'll confirm verifications there.
@@ -306,7 +315,8 @@ makes the rooms and invites people; you just accept the invite.
 On its first start chummyd logs in, sets up cross-signing, and creates one
 room per agent and person, named like "Helper (My chummyd)". It keeps its
 session and its encryption keys in the state folder (the keys in
-`<state>/matrix/`, encrypted), so later starts carry on as the same session.
+`<state>/channels/<channel id>/`, encrypted), so later starts carry on as
+the same session.
 Key backup is off: the keys never leave the state folder.
 
 ### Verify chummyd
@@ -321,9 +331,9 @@ each person does is verify it:
 3. chummyd shows the same seven emoji in its terminal:
 
    ```text
-   chummyd: @you:example.org (session ABCDEFGHIJ) wants to verify chummyd. Check that they see these emoji, in this order:
-              🐶 Dog   🔑 Key   🌙 Moon   …
-            Then: /verify 1 yes if they match, /verify 1 no if they don't.
+   [Phone] @you:example.org (session ABCDEFGHIJ) wants to verify chummyd's bot. Check that they see these emoji, in this order:
+     🐶 Dog   🔑 Key   🌙 Moon   …
+   Then: /verify 1 yes (they match), or /verify 1 no (they don't match).
    ```
 
    Compare them with what your app shows. If they match, type
@@ -372,7 +382,7 @@ who left their room is invited back.
 
 ## 5. Talk to it in Telegram
 
-Each agent can have a Telegram bot of its own. Telegram isn't end-to-end
+Each Telegram channel is a bot for one agent. Telegram isn't end-to-end
 encrypted: Telegram's servers can read what's said to the bot and what the
 agent answers. Choose Matrix for anything private.
 
@@ -383,8 +393,8 @@ agent answers. Choose Matrix for anything private.
    Groups** off (chummyd's bot leaves groups anyway). Don't use a bot the
    Chummy app (or another chummyd) uses: only one program can read a bot's
    messages.
-2. In **Configure chummyd**, under Channels → Telegram, switch on the
-   agent's bot and paste the token. **Show answers as they're written** is
+2. In **Configure chummyd**, **Add channel** of type **Telegram**, choose
+   its agent and paste the token. **Show answers as they're written** is
    on by default; files people send can be up to 20 MB.
 3. Export the bundle and run chummyd **with a terminal** (with Docker:
    `docker compose up -d`, then `docker attach` to it): that's where you let
@@ -394,12 +404,14 @@ agent answers. Choose Matrix for anything private.
 
 In chummyd's terminal, talking to the agent (`/agent <name>` switches):
 
-- `/pair` makes a six-digit code for that agent's bot. It works once, for
+- `/invite` makes a six-digit code for that agent's bot (`/invite <channel>`
+  when the agent has several that take invitations). It works once, for
   ten minutes.
 - The person sends `/start <code>` to the bot. chummyd shows their name and
-  Telegram id, and asks: `/pair 1 yes` lets them in, `/pair 1 no` doesn't.
-  Only say yes to the person you gave the code to.
-- `/people` lists who may talk to the bot; `/unpair <id>` stops someone.
+  Telegram id, and asks: `/verify 1 yes` lets them in, `/verify 1 no`
+  doesn't. Only say yes to the person you gave the code to.
+- `/people` lists who may talk to the agent, by channel; `/remove <id>`
+  stops someone.
 
 The people let in are kept in the state folder (sealed), so they stay let
 in when chummyd starts again. Anyone else who writes to the bot gets no
@@ -409,6 +421,7 @@ answer at all.
 
 As in Matrix: a message starts a run, shown as it's written; reply to a
 question to answer it; approvals (when the bundle allows them over channels
-for the agent) come with **Allow** and **Deny** buttons; files go to the
-agent's `uploads/`. The bot's menu lists the commands. Jobs don't report to
-Telegram yet.
+for the channel) come with **Allow** and **Deny** buttons; files go to the
+agent's `uploads/`. The bot's menu lists the commands. A job can report to
+someone let in: give their Telegram id (from `/people`) as who it **reports
+to**.

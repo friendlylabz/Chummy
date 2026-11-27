@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-channel-invite"
+description = "Enables the channel_invite command without any pre-configured scope."
+commands.allow = ["channel_invite"]
+
+[[permission]]
+identifier = "deny-channel-invite"
+description = "Denies the channel_invite command without any pre-configured scope."
+commands.deny = ["channel_invite"]

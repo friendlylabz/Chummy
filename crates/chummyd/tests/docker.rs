@@ -57,7 +57,6 @@ fn bundle() -> Config {
         tools: Default::default(),
         loop_config: Default::default(),
         model_options: Default::default(),
-        channel_approvals: false,
     });
     c.channels.terminal.enabled = true;
     c

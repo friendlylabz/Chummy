@@ -580,57 +580,85 @@ export interface RecentRun extends RunInfo {
 
 // ---- channels
 
-/** Where the messages go: one implementation of each kind, shared with chummyd. */
-export interface MatrixChannelKind {
-  type: "matrix";
-  homeserver: string;
-  /** The bot's Matrix ID. Its password is in the keychain. */
-  user_id: string;
-  /** Who may talk to the agent (Matrix IDs). */
-  users: string[];
-  upload_mb: number;
+/** How a channel field is answered. */
+export type ChannelInput =
+  | { input: "text" }
+  | { input: "url" }
+  | { input: "secret" }
+  | { input: "lines" }
+  | { input: "number"; min: number; max: number }
+  | { input: "toggle" };
+
+/** Something a kind of channel asks when one is set up. */
+export type ChannelField = ChannelInput & {
+  key: string;
+  label: string;
+  hint: string;
+  placeholder: string;
+  default: unknown;
+  required: boolean;
+  /** For addresses: there's a check that the server answers. */
+  probe: string;
+};
+
+/** A kind of channel (Matrix, Telegram…): everything the forms need to know of it. */
+export interface ChannelKindInfo {
+  id: string;
+  label: string;
+  about: string;
+  fields: ChannelField[];
+  /** One channel can talk for several agents. */
+  many_agents: boolean;
+  /** People join by invitation: the button's words. */
+  invites: string | null;
+  /** People let in can be removed here. */
+  removes_people: boolean;
 }
 
-/** A Telegram bot: its token is in the keychain; people pair with a code. */
-export interface TelegramChannelKind {
-  type: "telegram";
-  /** The Bot API server (Telegram's own unless you run one). */
-  api_url: string;
-  /** At most 20. */
-  upload_mb: number;
-  /** Show answers as they're written. */
-  stream: boolean;
-}
-
-/** A channel: a way to talk to one agent from outside Chummy. */
-export type ChannelConfig = {
+/** A channel: a way to talk to agents from outside Chummy. */
+export interface ChannelConfig {
   id: string;
   name: string;
   enabled: boolean;
-  agent: string;
+  /** Its kind's id. */
+  type: string;
+  agents: string[];
   /** Tool approvals may be answered in the channel. */
   approvals: boolean;
-} & (MatrixChannelKind | TelegramChannelKind);
+  /** Its options, by field key (never secrets). */
+  options: Record<string, unknown>;
+}
 
-/** A pairing code, and when it stops working (Unix ms). */
-export interface PairingCode {
+/** Something a channel asks to check, then answer yes or no. */
+export interface ChannelVerify {
+  n: number;
+  who: string;
+  ask: string;
+  items: [string, string][];
+  yes: string;
+  no: string;
+  /** Saying yes is asked again natively, with this. */
+  confirm: string | null;
+}
+
+/** An invitation code, how to use it, and when it stops working (Unix ms). */
+export interface ChannelInvite {
   code: string;
+  text: string;
   expires_at: number;
 }
 
 export interface ChannelLive {
   state: "" | "off" | "connecting" | "connected" | "problem";
   message: string | null;
-  /** What waits: emoji to compare (Matrix), someone to let in (Telegram). */
-  pending: { n: number; kind: "emoji" | "pairing"; who: string; emoji: [string, string][] }[];
+  pending: ChannelVerify[];
   note: string | null;
-  /** The bot, as people find it ("@helper_bot"). */
+  /** Its account, as people find it ("@helper_bot"). */
   account: string | null;
-  /** The pairing code made last. */
-  code: PairingCode | null;
+  invite: ChannelInvite | null;
 }
 
-/** Someone let in to a Telegram bot. */
+/** Someone who may talk through a channel. */
 export interface ChannelPerson {
   id: string;
   name: string;
@@ -638,9 +666,11 @@ export interface ChannelPerson {
 }
 
 export type ChannelView = ChannelConfig & {
-  /** Its password (Matrix) or bot token (Telegram) is saved. */
-  has_secret: boolean;
+  /** Its secret fields with something saved. */
+  saved_secrets: string[];
   people: ChannelPerson[];
+  /** One line about it, as its kind says it. */
+  summary: string;
   live: ChannelLive;
 };
 
@@ -1038,41 +1068,31 @@ export interface ChummydDraft {
   /** Chats each agent keeps (the least recently used go first). */
   chats: number;
   agents: string[];
-  approvals: string[];
   jobs: string[];
   terminal: boolean;
-  /** The Matrix channel, if it's on. */
-  matrix?: ChummydMatrix | null;
-  /** Agents' Telegram bots (one each). */
-  telegram?: ChummydTelegram[];
+  /** Approvals may be answered in the terminal. */
+  terminal_approvals: boolean;
+  /** Channels outside chummyd, of any kind. */
+  channels: ChummydChannel[];
   message_text: boolean;
   /** An opened bundle this one replaces. */
   base?: string | null;
 }
 
-export interface ChummydMatrix {
-  homeserver: string;
-  user_id: string;
-  /** Typed here; empty keeps the opened bundle's. Never sent back. */
-  password: string;
-  /** The opened bundle has one. */
-  has_password: boolean;
-  /** Who may talk to each agent (Matrix IDs), by agent id. */
-  users: Record<string, string[]>;
-  /** Who each job reports to, by job id. */
-  report_to: Record<string, string>;
-  upload_mb: number;
-}
-
-export interface ChummydTelegram {
-  agent: string;
-  /** Typed here; empty keeps the opened bundle's. Never sent back. */
-  token: string;
-  /** The opened bundle has one for this agent. */
-  has_token: boolean;
-  api_url: string;
-  upload_mb: number;
-  stream: boolean;
+/** A channel in the bundle, as the window edits it. */
+export interface ChummydChannel {
+  id: string;
+  name: string;
+  type: string;
+  agents: string[];
+  approvals: boolean;
+  options: Record<string, unknown>;
+  /** Typed here, by field; empty keeps the opened bundle's. Never sent back. */
+  secrets: Record<string, string>;
+  /** The secret fields the opened bundle has. */
+  saved_secrets: string[];
+  /** Who each job reports to (job id → a person's id in the channel). */
+  reports: Record<string, string>;
 }
 
 export interface ChummydReport {
@@ -1246,8 +1266,6 @@ export const commands = {
     call<ChummydSources>("chummyd_sources", undefined, () => ({ agents: [], jobs: [], time_zone: "UTC" })),
   chummydCheck: (draft: ChummydDraft) =>
     call<ChummydReport>("chummyd_check", { draft }, () => ({ errors: [], warnings: [] })),
-  chummydCheckHomeserver: (url: string) =>
-    call<string>("chummyd_check_homeserver", { url }, () => "The homeserver answers (Matrix v1.12)."),
   chummydPasswordProblem: (password: string) =>
     call<string | null>("chummyd_password_problem", { password }, () => null),
   chummydGeneratePassword: () => call<string>("chummyd_generate_password", undefined, () => "abcde-fghij-kmnpq-rstuv-wxyz2"),
@@ -1264,18 +1282,23 @@ export const commands = {
   runPane: (runId: string) => call<string[]>("run_pane", { runId }, () => []),
   recentRuns: () => call<RecentRun[]>("recent_runs", undefined, () => []),
 
+  /** Every kind of channel, for the forms. */
+  channelKinds: () => call<ChannelKindInfo[]>("channel_kinds", undefined, () => []),
+  /** Whether the server in an address field answers. */
+  channelProbe: (kind: string, field: string, url: string) =>
+    call<string>("channel_probe", { kind, field, url }, () => "It answers."),
   listChannels: () => call<ChannelView[]>("list_channels", undefined, () => []),
-  /** Adds or changes a channel; `password` (its password or bot token) empty keeps the saved one. Returns its id, or null if declined. */
-  saveChannel: (channel: ChannelConfig, password: string | null) =>
-    call<string | null>("save_channel", { channel, password }),
+  /** Adds or changes a channel; `secrets` typed by field (empty keeps what's saved). Returns its id, or null if declined. */
+  saveChannel: (channel: ChannelConfig, secrets: Record<string, string>) =>
+    call<string | null>("save_channel", { channel, secrets }),
   /** Turning one on asks natively. Returns whether it's on. */
   setChannelEnabled: (id: string, enabled: boolean) => call<boolean>("set_channel_enabled", { id, enabled }),
   /** Asks natively first. False: cancelled. */
   deleteChannel: (id: string) => call<boolean>("delete_channel", { id }),
-  /** Emoji that match, or someone to let in (asks natively). False: cancelled. */
+  /** The answer to what a channel asks (yes may be asked again natively). False: cancelled. */
   answerChannelPending: (channel: string, n: number, yes: boolean) =>
     call<boolean>("answer_channel_pending", { channel, n, yes }),
-  channelPairingCode: (channel: string) => call<PairingCode>("channel_pairing_code", { channel }),
+  channelInvite: (channel: string) => call<ChannelInvite>("channel_invite", { channel }),
   removeChannelPerson: (channel: string, person: string) =>
     call<void>("remove_channel_person", { channel, person }),
   setPermission: (kind: "network" | "tools" | "confirm_online_tools", enabled: boolean) =>

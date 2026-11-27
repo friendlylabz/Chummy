@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Mutex;
 
-use chummy_bundle::{BundleAgent, Config, MatrixChannel, Report, TelegramBot};
+use chummy_bundle::{BundleAgent, BundleChannel, Config, Report};
 use chummy_log::system::{self as syslog, Level};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State, WebviewWindow};
@@ -63,17 +63,15 @@ pub struct Draft {
     pub chats: u32,
     /// Agent ids included.
     pub agents: Vec<String>,
-    /// Agent ids whose tool approvals may be answered over channels.
-    pub approvals: Vec<String>,
     /// Job ids included.
     pub jobs: Vec<String>,
     pub terminal: bool,
-    /// The Matrix channel, if it's on.
+    /// Approvals may be answered in the terminal.
     #[serde(default)]
-    pub matrix: Option<MatrixDraft>,
-    /// Agents' Telegram bots (one each).
+    pub terminal_approvals: bool,
+    /// Channels outside chummyd, of any kind.
     #[serde(default)]
-    pub telegram: Vec<TelegramDraft>,
+    pub channels: Vec<ChannelDraft>,
     pub message_text: bool,
     /// An opened bundle this one replaces (its token).
     #[serde(default)]
@@ -87,41 +85,28 @@ fn default_chats() -> u32 {
     chummy_bundle::Limits::default().chats
 }
 
-/// The Matrix channel as the window edits it.
+/// A channel as the window edits it: like the bundle's, with its secrets
+/// typed (empty keeps the opened bundle's, never sent back to the window).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct MatrixDraft {
-    pub homeserver: String,
-    pub user_id: String,
-    /// Typed in the window; empty keeps the opened bundle's. Never sent
-    /// back to the window.
+pub struct ChannelDraft {
+    pub id: String,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub agents: Vec<String>,
     #[serde(default)]
-    pub password: String,
-    /// The opened bundle has a password (so it can be left empty).
+    pub approvals: bool,
     #[serde(default)]
-    pub has_password: bool,
-    /// Who may talk to each agent, by agent id.
+    pub options: serde_json::Map<String, serde_json::Value>,
+    /// Typed in the window, by field.
     #[serde(default)]
-    pub users: BTreeMap<String, Vec<String>>,
-    /// Who each job reports to, by job id.
+    pub secrets: BTreeMap<String, String>,
+    /// The secret fields the opened bundle has.
     #[serde(default)]
-    pub report_to: BTreeMap<String, String>,
-    pub upload_mb: u32,
-}
-
-/// An agent's Telegram bot as the window edits it.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct TelegramDraft {
-    pub agent: String,
-    /// Typed in the window; empty keeps the opened bundle's. Never sent
-    /// back to the window.
+    pub saved_secrets: Vec<String>,
+    /// Who each job reports to (job id → a person's id in the channel).
     #[serde(default)]
-    pub token: String,
-    /// The opened bundle has a token for this agent's bot.
-    #[serde(default)]
-    pub has_token: bool,
-    pub api_url: String,
-    pub upload_mb: u32,
-    pub stream: bool,
+    pub reports: BTreeMap<String, String>,
 }
 
 /// A bundle opened to change it.
@@ -199,8 +184,7 @@ fn build(state: &AppState, d: &Draft) -> Result<Config, String> {
     let s = state.settings();
     let name = d.name.trim();
     let mut c = Config::new_instance(name, d.time_zone.trim())?;
-    let mut base_matrix_password = None;
-    let mut base_telegram_tokens = BTreeMap::new();
+    let mut base_channels: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     let base_secrets = match d.base.as_deref() {
         Some(token) => {
             let guard = opened();
@@ -211,18 +195,12 @@ fn build(state: &AppState, d: &Draft) -> Result<Config, String> {
             // The same instance, so its state folder carries on.
             c.instance.id = base.config.instance.id.clone();
             c.state_key = base.config.state_key.clone();
-            base_matrix_password = base
+            base_channels = base
                 .config
                 .channels
-                .matrix
-                .as_ref()
-                .map(|m| m.password.clone());
-            base_telegram_tokens = base
-                .config
-                .channels
-                .telegram
+                .list
                 .iter()
-                .map(|t| (t.agent.clone(), t.token.clone()))
+                .map(|c| (c.id.clone(), c.secrets.clone()))
                 .collect();
             base.config.secrets.clone()
         }
@@ -233,57 +211,52 @@ fn build(state: &AppState, d: &Draft) -> Result<Config, String> {
     c.limits.chats = d.chats;
     c.permissions = s.permissions.clone();
     c.channels.terminal.enabled = d.terminal;
+    c.channels.terminal.approvals = d.terminal_approvals;
     c.logging.message_text = d.message_text;
-    // Only for agents included: unticking one drops its bot.
-    c.channels.telegram = d
-        .telegram
-        .iter()
-        .filter(|t| d.agents.contains(&t.agent))
-        .map(|t| TelegramBot {
-            agent: t.agent.clone(),
-            token: if t.token.trim().is_empty() {
-                base_telegram_tokens
-                    .get(&t.agent)
-                    .cloned()
-                    .unwrap_or_default()
-            } else {
-                t.token.trim().to_string()
-            },
-            api_url: t.api_url.trim().trim_end_matches('/').to_string(),
-            upload_mb: t.upload_mb,
-            stream: t.stream,
-        })
-        .collect();
-    if let Some(m) = &d.matrix {
-        let password = if m.password.is_empty() {
-            base_matrix_password.unwrap_or_default()
-        } else {
-            m.password.clone()
-        };
-        let users = |u: &Vec<String>| -> Vec<String> {
-            u.iter()
-                .map(|x| x.trim().to_string())
-                .filter(|x| !x.is_empty())
-                .collect()
-        };
-        c.channels.matrix = Some(MatrixChannel {
-            homeserver: m.homeserver.trim().trim_end_matches('/').to_string(),
-            user_id: m.user_id.trim().to_string(),
-            password,
-            // Only for what's included: unticking an agent or job drops it.
-            users: m
-                .users
+    // Channels, for the agents and jobs included (unticking one drops it).
+    for ch in &d.channels {
+        let kind = chummy_channel::kind(&ch.kind).ok_or("A channel's kind isn't known.")?;
+        let agents: Vec<String> = ch
+            .agents
+            .iter()
+            .filter(|a| d.agents.contains(a))
+            .cloned()
+            .collect();
+        if agents.is_empty() {
+            continue;
+        }
+        let saved = base_channels.get(&ch.id);
+        let mut secrets = BTreeMap::new();
+        for f in kind.fields() {
+            if f.input != chummy_channel::Input::Secret {
+                continue;
+            }
+            let typed = ch
+                .secrets
+                .get(f.key)
+                .map(|v| v.trim())
+                .filter(|v| !v.is_empty());
+            if let Some(v) = typed
+                .map(str::to_string)
+                .or_else(|| saved.and_then(|s| s.get(f.key).cloned()))
+            {
+                secrets.insert(f.key.to_string(), v);
+            }
+        }
+        c.channels.list.push(BundleChannel {
+            id: ch.id.clone(),
+            name: ch.name.trim().to_string(),
+            kind: ch.kind.clone(),
+            agents,
+            approvals: ch.approvals,
+            options: chummy_channel::kind::tidy(kind, &ch.options),
+            secrets,
+            reports: ch
+                .reports
                 .iter()
-                .filter(|(a, u)| d.agents.contains(a) && !users(u).is_empty())
-                .map(|(a, u)| (a.clone(), users(u)))
+                .filter(|(j, who)| d.jobs.contains(j) && !who.trim().is_empty())
+                .map(|(j, who)| (j.clone(), who.trim().to_string()))
                 .collect(),
-            report_to: m
-                .report_to
-                .iter()
-                .filter(|(j, u)| d.jobs.contains(j) && !u.trim().is_empty())
-                .map(|(j, u)| (j.clone(), u.trim().to_string()))
-                .collect(),
-            upload_mb: m.upload_mb,
         });
     }
 
@@ -319,7 +292,6 @@ fn build(state: &AppState, d: &Draft) -> Result<Config, String> {
             tools: a.tools.clone(),
             loop_config: a.loop_config.clone(),
             model_options: a.model_options.clone(),
-            channel_approvals: d.approvals.contains(id),
         });
     }
     for job in jobs_here(state)
@@ -375,69 +347,12 @@ fn build(state: &AppState, d: &Draft) -> Result<Config, String> {
 #[tauri::command]
 pub fn chummyd_check(state: State<'_, AppState>, draft: Draft) -> Report {
     match build(&state, &draft) {
-        Ok(c) => c.check(),
+        Ok(c) => chummy_channel::check_bundle(&c),
         Err(e) => Report {
             errors: vec![e],
             warnings: vec![],
         },
     }
-}
-
-/// Whether a Matrix homeserver answers (its supported versions).
-#[tauri::command]
-pub async fn chummyd_check_homeserver(url: String) -> CmdResult<String> {
-    let url = url.trim().trim_end_matches('/').to_string();
-    if let Some(p) = chummy_llm::endpoint_problem(&url) {
-        return Err(p);
-    }
-    if chummy_llm::unencrypted_remote(&url) {
-        return Err(
-            "The homeserver must use https (plain http only on this computer or your local network)."
-                .into(),
-        );
-    }
-    let client = chummy_http::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let r = client
-        .get(format!("{url}/_matrix/client/versions"))
-        .send()
-        .await
-        .map_err(|e| {
-            format!(
-                "The homeserver didn't answer: {}",
-                chummy_http::describe(&e)
-            )
-        })?;
-    if !r.status().is_success() {
-        return Err(format!(
-            "That doesn't look like a Matrix homeserver (it answered {}).",
-            r.status()
-        ));
-    }
-    #[derive(Deserialize)]
-    struct Versions {
-        versions: Vec<String>,
-    }
-    let v: Versions = r
-        .json()
-        .await
-        .map_err(|_| "That doesn't look like a Matrix homeserver.".to_string())?;
-    let latest = v
-        .versions
-        .iter()
-        .filter(|v| v.starts_with('v'))
-        .max_by(|a, b| {
-            let n = |s: &str| -> Vec<u32> {
-                s[1..].split('.').filter_map(|p| p.parse().ok()).collect()
-            };
-            n(a).cmp(&n(b))
-        });
-    Ok(match latest {
-        Some(l) => format!("The homeserver answers (Matrix {l})."),
-        None => "The homeserver answers.".into(),
-    })
 }
 
 /// Why a password isn't strong enough, if it isn't.
@@ -516,35 +431,24 @@ pub async fn chummyd_open_bundle(
         max_runs: config.limits.max_runs,
         chat_messages: config.limits.chat_messages,
         chats: config.limits.chats,
-        approvals: config
-            .agents
-            .iter()
-            .filter(|a| a.channel_approvals && agents.contains(&a.id))
-            .map(|a| a.id.clone())
-            .collect(),
         agents,
         jobs,
         terminal: config.channels.terminal.enabled,
-        matrix: config.channels.matrix.as_ref().map(|m| MatrixDraft {
-            homeserver: m.homeserver.clone(),
-            user_id: m.user_id.clone(),
-            password: String::new(),
-            has_password: !m.password.is_empty(),
-            users: m.users.clone(),
-            report_to: m.report_to.clone(),
-            upload_mb: m.upload_mb,
-        }),
-        telegram: config
+        terminal_approvals: config.channels.terminal.approvals,
+        channels: config
             .channels
-            .telegram
+            .list
             .iter()
-            .map(|t| TelegramDraft {
-                agent: t.agent.clone(),
-                token: String::new(),
-                has_token: !t.token.is_empty(),
-                api_url: t.api_url.clone(),
-                upload_mb: t.upload_mb,
-                stream: t.stream,
+            .map(|c| ChannelDraft {
+                id: c.id.clone(),
+                name: c.name.clone(),
+                kind: c.kind.clone(),
+                agents: c.agents.clone(),
+                approvals: c.approvals,
+                options: c.options.clone(),
+                secrets: BTreeMap::new(),
+                saved_secrets: c.secrets.keys().cloned().collect(),
+                reports: c.reports.clone(),
             })
             .collect(),
         message_text: config.logging.message_text,
@@ -579,7 +483,7 @@ pub async fn chummyd_export(
         return Err(p);
     }
     let config = build(&state, &draft)?;
-    let report = config.check();
+    let report = chummy_channel::check_bundle(&config);
     if !report.ok() {
         return Err(report.errors.join(" "));
     }

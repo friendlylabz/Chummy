@@ -28,7 +28,9 @@ use zeroize::Zeroizing;
 
 const MAGIC: &[u8; 14] = b"CHUMMYD-STATE\x01";
 pub const STATE_FORMAT: &str = "chummyd.state";
-pub const STATE_VERSION: u32 = 1;
+/// 2: what channels keep, by channel id (was Matrix's and Telegram's own
+/// fields).
+pub const STATE_VERSION: u32 = 2;
 const MAX_STATE_BYTES: u64 = 512 * 1024 * 1024;
 
 /// What's saved.
@@ -52,13 +54,10 @@ pub struct Saved {
     /// The day's model use (`UsageLedger::snapshot`).
     #[serde(default)]
     pub usage: serde_json::Value,
-    /// The Matrix channel's login (access token, device) and rooms.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub matrix: Option<serde_json::Value>,
-    /// What each agent's Telegram bot keeps (the people paired, where it
-    /// was), by agent id.
+    /// What each channel keeps (a login, rooms, the people let in), by
+    /// channel id.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub telegram: BTreeMap<String, serde_json::Value>,
+    pub channels: BTreeMap<String, serde_json::Value>,
 }
 
 pub struct StateDir {
