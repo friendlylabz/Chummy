@@ -9,7 +9,11 @@
 //! Each call is `docker run --rm -i` with:
 //!
 //! - `--network none`: no network at all. `chummy.http` still works, over
-//!   stdin/stdout, through Chummy's own checks.
+//!   stdin/stdout, through Chummy's own checks. The one exception is a
+//!   tool that needs `direct-network` (Run shell command) with its internet
+//!   access on: that call gets the engine's ordinary network, so the
+//!   programs it starts can connect anywhere, unchecked (the user is told
+//!   so when turning it on).
 //! - only three mounts: the workspace (read/write) at `/workspace`, the tool
 //!   at `/tool` and Chummy's runner at `/chummy` (both read-only). The
 //!   Docker socket is never mounted.
@@ -152,6 +156,7 @@ impl ContainerSandbox {
         name: &str,
         workspace: Option<&Path>,
         tool: Option<&Path>,
+        network: bool,
     ) -> Vec<String> {
         let o = &self.opts;
         let mut a: Vec<String> = [
@@ -164,8 +169,6 @@ impl ContainerSandbox {
             name,
             "--label",
             "com.friendlylabz.chummy=tool",
-            "--network",
-            "none",
             "--read-only",
             "--tmpfs",
             "/tmp:rw,nosuid,nodev,size=256m",
@@ -188,6 +191,10 @@ impl ContainerSandbox {
         ]
         .map(String::from)
         .to_vec();
+        if !network {
+            a.push("--network".into());
+            a.push("none".into());
+        }
         a.push("--memory".into());
         a.push(format!("{}m", o.memory_mb));
         a.push("--memory-swap".into());
@@ -284,7 +291,7 @@ impl ContainerSandbox {
             Err(e) => return Health::problem(kind, e).detail(format!("{label} {version}")),
         };
         let mut cmd = clean_command(&program);
-        cmd.args(self.run_args(&call_name(), None, None));
+        cmd.args(self.run_args(&call_name(), None, None, false));
         cmd.args([id.as_str(), "python3", "-S", "-E", "-c", PYTHON_PROBE]);
         let health = match process::output(cmd, Duration::from_secs(120)).await {
             Ok((true, out, _)) => match parse_python(&out) {
@@ -328,7 +335,12 @@ impl SandboxBackend for ContainerSandbox {
             let name = call_name();
             let ws = call.jail.map(|j| j.root().to_path_buf());
             let mut cmd = clean_command(&program);
-            cmd.args(self.run_args(&name, ws.as_deref(), Some(call.tool_dir)));
+            cmd.args(self.run_args(
+                &name,
+                ws.as_deref(),
+                Some(call.tool_dir),
+                call.direct_network,
+            ));
             for (k, v) in &call.env {
                 cmd.arg("-e").arg(format!("{k}={v}"));
             }
@@ -436,7 +448,7 @@ mod tests {
 
     #[test]
     fn calls_are_locked_down() {
-        let a = sandbox().run_args("n", Some(Path::new("/ws")), Some(Path::new("/t")));
+        let a = sandbox().run_args("n", Some(Path::new("/ws")), Some(Path::new("/t")), false);
         let joined = a.join(" ");
         for must in [
             "--network none",
@@ -463,8 +475,35 @@ mod tests {
     }
 
     #[test]
+    fn only_a_direct_network_call_gets_a_network() {
+        let on = sandbox().run_args("n", Some(Path::new("/ws")), Some(Path::new("/t")), true);
+        assert!(!on.iter().any(|x| x == "--network"), "{on:?}");
+        // Everything else stays locked down.
+        let joined = on.join(" ");
+        for must in [
+            "--read-only",
+            "--cap-drop ALL",
+            "--security-opt no-new-privileges",
+        ] {
+            assert!(joined.contains(must), "missing {must}: {joined}");
+        }
+    }
+
+    #[test]
+    fn network_words() {
+        use crate::net::NetPolicy;
+        use crate::sandbox::{SandboxKind, network_word};
+        let on = NetPolicy::on();
+        let off = NetPolicy::off("no");
+        assert_eq!(network_word(SandboxKind::Container, &on, true), "direct");
+        assert_eq!(network_word(SandboxKind::Openshell, &on, true), "web");
+        assert_eq!(network_word(SandboxKind::Container, &on, false), "web");
+        assert_eq!(network_word(SandboxKind::Container, &off, true), "off");
+    }
+
+    #[test]
     fn checks_mount_nothing() {
-        let a = sandbox().run_args("n", None, None);
+        let a = sandbox().run_args("n", None, None, false);
         assert!(!a.iter().any(|x| x == "--mount"));
     }
 

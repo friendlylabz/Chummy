@@ -154,7 +154,10 @@ async fn check_url(
 }
 
 /// Performs a request from a tool. `msg` is the tool's request:
-/// `{ method, url, headers, body }`.
+/// `{ method, url, headers, body }` (GET, POST or HEAD), where the body can
+/// be `body_b64` (base64) instead, for bytes that aren't text. With
+/// `binary: true` the answer carries the body as `body_b64` instead of
+/// `text`, so downloads keep their bytes.
 pub async fn http_request(
     client: &reqwest::Client,
     policy: &NetPolicy,
@@ -170,15 +173,25 @@ pub async fn http_request(
     let method = match msg.get("method").and_then(|m| m.as_str()).unwrap_or("GET") {
         "GET" => reqwest::Method::GET,
         "POST" => reqwest::Method::POST,
+        "HEAD" => reqwest::Method::HEAD,
         other => return Err(format!("{other} requests aren't supported")),
     };
     let raw = msg.get("url").and_then(|u| u.as_str()).unwrap_or_default();
     let mut url = reqwest::Url::parse(raw).map_err(|_| format!("“{raw}” isn't a web address"))?;
-    let body = msg
-        .get("body")
-        .and_then(|b| b.as_str())
-        .unwrap_or_default()
-        .to_string();
+    use base64::Engine as _;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let body: Vec<u8> = match msg.get("body_b64").and_then(|b| b.as_str()) {
+        Some(e) => b64
+            .decode(e)
+            .map_err(|_| "the request body isn't valid base64".to_string())?,
+        None => msg
+            .get("body")
+            .and_then(|b| b.as_str())
+            .unwrap_or_default()
+            .as_bytes()
+            .to_vec(),
+    };
+    let binary = msg.get("binary").and_then(|b| b.as_bool()) == Some(true);
     if body.len() > MAX_REQUEST_BODY {
         return Err("the request body is too large".into());
     }
@@ -275,13 +288,18 @@ pub async fn http_request(
                 break;
             }
         }
-        return Ok(json!({
+        let mut out = json!({
             "status": status.as_u16(),
             "url": final_url,
             "headers": out_headers,
-            "text": String::from_utf8_lossy(&data),
             "truncated": truncated,
-        }));
+        });
+        if binary {
+            out["body_b64"] = json!(b64.encode(&data));
+        } else {
+            out["text"] = json!(String::from_utf8_lossy(&data));
+        }
+        return Ok(out);
     }
     Err("too many redirects".into())
 }
@@ -319,6 +337,61 @@ mod tests {
         ] {
             assert!(!is_local(ip.parse().unwrap()), "{ip}");
         }
+    }
+
+    #[tokio::test]
+    async fn keeps_bytes_and_answers_head() {
+        use base64::Engine as _;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (mut s, _) = listener.accept().await.unwrap();
+                let mut buf = vec![0u8; 4096];
+                let n = s.read(&mut buf).await.unwrap();
+                let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                let body: &[u8] = &[0, 159, 146, 150, 255];
+                let mut reply = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nX-Method: {}\r\nConnection: close\r\n\r\n",
+                    body.len(),
+                    req.split(' ').next().unwrap_or_default()
+                )
+                .into_bytes();
+                if !req.starts_with("HEAD") {
+                    reply.extend_from_slice(body);
+                }
+                s.write_all(&reply).await.unwrap();
+            }
+        });
+        let c = chummy_http::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        let mut on = NetPolicy::on();
+        on.allow_local = true;
+        let url = format!("http://{addr}/file.bin");
+        let r = http_request(&c, &on, &json!({ "url": url, "binary": true }))
+            .await
+            .unwrap();
+        assert_eq!(
+            b64.decode(r["body_b64"].as_str().unwrap()).unwrap(),
+            [0, 159, 146, 150, 255]
+        );
+        assert!(r.get("text").is_none());
+        let r = http_request(&c, &on, &json!({ "url": url, "method": "HEAD" }))
+            .await
+            .unwrap();
+        assert_eq!(r["headers"]["x-method"], "HEAD");
+        assert_eq!(r["text"], "");
+        let e = http_request(
+            &c,
+            &on,
+            &json!({ "url": url, "method": "POST", "body_b64": "%%" }),
+        )
+        .await;
+        assert!(e.unwrap_err().contains("base64"));
     }
 
     #[tokio::test]

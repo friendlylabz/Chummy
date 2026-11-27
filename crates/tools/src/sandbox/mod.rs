@@ -158,10 +158,28 @@ pub struct SandboxCall<'a> {
     /// The agent's workspace. `None`: no workspace (nothing is mounted).
     pub jail: Option<&'a Jail>,
     pub network: NetPolicy,
+    /// The programs the call starts may use the sandbox's own network: the
+    /// tool needs `direct-network` and its internet access is on. Only the
+    /// Container sandbox can give it (the engine's ordinary network, which
+    /// Chummy can't check); the others keep programs offline.
+    pub direct_network: bool,
     pub timeout: Duration,
     /// Extra environment variables (e.g. `TZ`). The host's own environment
     /// is never passed through.
     pub env: Vec<(String, String)>,
+}
+
+/// What the `CHUMMY_NETWORK` variable tells a tool about its call:
+/// `direct` (its programs have a network of their own), `web`
+/// (`chummy.http` works) or `off`.
+pub fn network_word(kind: SandboxKind, network: &NetPolicy, direct: bool) -> &'static str {
+    if direct && network.allowed && kind == SandboxKind::Container {
+        "direct"
+    } else if network.allowed {
+        "web"
+    } else {
+        "off"
+    }
 }
 
 /// A place tool calls can run.
@@ -214,12 +232,20 @@ pub async fn run_tool(
     let m = manifest(paths, name).ok_or_else(|| ToolError::NotInstalled(name.into()))?;
     verify(paths, &m)?;
     let dir = paths.tool_dir(name);
+    let direct = network.allowed && m.needs.iter().any(|n| n == "direct-network");
+    let mut env = env;
+    env.retain(|(k, _)| k != "CHUMMY_NETWORK");
+    env.push((
+        "CHUMMY_NETWORK".into(),
+        network_word(backend.kind(), &network, direct).into(),
+    ));
     let out = backend
         .call(SandboxCall {
             tool_dir: &dir,
             mode: Mode::Call(args),
             jail,
             network,
+            direct_network: direct,
             timeout: Duration::from_secs(m.timeout_secs as u64),
             env,
         })

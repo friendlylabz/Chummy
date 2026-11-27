@@ -85,13 +85,28 @@ pub async fn set_agent_access(
             want.ask = true;
         }
         if want.network && !had.is_some_and(|t| t.network) {
-            let mut msg = format!(
-                "“{}” will be able to make web requests for “{}”: {}\n\nIt can't reach this computer or \
-                 your local network, and it still can't see anything outside the agent's workspace. A web \
-                 page can contain instructions meant to trick the model. Internet access also has to be on \
-                 in Security and Privacy.",
-                m.title, agent.name, m.description
-            );
+            let direct = m.needs.iter().any(|n| n == "direct-network");
+            let mut msg = if direct {
+                format!(
+                    "The programs “{}” starts for “{}” will get an ordinary network: git, pip, npm, curl \
+                     and anything else can connect anywhere. Chummy can't check those connections, so \
+                     unlike other tools they can also reach this computer and your local network \
+                     (a router, a printer, services on this machine).\n\nThey still can't see files \
+                     outside the agent's workspace, but they could send what's in it anywhere, and a web \
+                     page or a downloaded script can contain instructions meant to trick the model. This \
+                     works in the Container sandbox; OpenShell keeps the programs offline. Internet \
+                     access also has to be on in Security and Privacy.",
+                    m.title, agent.name
+                )
+            } else {
+                format!(
+                    "“{}” will be able to make web requests for “{}”: {}\n\nIt can't reach this computer or \
+                     your local network, and it still can't see anything outside the agent's workspace. A web \
+                     page can contain instructions meant to trick the model. Internet access also has to be on \
+                     in Security and Privacy.",
+                    m.title, agent.name, m.description
+                )
+            };
             if let Some(names) = &shared_with {
                 msg.push_str(&format!(
                     "\n\nThis agent shares its folder with {names}. Their files will be within reach of \

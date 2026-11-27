@@ -1078,6 +1078,7 @@ dependencies = [
 name = "chummy-tools"
 version = "0.1.6"
 dependencies = [
+ "base64 0.23.1",
  "chummy-http",
  "chummy-sandbox",
  "futures-util",

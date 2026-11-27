@@ -14,8 +14,14 @@ folder it can see). Everything below can be set while you create it, before
   **Ask first** (every use waits for your OK in chat; *potentially unsafe*
   tools start with it on) and **Internet** (for tools that use it). Tools
   also need **Tools** on in Security and Privacy, and going online needs
-  **Internet access** there. A loop block can switch a tool or the internet
-  off for itself, never on. Until tools are set up, the section is greyed
+  **Internet access** there. Internet starts off and asks before it goes
+  on. Tools go online through Chummy, which never lets them reach this
+  computer or your local network, including **Run command**'s `curl` and
+  `wget`. **Run shell command** is the exception: with its Internet on, the
+  programs it starts (git, pip, npm…) get an ordinary network in the
+  Container sandbox, which Chummy can't check, so they can also reach this
+  computer and your local network (OpenShell keeps them offline). A loop
+  block can switch a tool or the internet off for itself, never on. Until tools are set up, the section is greyed
   out with a **Set up tools** link.
 - **Model settings**: every generation setting of the model (temperature,
   longest answer, reasoning effort and the rest below) starts as

@@ -5,7 +5,8 @@
 # [tool.chummy]
 # name = "run_command"
 # title = "Run command"
-# version = "1.1.0"
+# version = "1.2.0"
+# network = true
 # timeout = 120
 # risky = true
 # ///
@@ -17,7 +18,9 @@ anything outside it), so this is a small shell of its own: pipes (|),
 heredocs (<<EOF), here-strings (<<<), quotes, globs, {a,b} braces, cd, and a
 set of common commands written in Python (sed and awk included), plus
 `python` itself, which runs scripts in the workspace in this same sandboxed
-interpreter. Everything stays inside the agent's workspace, with no network.
+interpreter. Everything stays inside the agent's workspace. curl and wget
+reach the web through Chummy, only when the tool's Internet switch is on
+(off by default), and never this computer or the local network.
 There are no variables, loops or $(…): the model is told to use pipes,
 xargs, awk or python instead.
 
@@ -3479,6 +3482,10 @@ HELP = {
     "paste": "paste [-d delims] [-s] files: join lines side by side",
     "printf": "printf format [args…]: %s %d %f %x %5.2f %-10s %b, \\n \\t; the format repeats for extra args",
     "pwd": "pwd",
+    "curl": "curl [-sSfLiIO] [-o file] [-X GET|POST|HEAD] [-H 'K: v'] [-d data|@file] [--data-binary @file] "
+            "[--data-urlencode k=v] [--json data] [-G] [-u user:pass] [-A agent] [-w '%{http_code}'] URL…: web "
+            "requests through Chummy, only when this tool's Internet switch is on; never this computer or the "
+            "local network; redirects are followed; at most 2 MB",
     "python": "python file.py [args] | python -c \"code\" | python -m module | python (script on stdin, e.g. a "
               "heredoc): Python 3 with its standard library, in this same sandbox",
     "realpath": "realpath path: the full path (inside the workspace)",
@@ -3503,6 +3510,8 @@ HELP = {
     "type": "type name: says whether this shell has it",
     "uniq": "uniq [-c] [-d] [-u] [-i] [input [output]]",
     "wc": "wc [-l] [-w] [-c] [-m] [files]",
+    "wget": "wget [-q] [-O file|-O -] [-P folder] [--header 'K: v'] [--post-data data] URL…: downloads "
+            "through Chummy (saves to the URL's file name), only when this tool's Internet switch is on; at most 2 MB",
     "which": "which name: says whether this shell has it",
     "xargs": "xargs [-n N] [-I {}] [-0] [-d delim] [-t] command [args]: runs a command of this shell with "
              "stdin's items as arguments, e.g. find . -name '*.log' | xargs rm",
@@ -3526,16 +3535,339 @@ def c_help(args, stdin):
         return joined(out)
     names = sorted(n for n in COMMANDS if n not in ("[[",))
     return (
-        "This is Chummy's own small shell, inside the sandbox: the workspace only, no network, nothing to "
-        "install. Commands:\n"
+        "This is Chummy's own small shell, inside the sandbox: the workspace only, nothing to install, and the "
+        "web only through curl and wget when this tool's Internet switch is on. Commands:\n"
         + "\n".join("  " + " ".join(names[i:i + 12]) for i in range(0, len(names), 12))
         + "\n" + SYNTAX + "\nhelp COMMAND shows a command's options (or COMMAND --help).\n"
     )
 
 
-NETWORK = "there's no network in this shell: use the fetch_page tool to read a web page (if you have it)"
+# ---------------------------------------------------------------- the web
+#
+# curl and wget, through chummy.http: the app makes each request, only when
+# this tool's internet access is on, and never to this computer or the
+# local network. Redirects are followed (each hop checked); bodies stop at
+# 2 MB.
+
+NO_WEB = "this shell reaches the web only with curl and wget (when this tool's Internet switch is on)"
+CURL_VALUE = {
+    "-o": "--output", "-X": "--request", "-d": "--data", "-H": "--header", "-A": "--user-agent",
+    "-e": "--referer", "-u": "--user", "-w": "--write-out", "-m": "--max-time", "-F": "--form",
+    "-T": "--upload-file", "-b": "--cookie", "-c": "--cookie-jar", "-r": "--range",
+}
+CURL_VALUE_LONG = {
+    "--output", "--request", "--data", "--data-raw", "--data-binary", "--data-ascii", "--data-urlencode",
+    "--json", "--header", "--user-agent", "--referer", "--user", "--write-out", "--max-time", "--url",
+    "--connect-timeout", "--retry", "--retry-delay", "--retry-max-time", "--form", "--upload-file",
+    "--cookie", "--cookie-jar", "--range", "--proxy", "--resolve", "--limit-rate",
+}
+CURL_FLAG = {
+    "-s": "--silent", "-S": "--show-error", "-L": "--location", "-f": "--fail", "-i": "--include",
+    "-I": "--head", "-O": "--remote-name", "-k": "--insecure", "-v": "--verbose", "-G": "--get",
+    "-#": "--progress-bar", "-N": "--no-buffer", "-g": "--globoff", "-J": "--remote-header-name",
+}
+# Accepted and ignored: Chummy decides these itself.
+CURL_IGNORED = {
+    "--location", "--compressed", "--no-buffer", "--globoff", "--progress-bar", "--http1.1", "--http2",
+    "--no-progress-meter", "--max-time", "--connect-timeout", "--retry", "--retry-delay",
+    "--retry-max-time", "--remote-header-name", "--limit-rate", "--fail-early", "--create-dirs",
+}
+CURL_REFUSED = {
+    "--insecure": "certificates are always checked here",
+    "--proxy": "Chummy makes the request itself; there's no proxy to choose",
+    "--resolve": "Chummy looks names up itself",
+    "--form": "multipart forms (-F) aren't supported: send --data or --json instead",
+    "--upload-file": "uploads (-T) aren't supported: send --data-binary @file with -X POST instead",
+    "--cookie": "cookies aren't kept here: send them with -H 'Cookie: …'",
+    "--cookie-jar": "cookies aren't kept here",
+}
+
+
+def _curl_args(args):
+    """curl's options as (long name, value) pairs, and its URLs."""
+    opts, urls = [], []
+    i = 0
+
+    def value(name):
+        nonlocal i
+        i += 1
+        if i >= len(args):
+            raise Fail(f"option {name} needs a value", 2)
+        return args[i]
+
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            urls.extend(args[i + 1:])
+            break
+        if a.startswith("--"):
+            name, eq, v = a.partition("=")
+            if name in CURL_VALUE_LONG:
+                opts.append((name, v if eq else value(name)))
+            elif name in CURL_FLAG.values() or name in CURL_IGNORED or name in ("--fail-with-body",):
+                opts.append((name, None))
+            else:
+                raise Fail(f"option {name} isn't supported here (curl --help lists what is)", 2)
+        elif a.startswith("-") and len(a) > 1:
+            j = 1
+            while j < len(a):
+                short = "-" + a[j]
+                if short in CURL_VALUE:
+                    rest = a[j + 1:]
+                    opts.append((CURL_VALUE[short], rest if rest else value(short)))
+                    break
+                if short in CURL_FLAG:
+                    opts.append((CURL_FLAG[short], None))
+                else:
+                    raise Fail(f"option {short} isn't supported here (curl --help lists what is)", 2)
+                j += 1
+        else:
+            urls.append(a)
+        i += 1
+    return opts, urls
+
+
+def _with_scheme(url):
+    return url if re.match(r"(?i)^[a-z][a-z0-9+.-]*://", url) else "http://" + url
+
+
+def _data_arg(name, v, stdin):
+    """One --data value as bytes (@file and @- read a file or stdin)."""
+    if name in ("--data-raw",) or not v.startswith("@"):
+        raw = v.encode()
+    else:
+        src = v[1:]
+        raw = stdin.encode() if src == "-" else read_bytes(src)
+        if name not in ("--data-binary", "--json"):
+            raw = raw.replace(b"\r", b"").replace(b"\n", b"")
+    if name == "--data-urlencode":
+        import urllib.parse
+        text = raw.decode("utf-8", "replace")
+        key, eq, val = text.partition("=")
+        raw = (f"{key}={urllib.parse.quote_plus(val)}" if eq else urllib.parse.quote_plus(text)).encode()
+    return raw
+
+
+def _ask_web(cmd, method, url, headers, body):
+    try:
+        return chummy.http.request(method, url, headers=headers, body=body, binary=True)
+    except chummy.ToolError as e:
+        raise Fail(f"{url}: {e}", 6 if "couldn't find" in str(e) else 7)
+
+
+def _save(path, data):
+    full = resolve(path)
+    if full == "/dev/null":
+        return
+    if os.path.isdir(full):
+        raise Fail(f"{path}: is a folder", 23)
+    with open(full, "wb") as f:
+        f.write(data)
+
+
+def _name_from(url):
+    import urllib.parse
+    name = urllib.parse.unquote(urllib.parse.urlsplit(url).path.rstrip("/").rpartition("/")[2])
+    name = re.sub(r"[^\w.\-+ ]", "_", name).strip(" .")
+    return name or "index.html"
+
+
+def _head_text(r):
+    return f"HTTP/1.1 {r.status}\r\n" + "".join(f"{k}: {v}\r\n" for k, v in r.headers.items()) + "\r\n"
+
+
+def c_curl(args, stdin):
+    opts, urls = _curl_args(args)
+    flags_on = {n for n, v in opts if v is None}
+    for n, why in CURL_REFUSED.items():
+        if any(o == n for o, _ in opts):
+            raise Fail(why, 2)
+    for n, v in opts:
+        if n == "--url":
+            urls.append(v)
+    if not urls:
+        raise Fail("give a URL, like  curl -sL https://example.com", 2)
+    headers, parts, method, out, write_out = {}, [], None, None, None
+    json_body = False
+    for n, v in opts:
+        if n == "--header":
+            k, _, val = v.partition(":")
+            if k.strip():
+                headers[k.strip()] = val.strip()
+        elif n == "--user-agent":
+            headers["User-Agent"] = v
+        elif n == "--referer":
+            headers["Referer"] = v
+        elif n == "--user":
+            headers["Authorization"] = "Basic " + base64.b64encode(v.encode()).decode()
+        elif n == "--request":
+            method = v.upper()
+        elif n == "--output":
+            out = v
+        elif n == "--write-out":
+            write_out = v
+        elif n == "--range":
+            headers["Range"] = "bytes=" + v
+        elif n in ("--data", "--data-ascii", "--data-raw", "--data-binary", "--data-urlencode", "--json"):
+            parts.append(_data_arg(n, v, stdin))
+            json_body = json_body or n == "--json"
+    body = None
+    if parts:
+        body = (b"" if json_body else b"&").join(parts)
+        if "--get" in flags_on:
+            sep = "&" if "?" in urls[0] else "?"
+            urls = [u + sep + body.decode("utf-8", "replace") for u in urls]
+            body = None
+        else:
+            lower = {k.lower() for k in headers}
+            if json_body:
+                headers.setdefault("Content-Type", "application/json")
+                headers.setdefault("Accept", "application/json")
+            elif "content-type" not in lower:
+                headers["Content-Type"] = "application/x-www-form-urlencoded"
+    if "--head" in flags_on:
+        method = method or "HEAD"
+    method = method or ("POST" if body is not None else "GET")
+    if method not in ("GET", "POST", "HEAD"):
+        raise Fail(f"only GET, POST and HEAD requests can be made here, not {method}", 2)
+    silent = "--silent" in flags_on and "--show-error" not in flags_on
+    shown_out, err, code = [], [], 0
+    for url in urls:
+        url = _with_scheme(url)
+        try:
+            r = _ask_web("curl", method, url, headers, body)
+        except Fail as e:
+            if not silent:
+                err.append(f"curl: ({e.code}) {e}\n")
+            code = e.code
+            continue
+        if ("--fail" in flags_on) and r.status >= 400:
+            if not silent:
+                err.append(f"curl: (22) The requested URL returned error: {r.status}\n")
+            code = 22
+            continue
+        data = b""
+        if "--head" in flags_on or method == "HEAD" or "--include" in flags_on:
+            data += _head_text(r).encode()
+        if method != "HEAD":
+            data += r.content
+        if "--verbose" in flags_on:
+            err.append(f"> {method} {url}\n< HTTP/1.1 {r.status}\n" + "".join(f"< {k}: {v}\n" for k, v in r.headers.items()))
+        if out is not None and out != "-":
+            _save(out, data)
+        elif "--remote-name" in flags_on:
+            _save(_name_from(r.url or url), data)
+        else:
+            shown_out.append(data.decode("utf-8", "replace"))
+        if r.truncated:
+            err.append(f"curl: only the first 2 MB of {url} came (Chummy's limit)\n")
+            code = 63
+        if write_out:
+            shown_out.append(
+                write_out.replace("%{http_code}", str(r.status)).replace("%{response_code}", str(r.status))
+                .replace("%{url_effective}", r.url or url)
+                .replace("%{content_type}", r.headers.get("content-type", ""))
+                .replace("%{size_download}", str(len(r.content))).replace("\\n", "\n")
+            )
+    return _Result("".join(shown_out), "".join(err), code)
+
+
+def c_wget(args, stdin):
+    out, quiet, prefix, headers, post = None, False, None, {}, None
+    urls = []
+    # Combined short options: -qO- is -q -O -.
+    spread = []
+    for a in args:
+        if re.fullmatch(r"-[A-Za-z]{2,}.*", a) and not a.startswith("-nv") and not a.startswith("-nc") and a[1] not in "OPUTt":
+            j = 1
+            while j < len(a):
+                if a[j] in "OPUTt":
+                    spread.append("-" + a[j] + a[j + 1:])
+                    break
+                spread.append("-" + a[j])
+                j += 1
+        else:
+            spread.append(a)
+    args = spread
+    i = 0
+    while i < len(args):
+        a = args[i]
+
+        def value():
+            nonlocal i
+            if "=" in a and a.startswith("--"):
+                return a.split("=", 1)[1]
+            i += 1
+            if i >= len(args):
+                raise Fail(f"option {a} needs a value", 2)
+            return args[i]
+
+        name = a.split("=", 1)[0]
+        if a in ("-q", "--quiet", "-nv", "--no-verbose"):
+            quiet = True
+        elif name in ("-O", "--output-document"):
+            out = value()
+        elif a.startswith("-O") and len(a) > 2:
+            out = a[2:]
+        elif name in ("-P", "--directory-prefix"):
+            prefix = value()
+        elif a.startswith("-P") and len(a) > 2:
+            prefix = a[2:]
+        elif name == "--header":
+            k, _, v = value().partition(":")
+            headers[k.strip()] = v.strip()
+        elif name in ("-U", "--user-agent"):
+            headers["User-Agent"] = value()
+        elif name == "--post-data":
+            post = value().encode()
+        elif name == "--post-file":
+            post = read_bytes(value())
+        elif a in ("-c", "--continue", "--no-check-certificate", "-N", "--timestamping", "--no-clobber", "-nc",
+                   "--show-progress", "--progress=dot", "--progress=bar") or name in ("-T", "--timeout", "-t", "--tries"):
+            if name in ("-T", "--timeout", "-t", "--tries") and "=" not in a:
+                i += 1
+            if a == "--no-check-certificate":
+                raise Fail("certificates are always checked here", 2)
+        elif a.startswith("-") and a != "-":
+            raise Fail(f"option {a} isn't supported here (wget --help lists what is)", 2)
+        else:
+            urls.append(a)
+        i += 1
+    if not urls:
+        raise Fail("give a URL, like  wget https://example.com/file.zip", 2)
+    if post is not None:
+        headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
+    shown_out, err, code = [], [], 0
+    for url in urls:
+        url = _with_scheme(url)
+        try:
+            r = _ask_web("wget", "POST" if post is not None else "GET", url, headers, post)
+        except Fail as e:
+            err.append(f"wget: {e}\n")
+            code = 4
+            continue
+        if r.status >= 400:
+            err.append(f"wget: {url}: the server answered {r.status}\n")
+            code = 8
+            continue
+        if out == "-":
+            shown_out.append(r.content.decode("utf-8", "replace"))
+            continue
+        target = out or _name_from(r.url or url)
+        if prefix and not out:
+            os.makedirs(resolve(prefix), exist_ok=True)
+            target = prefix.rstrip("/") + "/" + target
+        _save(target, r.content)
+        if r.truncated:
+            err.append(f"wget: only the first 2 MB of {url} came (Chummy's limit)\n")
+            code = 8
+        if not quiet:
+            err.append(f"saved {target} ({len(r.content):,} bytes)\n")
+    return _Result("".join(shown_out), "".join(err), code)
+
+
 NOT_HERE = {
-    "curl": NETWORK, "wget": NETWORK, "ssh": NETWORK, "scp": NETWORK, "ping": NETWORK, "nc": NETWORK,
+    "ssh": NO_WEB, "scp": NO_WEB, "ping": NO_WEB, "nc": NO_WEB, "ftp": NO_WEB, "rsync": NO_WEB,
     "sudo": "there's no sudo here, and nothing to install: everything runs inside the workspace",
     "apt": "nothing can be installed here", "apt-get": "nothing can be installed here", "brew": "nothing can be installed here",
     "npm": "there's no Node.js here: only Python 3 with its standard library",
@@ -3589,6 +3921,7 @@ COMMANDS = {
     ":": c_true, "test": c_test, "[": c_bracket, "[[": lambda a, s: c_bracket(a, s, "]]"),
     "which": c_which, "type": c_type, "command": c_command, "help": c_help, "set": c_set, "exit": c_exit,
     "chmod": c_chmod,
+    "curl": c_curl, "wget": c_wget,
     "python": c_python, "python3": c_python, "pip": c_pip, "pip3": c_pip, "bash": c_shell, "sh": c_shell,
 }
 
@@ -3986,7 +4319,7 @@ def cut(text):
 
 @chummy.tool
 def run_command(command: str) -> str:
-    """Run commands in the workspace with Chummy's own small sandboxed shell (not bash): pipes, && || ;, several lines, redirects (> >> < 2>&1 2>/dev/null), heredocs (cat > f <<'EOF'), quotes, globs. Commands: ls cat head tail wc grep find sed awk sort uniq cut tr paste column nl tac rev diff echo printf xargs tee seq tree du mkdir cp mv rm touch cd pwd basename dirname realpath test [ md5sum sha256sum base64 date sleep, and python (scripts, -c, -m, stdin); run  help  or  COMMAND --help  for options. No variables, loops or $(…) (use xargs, awk or python), no network, no installing, nothing outside the workspace.
+    """Run commands in the workspace with Chummy's own small sandboxed shell (not bash): pipes, && || ;, several lines, redirects (> >> < 2>&1 2>/dev/null), heredocs (cat > f <<'EOF'), quotes, globs. Commands: ls cat head tail wc grep find sed awk sort uniq cut tr paste column nl tac rev diff echo printf xargs tee seq tree du mkdir cp mv rm touch cd pwd basename dirname realpath test [ md5sum sha256sum base64 date sleep curl wget, and python (scripts, -c, -m, stdin); run  help  or  COMMAND --help  for options. No variables, loops or $(…) (use xargs, awk or python), no installing, nothing outside the workspace. curl and wget work only if the user turned on this tool's internet access, and never reach this computer or the local network.
 
     command: the command line, like  grep -rn TODO . | head  or  python tests.py
     """

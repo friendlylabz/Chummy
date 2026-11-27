@@ -212,13 +212,93 @@ class RunCommand(Workspace):
         r = self.run("frobnicate x")
         self.assertIn("frobnicate: command not found", r)
         self.assertIn("help", r)
-        self.assertIn("fetch_page", self.run("curl https://example.com"))
+        self.assertIn("curl and wget", self.run("ssh host"))
         self.assertIn("can't be installed", self.run("pip install requests"))
         self.assertEqual(self.run('bash -c "echo inner"'), "inner\n[exit code 0]")
 
 
-if __name__ == "__main__":
-    unittest.main()
+class Web(Workspace):
+    """curl and wget in run_command, with Chummy's side of chummy.http faked."""
+
+    def setUp(self):
+        super().setUp()
+        self.run = load("run_command")
+        self.calls = []
+        self.allowed = True
+        self.saved = chummy._request
+
+        def fake(op, **f):
+            self.calls.append(f)
+            if not self.allowed:
+                raise chummy.ToolError("Internet access is off for this tool.")
+            import base64
+            body = b"\x89PNG\x00\xff" if f["url"].endswith(".png") else f"hi from {f['url']}".encode()
+            status = 404 if "missing" in f["url"] else 200
+            return {"ok": True, "status": status, "url": f["url"], "headers": {"content-type": "text/plain"},
+                    "body_b64": base64.b64encode(b"" if f["method"] == "HEAD" else body).decode(), "truncated": False}
+
+        chummy._request = fake
+
+    def tearDown(self):
+        chummy._request = self.saved
+        super().tearDown()
+
+    def test_curl(self):
+        self.assertEqual(self.run("curl -s https://example.com/a"), "hi from https://example.com/a\n[exit code 0]")
+        self.assertEqual(self.calls[-1]["method"], "GET")
+        self.assertTrue(self.calls[-1]["binary"])
+        # Bytes are kept when saved; -O names the file after the URL.
+        self.run("curl -sLo pic.png https://example.com/x.png")
+        with open(os.path.join(self.ws, "pic.png"), "rb") as f:
+            self.assertEqual(f.read(), b"\x89PNG\x00\xff")
+        self.run("curl -O https://example.com/dir/y.png")
+        self.assertTrue(os.path.exists(os.path.join(self.ws, "y.png")))
+        # Data makes a POST, from text, a file or stdin; --json sets the type.
+        self.put("body.json", '{"a": 1}')
+        self.run("curl -s -H 'X-Key: k' --json @body.json https://example.com/api")
+        c = self.calls[-1]
+        self.assertEqual((c["method"], c["headers"]["X-Key"], c["headers"]["Content-Type"]),
+                         ("POST", "k", "application/json"))
+        import base64
+        self.assertEqual(base64.b64decode(c["body_b64"]), b'{"a": 1}')
+        self.run("curl -s -d a=1 -d b=2 https://example.com/f")
+        self.assertEqual(base64.b64decode(self.calls[-1]["body_b64"]), b"a=1&b=2")
+        self.run("curl -s -G -d q=x https://example.com/s")
+        self.assertEqual((self.calls[-1]["method"], self.calls[-1]["url"]), ("GET", "https://example.com/s?q=x"))
+        r = self.run("curl -sI https://example.com/")
+        self.assertIn("HTTP/1.1 200", r)
+        self.assertEqual(self.calls[-1]["method"], "HEAD")
+        self.assertEqual(self.run("curl -s -o /dev/null -w '%{http_code}' https://example.com/"), "200\n[exit code 0]")
+        # -f fails on errors; pipes take curl's output.
+        self.assertIn("[exit code 22]", self.run("curl -sSf https://example.com/missing"))
+        self.assertEqual(self.run("curl -s example.com/b | wc -c"), "28\n[exit code 0]")
+        self.assertEqual(self.calls[-1]["url"], "http://example.com/b")
+        # What isn't supported says so.
+        self.assertIn("multipart", self.run("curl -F a=@x https://example.com"))
+        self.assertIn("certificates", self.run("curl -k https://example.com"))
+        self.assertIn("only GET, POST and HEAD", self.run("curl -X DELETE https://example.com"))
+
+    def test_wget(self):
+        r = self.run("wget https://example.com/files/notes.txt")
+        self.assertIn("saved notes.txt", r)
+        self.assertEqual(self.get("notes.txt"), "hi from https://example.com/files/notes.txt")
+        self.run("wget -q -O out.txt https://example.com/")
+        self.assertEqual(self.get("out.txt"), "hi from https://example.com/")
+        self.run("mkdir dl")
+        self.run("wget -q -P dl https://example.com/")
+        self.assertEqual(self.get("dl/index.html"), "hi from https://example.com/")
+        self.assertEqual(self.run("wget -qO- https://example.com/"), "hi from https://example.com/\n[exit code 0]")
+        self.assertIn("[exit code 8]", self.run("wget https://example.com/missing"))
+
+    def test_internet_off_is_explained(self):
+        self.allowed = False
+        r = self.run("curl https://example.com")
+        self.assertIn("Internet access is off for this tool.", r)
+        self.assertTrue(r.endswith("[exit code 7]"))
+        self.assertIn("Internet access is off", self.run("wget https://example.com"))
+        # Paths still can't leave the workspace.
+        self.allowed = True
+        self.assertIn("outside the workspace", self.run("curl -o /etc/x https://example.com"))
 
 
 @unittest.skipIf(os.name == "nt", "needs sh")
@@ -230,6 +310,24 @@ class RunShell(Workspace):
     def test_runs_in_the_workspace_with_exit_codes(self):
         self.put("a.txt", "hello\n")
         self.assertEqual(self.run("cat a.txt; pwd"), f"hello\n{self.ws}\n[exit code 0]")
+
+    def test_says_why_there_is_no_network(self):
+        failing = "echo 'curl: (6) Could not resolve host: example.com'; exit 6"
+        saved = os.environ.get("CHUMMY_NETWORK")
+        try:
+            for how, want in (("off", "internet access is off"), ("web", "only the Container sandbox")):
+                os.environ["CHUMMY_NETWORK"] = how
+                self.assertIn(want, self.run(failing))
+            os.environ["CHUMMY_NETWORK"] = "direct"
+            self.assertTrue(self.run(failing).endswith("[exit code 6]"))
+            # Other failures get no hint.
+            os.environ["CHUMMY_NETWORK"] = "off"
+            self.assertTrue(self.run("exit 3").endswith("[exit code 3]"))
+        finally:
+            if saved is None:
+                os.environ.pop("CHUMMY_NETWORK", None)
+            else:
+                os.environ["CHUMMY_NETWORK"] = saved
         self.assertEqual(self.run("exit 3"), "(no output)\n[exit code 3]")
         self.assertIn("no-such-program", self.run("no-such-program 2>&1"))
 
@@ -559,3 +657,7 @@ class TerminalPromptExamples(Workspace):
         self.assertEqual(self.get("plan.md"), "# Plan\n- first step\n")
         self.assertIn("new line 12", self.get("f.txt"))
         self.assertNotIn("# comment", self.get("f.txt"))
+
+
+if __name__ == "__main__":
+    unittest.main()

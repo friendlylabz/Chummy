@@ -678,7 +678,7 @@ you agree to is known before anything is installed.
 | `version` | Shown in Settings. |
 | `network` | `true` if the tool needs the internet. It still can't go online until the user allows it. |
 | `timeout` | Seconds a call may run (default 30, at most 300). |
-| `needs` | What the tool needs from the sandbox beyond Python. `["programs"]` means it starts other programs (`subprocess`), so it only runs in the Container or OpenShell sandbox; in Native it's shown greyed out and never offered. Leave it out otherwise. See [Security and threat model → Sandboxes](security.md#sandboxes-where-tools-run). |
+| `needs` | What the tool needs from the sandbox beyond Python. `["programs"]` means it starts other programs (`subprocess`), so it only runs in the Container or OpenShell sandbox; in Native it's shown greyed out and never offered. `"direct-network"` (only with `programs` and `network = true`) means those programs need a network of their own: when the tool's Internet switch is on, the Container sandbox gives the call the engine's ordinary network, which Chummy can't check. Leave it out otherwise. See [Security and threat model → Sandboxes](security.md#sandboxes-where-tools-run). |
 | `risky` | `true` for a tool that can do a lot of damage inside the workspace in one call (like `run_command`). Settings shows it as **Potentially unsafe**, switching it on asks for confirmation, and it then asks before each use until you turn that off. It is still sandboxed like every other tool. |
 
 Unknown keys in `[tool.chummy]` are errors. Other tools' tables are ignored.
@@ -751,7 +751,9 @@ to the app, which makes it only if **all** of these hold:
    redirect). The connection then goes to the addresses that were checked,
    so a second DNS answer can't point it somewhere else.
 
-Responses are cut at 2 MB. Each call has a time limit (the header's
+Requests are GET, POST or HEAD; a body can be text or bytes (`body_b64`),
+and `binary` answers carry the bytes exactly (`Response.content`), so
+downloads survive. Responses are cut at 2 MB. Each call has a time limit (the header's
 `timeout`) and a 512 MB memory limit.
 
 ### Installing
@@ -791,8 +793,8 @@ update, tools are reinstalled). Installs run one at a time.
 | `list_files` | Lists a workspace folder. | no |
 | `search_files` | Searches files' contents, like grep: plain text or a `regex`, `file_glob` (e.g. `*.py`), `ignore_case`, `context_lines`, `max_results` (default 200; at most 30,000 characters). Answers `file:line: text`. Skips `.git`, `node_modules`, build folders, hidden files and files over 2 MB. | no |
 | `find_files` | Finds files by name with a glob (`*.md`, `src/**/*.ts`), newest first, up to 1,000. | no |
-| `run_command` | **Potentially unsafe.** Runs a shell-style command line in the workspace (see below). | no |
-| `run_shell` | **Potentially unsafe.** Runs a real `sh -c` command in the workspace, with whatever programs the sandbox has. `needs = ["programs"]`: Container or OpenShell only. Output is cut to 30,000 characters and ends with the exit code; 110-second limit; no host environment. | no |
+| `run_command` | **Potentially unsafe.** Runs a shell-style command line in the workspace (see below). Its `curl` and `wget` go through `chummy.http`. | yes (off until switched on) |
+| `run_shell` | **Potentially unsafe.** Runs a real `sh -c` command in the workspace, with whatever programs the sandbox has. `needs = ["programs", "direct-network"]`: Container or OpenShell only. Output is cut to 30,000 characters and ends with the exit code; 110-second limit; no host environment. With its Internet switch on, its programs get the container engine's ordinary network (Container only; OpenShell keeps them offline). | yes (off until switched on) |
 | `calculator` | Works out arithmetic exactly (no `eval`). | no |
 | `current_time` | Today's date and the time, in any time zone (uses `tzdata`). | no |
 | `fetch_page` | Gets the readable text of a web page (uses `beautifulsoup4`). | yes |
@@ -803,7 +805,7 @@ Models are used to working in a shell, so Chummy has a command tool. It can't
 be a real bash: Chummy never runs anything outside the WebAssembly sandbox, and
 there's no shell inside it. Instead `run_command` is a small shell written in
 Python that runs in the same sandbox as every other tool, in the agent's
-workspace, with no network:
+workspace, with no network of its own:
 
 - **Syntax:** quotes (with `\` escapes), globs (`*.py`, `**/*.md`), braces
   (`{a,b}`, `{1..5}`), pipes `|`, `&&`, `||`, `;` or new lines between
@@ -827,11 +829,16 @@ workspace, with no network:
   `cd`, `pwd`, `basename`, `dirname`, `realpath`, `test`/`[`, `which`,
   `type`, `command -v`, `md5sum`/`sha1sum`/`sha256sum`/`sha512sum`,
   `base64`, `date`, `sleep`, `true`, `false`, `chmod` (does nothing),
+  `curl` (`-s -S -f -L -i -I -O -o -X GET|POST|HEAD -H -d @file
+  --data-binary --data-urlencode --json -G -u -A -e -w`) and `wget` (`-q -O
+  -P --header --post-data`), which go through `chummy.http`: only with the
+  tool's Internet switch on, never to this computer or the local network,
+  redirects followed and checked, 2 MB at most, bytes kept when saved,
   `bash -c`/`sh -c`/`bash script.sh`/`./script.sh`, and `python`/`python3`
   (a script, `-c`, `-m` or stdin), which runs in the sandbox's own Python.
   `help` lists them and `help NAME` (or `NAME --help`) shows one's options.
-  An unknown command gets exit code 127 and a pointer to `help`; `curl`,
-  `wget`, `npm`, `jq`, `vim` and the like say what to use instead. `pip`
+  An unknown command gets exit code 127 and a pointer to `help`; `ssh`,
+  `npm`, `jq`, `vim` and the like say what to use instead. `pip`
   can't install anything, and `ln` is refused (a link could point outside).
 - **Paths** stay inside the workspace; anything else is refused. `rm -r` on
   the workspace itself is refused.
