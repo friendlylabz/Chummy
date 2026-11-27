@@ -102,7 +102,8 @@ async fn builtin_file_tools_work_inside_the_workspace_only() {
     // run_shell describes itself in WebAssembly, but needs real programs.
     let rs = chummy_tools::manifest(&paths, "run_shell").unwrap();
     assert!(rs.risky);
-    assert_eq!(rs.needs, vec!["programs".to_string()]);
+    assert_eq!(rs.needs, ["direct-network", "programs"]);
+    assert!(rs.network && rc.network, "both shells ask for the internet");
     assert_eq!(rs.requires_python.as_deref(), Some(">=3.14"));
 
     let ws = tempfile::tempdir().unwrap();
@@ -566,6 +567,58 @@ async fn network_goes_through_the_app() {
         .await
         .unwrap();
     assert!(ok.text.starts_with("200 <html>"), "{ok:?}");
+
+    // run_command's curl and wget go the same way, inside WebAssembly.
+    let rc = chummy_tools::builtins()
+        .into_iter()
+        .find(|b| b.name == "run_command")
+        .unwrap();
+    install(&h, rc.source, None, None, true, &mut |_| {})
+        .await
+        .unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let shell = |cmd: String, policy: NetPolicy| {
+        let h = &h;
+        let ws = ws.path().to_path_buf();
+        async move {
+            h.run(
+                "run_command",
+                json!({ "command": cmd }),
+                Some(&ws),
+                policy,
+                vec![],
+            )
+            .await
+            .unwrap()
+        }
+    };
+    let local = || NetPolicy {
+        allowed: true,
+        refusal: String::new(),
+        allow_local: true,
+    };
+    let r = shell(format!("curl -s {url} | grep -o 'Hi there'"), local()).await;
+    assert_eq!(r.text, "Hi there\n[exit code 0]", "{r:?}");
+    let r = shell(
+        format!("wget -q -O page.html {url} && wc -c < page.html"),
+        local(),
+    )
+    .await;
+    assert_eq!(r.text, "57\n[exit code 0]", "{r:?}");
+    let r = shell(
+        format!("curl {url}"),
+        NetPolicy::off("Internet is off for this tool."),
+    )
+    .await;
+    assert!(
+        r.text.contains("Internet is off for this tool.") && r.text.ends_with("[exit code 7]"),
+        "{r:?}"
+    );
+    let r = shell(format!("curl -s {url}"), NetPolicy::on()).await;
+    assert!(
+        r.text.contains("[exit code 7]"),
+        "local addresses stay refused: {r:?}"
+    );
 }
 
 /// Downloads real packages from PyPI: run with CHUMMY_TEST_PYPI=1.

@@ -96,7 +96,13 @@ struct ChummyTable {
 /// - `programs`: it starts other programs (`subprocess`), so it only works in
 ///   a sandbox that has real programs (Container or OpenShell), not in the
 ///   WebAssembly one.
-pub const NEEDS: &[&str] = &["programs"];
+/// - `direct-network`: the programs it starts need a network of their own
+///   (git, pip, curl), not just `chummy.http`. When the tool's internet
+///   access is on, the Container sandbox gives the call the engine's
+///   ordinary network, which Chummy can't check: it can reach this computer
+///   and the local network. Needs `network = true`. Other sandboxes keep
+///   the programs offline.
+pub const NEEDS: &[&str] = &["programs", "direct-network"];
 
 /// Longest timeout a tool may ask for.
 pub const MAX_TIMEOUT_SECS: u32 = 300;
@@ -225,6 +231,14 @@ pub fn parse_meta(source: &str) -> Result<ToolMeta, ToolError> {
             "needs “{n}” isn't something Chummy knows; use {}",
             NEEDS.join(", ")
         )));
+    }
+    let direct = c.needs.iter().any(|n| n == "direct-network");
+    if direct && !(c.network && c.needs.iter().any(|n| n == "programs")) {
+        return Err(bad(
+            "needs “direct-network” is for a tool that starts programs (needs “programs”) and \
+             asks for the internet (network = true)"
+                .into(),
+        ));
     }
     let mut needs = c.needs;
     needs.sort();
@@ -370,6 +384,23 @@ import chummy
             assert_eq!(m.needs, vec!["programs".to_string()]);
             let bad = parse_meta(&GOOD.replace("network = true", "needs = [\"gpu\"]"));
             assert!(bad.unwrap_err().to_string().contains("gpu"));
+            let direct = parse_meta(&GOOD.replace(
+                "network = true",
+                "network = true\n# needs = [\"programs\", \"direct-network\"]",
+            ))
+            .unwrap();
+            assert_eq!(direct.needs, ["direct-network", "programs"]);
+            // Only with the internet asked for, and for a tool that starts programs.
+            for needs in [
+                "needs = [\"programs\", \"direct-network\"]",
+                "network = true\n# needs = [\"direct-network\"]",
+            ] {
+                let bad = parse_meta(&GOOD.replace("network = true", needs));
+                assert!(
+                    bad.unwrap_err().to_string().contains("direct-network"),
+                    "{needs}"
+                );
+            }
         }
     }
 

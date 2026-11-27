@@ -885,7 +885,7 @@ export interface ToolView {
   builtin: boolean;
   /** Names of the agents that have it switched on. */
   agents: string[];
-  /** What it needs from the sandbox beyond Python ("programs"). */
+  /** What it needs from the sandbox beyond Python ("programs", "direct-network"). */
   needs: string[];
   requires_python: string | null;
   /** Why the chosen sandbox can't run it (shown greyed out). */

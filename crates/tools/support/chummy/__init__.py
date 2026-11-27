@@ -17,6 +17,7 @@ internet only through ``chummy.http``, and only if the user allowed it.
             return str(len(f.read().split()))
 """
 
+import base64 as _base64
 import json as _json
 import os as _os
 import posixpath as _pp
@@ -88,13 +89,21 @@ def _request(op, **fields):
 
 
 class Response:
-    """A web response: ``status``, ``url`` (after redirects), ``headers``, ``text``."""
+    """A web response: ``status``, ``url`` (after redirects), ``headers``,
+    ``text``, and ``content`` (the bytes), plus ``truncated`` when only the
+    first 2 MB came."""
 
     def __init__(self, reply):
         self.status = reply.get("status", 0)
         self.url = reply.get("url", "")
         self.headers = reply.get("headers", {})
-        self.text = reply.get("text", "")
+        self.truncated = bool(reply.get("truncated"))
+        if "body_b64" in reply:
+            self.content = _base64.b64decode(reply["body_b64"])
+            self.text = self.content.decode("utf-8", "replace")
+        else:
+            self.text = reply.get("text", "")
+            self.content = self.text.encode("utf-8")
 
     @property
     def ok(self):
@@ -118,6 +127,16 @@ class _Http:
 
     def get(self, url, headers=None):
         return Response(_request("http", method="GET", url=url, headers=headers or {}))
+
+    def request(self, method, url, headers=None, body=None, binary=False):
+        """Any GET, POST or HEAD. ``body`` may be text or bytes; with
+        ``binary`` the answer's bytes are kept exactly (``content``)."""
+        fields = {"method": method.upper(), "url": url, "headers": dict(headers or {}), "binary": bool(binary)}
+        if isinstance(body, bytes):
+            fields["body_b64"] = _base64.b64encode(body).decode("ascii")
+        elif body is not None:
+            fields["body"] = body
+        return Response(_request("http", **fields))
 
     def post(self, url, data=None, json=None, headers=None):
         headers = dict(headers or {})

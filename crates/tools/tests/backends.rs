@@ -108,11 +108,24 @@ async fn call(
     network: NetPolicy,
     timeout: u64,
 ) -> Result<Result<Value, (String, String)>, ToolError> {
+    call_direct(b, tool, jail, args, network, false, timeout).await
+}
+
+async fn call_direct(
+    b: &dyn SandboxBackend,
+    tool: &Path,
+    jail: Option<&Jail>,
+    args: Value,
+    network: NetPolicy,
+    direct_network: bool,
+    timeout: u64,
+) -> Result<Result<Value, (String, String)>, ToolError> {
     b.call(SandboxCall {
         tool_dir: tool,
         mode: Mode::Call(args),
         jail,
         network,
+        direct_network,
         timeout: Duration::from_secs(timeout),
         env: vec![("TZ".into(), "UTC".into())],
     })
@@ -303,6 +316,55 @@ async fn container_runs_tools_locked_down() {
     assert!(out.starts_with("hi\nkept+changed"), "{out}");
     assert!(out.contains("host-hidden"), "the host isn't visible: {out}");
     assert!(out.ends_with("[exit code 3]"), "{out}");
+
+    // With its Internet switch on, run_shell's programs get the engine's
+    // ordinary network (here: reaching this computer through Docker's
+    // bridge); without it they have none.
+    #[cfg(target_os = "linux")]
+    {
+        let l = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            for s in l.incoming() {
+                let Ok(mut s) = s else { break };
+                let mut buf = [0u8; 1024];
+                let _ = s.read(&mut buf);
+                let _ = s.write_all(
+                    b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok",
+                );
+            }
+        });
+        // The default gateway (this computer, on Docker's bridge), from /proc/net/route.
+        let reach = format!(
+            "python3 -c \"import socket,struct\nfor l in open('/proc/net/route').read().splitlines()[1:]:\n    f=l.split()\n    if f[1]=='00000000': gw=socket.inet_ntoa(struct.pack('<L',int(f[2],16)))\ns=socket.create_connection((gw,{port}),timeout=5)\ns.sendall(b'GET / HTTP/1.0\\\\r\\\\n\\\\r\\\\n')\nprint(s.recv(100).split()[1].decode())\""
+        );
+        let ask = |direct: bool| {
+            let (b, shell, jail, reach) = (&b, &shell, &jail, reach.clone());
+            async move {
+                text(
+                    call_direct(
+                        b,
+                        shell,
+                        Some(jail),
+                        json!({ "command": reach }),
+                        NetPolicy::on(),
+                        direct,
+                        30,
+                    )
+                    .await
+                    .unwrap(),
+                )
+            }
+        };
+        let on = ask(true).await;
+        assert_eq!(on, "200\n[exit code 0]", "{on}");
+        let off = ask(false).await;
+        assert!(
+            off.ends_with("[exit code 1]") && !off.contains("200"),
+            "{off}"
+        );
+    }
 
     // A call that runs too long is stopped, and its container is gone.
     let err = call(

@@ -9,6 +9,17 @@ the version (`## v0.1.5`) in the commit you tag. Keep each line short and
 about what people notice; `scripts/release-notes.mjs v0.1.5` shows what the
 release will say.
 
+## Unreleased
+
+- **Run command** and **Run shell command** have an **Internet** switch in
+  each agent's tools, off by default, with a confirmation to turn it on.
+  Run command gets `curl` and `wget`, which go through Chummy like every
+  other tool's web requests (never this computer or your local network).
+  Run shell command's programs (git, pip, npm, curl…) get an ordinary
+  network in the Container sandbox; Chummy can't check those connections,
+  so they can also reach this computer and your local network, which the
+  confirmation says. OpenShell keeps them offline.
+
 ## v0.1.6
 
 - **Breaking:** tools are switched on per agent. Each agent has a tool

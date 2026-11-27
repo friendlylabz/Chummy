@@ -42,8 +42,8 @@
 
 <h1>Tools</h1>
 <p class="pane-sub">
-  Small Python programs agents can call. Each runs in a sandbox that can only see the agent's workspace folder, and can
-  only go online through Chummy, when you allow it.
+  Small Python programs agents can call. Each runs in a sandbox that can only see the agent's workspace folder, and
+  goes online only when you allow it, through Chummy (Run shell command's programs get an ordinary network instead).
 </p>
 
 {#if error || tools.error}
@@ -118,7 +118,7 @@
               {t.title}
               <span class="mono faint xs">{t.name}</span>
               {#if t.needs.includes("programs")}<span class="badge" title="Starts other programs, so it needs the Container or OpenShell sandbox"><Icon name="cpu" size={11} /> Programs</span>{/if}
-            {#if t.network}<span class="badge" title="Asks for internet access"><Icon name="globe" size={11} /> Internet</span>{/if}
+              {#if t.network}<span class="badge" title={t.needs.includes("direct-network") ? "Can go online if you switch its Internet on for an agent: its programs then get an ordinary network (Container sandbox), which Chummy can't check" : "Can go online through Chummy if you switch its Internet on for an agent"}><Icon name="globe" size={11} /> Internet</span>{/if}
               {#if t.risky}<span class="badge risky" title="One call can change or delete many files in the workspace"><Icon name="alert" size={11} /> Potentially unsafe</span>{/if}
             </div>
             <div class="row-sub">{t.description}</div>

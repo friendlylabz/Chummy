@@ -72,6 +72,9 @@
     apply({ ...mine, [t.name]: { ...cur, [key]: v } });
   }
 
+  /** Its programs get a network of their own when its Internet switch is on. */
+  const direct = (t: ToolView) => t.needs.includes("direct-network");
+
   const onCount = $derived(Object.keys(mine).filter((n) => tools.installed.some((t) => t.name === n)).length);
 </script>
 
@@ -132,7 +135,9 @@
         </span>
         <span class="c" role="cell">
           {#if t.network}
-            <Toggle checked={!!cur?.network} disabled={busy || !cur} label="Internet for {t.title}" onchange={(v) => set(t, "network", v)} />
+            <span title={direct(t) ? "Its programs get an ordinary network (Container sandbox): Chummy can't check where they connect" : undefined}>
+              <Toggle checked={!!cur?.network} disabled={busy || !cur} label="Internet for {t.title}" onchange={(v) => set(t, "network", v)} />
+            </span>
           {:else}
             <span class="faint xs" title="This tool doesn't use the internet">—</span>
           {/if}
@@ -148,7 +153,12 @@
       {#if !perms.network}
         Internet access is off in Security and Privacy, so every tool stays offline.
       {:else}
-        A tool that goes online can't reach this computer or your local network{perms.confirm_online_tools ? ", and asks first while “Ask before tools go online” is on" : ""}.
+        A tool that goes online does it through Chummy, which never lets it reach this computer or your local
+        network{perms.confirm_online_tools ? ", and it asks first while “Ask before tools go online” is on" : ""}.
+        {#if tools.installed.some(direct)}
+          The exception is {tools.installed.filter(direct).map((t) => t.title).join(", ")}: in the Container sandbox
+          its programs get an ordinary network that Chummy can't check.
+        {/if}
       {/if}
     </p>
   {/if}

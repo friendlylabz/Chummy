@@ -397,8 +397,10 @@ pub async fn set_permission(
             PermissionKind::Network => (
                 "Allow internet access?",
                 "Tools whose Internet switch is on for an agent (Agents) will be able to reach the \
-                 internet (never this computer or your local network). They could send content from \
-                 an agent's workspace to websites.\n\n\
+                 internet. They could send content from an agent's workspace to websites. Their web \
+                 requests go through Chummy, which never lets them reach this computer or your local \
+                 network; the one exception is Run shell command in the Container sandbox, whose \
+                 programs get an ordinary network when its Internet switch is on.\n\n\
                  This doesn't affect the model connections you set up in Models; those are separate.",
                 "Allow internet access",
             ),

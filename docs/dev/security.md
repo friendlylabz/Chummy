@@ -56,8 +56,8 @@ A short map of the protections and where they live in the code.
 | **Folder jail** | Each agent sees one folder the user picked and confirmed in a native dialog. Whole drives, the home folder, system and hidden settings folders and Chummy's own folder are always refused. File access goes through a `cap-std` handle, so symlinks, `..` and junctions can't escape. | `crates/sandbox` (`protected.rs`, `jail.rs`, `workspace.rs`); `commands/agents.rs` hands the UI a one-time token, never a path. |
 | **Off by default** | Tools, internet access, each tool and each tool's internet access start off. Turning one on shows a native confirmation from Rust. | `commands/agents.rs`, `commands/tools.rs`, `dialogs.rs` |
 | **Every level must agree** | A tool runs only if it's on app-wide, for the agent and in the block; going online also needs the app's, the tool's, the agent's and the block's switch. Loops can only narrow this. | `crates/runner` (`AgentHost::tools`, `net_policy`), `crates/flow` (`ToolSwitches`) |
-| **Sandboxed tools only** | Tools are Python and run only in a sandbox backend: Native (CPython for WASI under Wasmtime, with memory and time limits), Container (locked-down Docker/Podman, approved image ID, no network) or OpenShell. There is no unsandboxed mode and no script block. | `crates/tools/src/sandbox/`, [Sandboxes](#sandboxes-where-tools-run) |
-| **Web access through Chummy** | Tools have no network of their own. Requests go through `NetPolicy`: no private addresses, DNS pinned, redirects re-checked, size caps. | `crates/tools/src/net.rs` |
+| **Sandboxed tools only** | Tools are Python and run only in a sandbox backend: Native (CPython for WASI under Wasmtime, with memory and time limits), Container (locked-down Docker/Podman, approved image ID, no network unless Run shell command's Internet switch is on) or OpenShell. There is no unsandboxed mode and no script block. | `crates/tools/src/sandbox/`, [Sandboxes](#sandboxes-where-tools-run) |
+| **Web access through Chummy** | Tools have no network of their own. Requests go through `NetPolicy`: no private addresses, DNS pinned, redirects re-checked, size caps. The one exception, said in its confirmation: a tool that `needs = ["direct-network"]` (Run shell command) gets the container engine's ordinary network when its Internet switch is on, in the Container sandbox only. | `crates/tools/src/net.rs`, [The shell's network](#the-shells-network) |
 | **Risky tools ask** | Tools marked `risky` (e.g. `run_command`, `run_shell`) show "Potentially unsafe", confirm when switched on and can ask before each use. | tool headers, `commands/tools.rs`, `AskBroker` |
 | **One way to ask** | Questions, tool approvals and budget asks from chats, tests and jobs all go through one broker; answers are checked. | `crates/scheduler/src/asks.rs`, `commands/asks.rs` |
 | **Secrets in the keychain** | API keys and the log key live only in the OS keychain. URLs with credentials are refused; plain `http://` to a public host warns and asks. | `crates/store/src/secrets.rs`, `crates/llm/src/config.rs`, `commands/providers.rs` |
@@ -99,7 +99,9 @@ to Native never asks.
   Chummy over the tool's stdin/stdout, and Chummy decides each one with the
   same checks everywhere: the Internet switch in Security and Privacy, the
   tool's and the agent's switches, the block's switch, "ask before tools go
-  online", and no addresses on this computer or the local network.
+  online", and no addresses on this computer or the local network. (One
+  exception, Run shell command in the Container sandbox: see
+  [The shell's network](#the-shells-network).)
 - The tool gets **no host environment variables**, only what Chummy passes
   (`TZ`).
 - Tools keep **one format** (a PEP 723 Python file, see [File formats → Tools](file-formats.md#tools)) and
@@ -112,6 +114,9 @@ A tool says what it needs in its header:
 
 - `needs = ["programs"]`: it starts other programs, so it only works in
   Container or OpenShell (the built-in `run_shell` is one).
+- `needs = ["direct-network"]` (with `programs` and `network = true`): the
+  programs it starts need a network of their own. See
+  [The shell's network](#the-shells-network).
 - `requires-python`: the sandbox's Python must satisfy it (the built-ins need
   3.14 or newer, so a container image needs Python 3.14+).
 
@@ -133,7 +138,8 @@ preopened; WASI has no sockets and no way to start processes.
 
 Each call is `docker run --rm -i` (or `podman run`) with:
 
-- `--network none`, `--read-only` root filesystem and a 256 MB `/tmp`;
+- `--network none` (except a `direct-network` call, below), `--read-only`
+  root filesystem and a 256 MB `/tmp`;
 - `--cap-drop ALL`, `--security-opt no-new-privileges`, `--ipc none`,
   `--pids-limit 256`, memory and CPU limits (Settings), `--log-driver none`
   (the engine keeps no copy of the tool's output);
@@ -319,14 +325,48 @@ without noticing.
 - Calls still ask first as before (tools set to ask, and online calls when
   “Ask before tools go online” is on).
 
+### The shell's network
+
+Run shell command (`run_shell`) starts real programs, and programs like git,
+pip, npm or curl open their own connections, which can't go through
+`chummy.http`. So its header says `needs = ["programs", "direct-network"]`
+and `network = true`, and its **Internet** switch works differently from
+every other tool's:
+
+- It starts **off**, like every tool's Internet switch. Turning it on asks
+  natively, and that confirmation says plainly what's different: Chummy
+  can't check these connections, so the programs can reach **this computer
+  and the local network** as well as the internet, and could send what's in
+  the workspace anywhere.
+- It only matters when every other level agrees too (Security and Privacy's
+  Internet switch, the agent's switchboard, the block), the same
+  `NetPolicy` as any tool; "Ask before tools go online" still makes each use
+  wait for an OK.
+- When all of that allows it, the **Container** sandbox runs that call
+  without `--network none`, on the engine's ordinary network (Docker's
+  bridge, Podman's default). Everything else stays: read-only root, no
+  capabilities, the same three mounts, limits, the approved image.
+- **OpenShell** keeps the programs offline: its network rules allow listed
+  hosts for listed programs, and Chummy doesn't write any. **Native** can't
+  run programs at all.
+- The tool is told which it got (`CHUMMY_NETWORK` = `direct`, `web` or
+  `off`), so when a program fails for want of a network the output says why.
+
+Tested with real Docker: with the switch on, a program in the call reached a
+server on this computer through Docker's bridge; with it off, the same call
+couldn't connect.
+
 ## The command tool (potentially unsafe)
 
 `run_command` gives the model a shell-style command line, because models are
 used to working that way. It is **not** a real shell and never runs anything
 on your computer: it is a small shell written in Python that runs in the same
-WebAssembly sandbox as every other tool, in the agent's folder, with no
-network (`python` runs in the sandbox's own interpreter; `pip` can't install
-anything). Paths outside the folder are refused, and so is deleting the
+WebAssembly sandbox as every other tool, in the agent's folder (`python`
+runs in the sandbox's own interpreter; `pip` can't install anything). Its
+`curl` and `wget` are Python too: they go through `chummy.http`, so they only
+work when its Internet switch is on (off by default, confirmed natively) and
+every other level allows it, never reach this computer or the local network,
+and stop at 2 MB. ssh, ping and the like aren't there. Paths outside the folder are refused, and so is deleting the
 folder itself. Its commands (sed, awk, find, xargs and the rest) are Python
 too, run every path they touch through the same check, and can only run
 other commands of this small shell: `awk` has no `system()` or pipes, `xargs`
