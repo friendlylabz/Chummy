@@ -1,92 +1,56 @@
-//! Where everything meets: what people send through channels (the terminal
-//! and Matrix), the session's updates, questions waiting, and jobs
-//! finishing. One task handles them in order.
+//! Where everything meets: what people send through channels (the
+//! terminal, Matrix and Telegram), the session's updates, questions
+//! waiting, and jobs finishing. One task handles them in order.
 //!
-//! A message from a person can only start a run of the agent's own loop, or
-//! carry out a command. Commands come only from what people send, never
-//! from what an agent says.
+//! How conversations behave is `chummy_channel::Conversations`, shared with
+//! the app; what's here is chummyd's: the terminal (a channel, and where the
+//! operator confirms Matrix verifications, lets people in to Telegram bots
+//! and stops chummyd), and the bundle's rules ([`DaemonHub`]).
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::sync::Arc;
 
-use chummy_channel::{Command, HELP, Line, RunView};
-use chummy_flow::{Answer, AskKind};
-use chummy_scheduler::{AskEvent, Job, Manager, Pending, RecordStatus, RunKind, RunRecord};
-use chummy_session::{Platform, Update};
+use chummy_channel::{
+    Approvals, ChannelOutlet, Conv, Conversations, FromChannel, Hub, Left, Line, Out, Outlet,
+    ToChannel,
+};
+use chummy_scheduler::{AskEvent, Job, JobView, Manager, RunRecord};
+use chummy_session::Update;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::jobs::DaemonJobs;
-use crate::link::{FromMatrix, RoomLink, ToMatrix, matrix_chat};
 use crate::platform::DaemonPlatform;
-use crate::saver::Saver;
+use crate::saver::{Kept, Saver};
 
 /// The terminal's conversation with each agent.
 pub const TERMINAL_CHAT: &str = "terminal";
-
-/// What an approval asked where approvals aren't allowed is answered with.
-pub const NOT_HERE: &str = "approvals aren't allowed here";
+/// The channels' ids.
+pub const TERMINAL: &str = "terminal";
+pub const MATRIX: &str = "matrix";
 
 pub enum Input {
     /// A line typed in the terminal.
     Line(String),
     /// The terminal closed.
     Eof,
-    #[cfg_attr(not(feature = "matrix"), allow(dead_code))]
-    Matrix(FromMatrix),
+    /// From a channel (by id).
+    #[cfg_attr(not(any(feature = "matrix", feature = "telegram")), allow(dead_code))]
+    Channel(String, FromChannel),
+    /// Someone waits to be let in to a Telegram bot: pairing `n`.
+    #[cfg_attr(not(feature = "telegram"), allow(dead_code))]
+    Pairing {
+        channel: String,
+        n: u32,
+    },
+    /// Pairing (or verification) `n` doesn't wait any more.
+    #[cfg_attr(not(any(feature = "matrix", feature = "telegram")), allow(dead_code))]
+    Over(u32),
     Update(Box<Update>),
     Ask(AskEvent),
     JobFinished(Box<(Job, RunRecord)>),
     /// chummyd is shutting down: take no more messages.
     ShuttingDown,
-}
-
-/// A conversation: someone talking to an agent through a channel.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum Conv {
-    Terminal(String),
-    Matrix(RoomLink),
-}
-
-impl Conv {
-    fn agent(&self) -> &str {
-        match self {
-            Conv::Terminal(a) => a,
-            Conv::Matrix(r) => &r.agent,
-        }
-    }
-
-    fn chat(&self) -> String {
-        match self {
-            Conv::Terminal(_) => TERMINAL_CHAT.into(),
-            Conv::Matrix(r) => matrix_chat(&r.user),
-        }
-    }
-
-    fn title(&self) -> String {
-        match self {
-            Conv::Terminal(_) => "Terminal".into(),
-            Conv::Matrix(r) => r.user.clone(),
-        }
-    }
-}
-
-pub struct Router {
-    p: DaemonPlatform,
-    jobs: Manager<DaemonJobs>,
-    saver: Arc<Saver>,
-    terminal: bool,
-    /// The agent the terminal talks to.
-    current: String,
-    /// The Matrix channel, when there is one.
-    matrix: Option<UnboundedSender<ToMatrix>>,
-    /// Its rooms, once they're set up.
-    rooms: Vec<RoomLink>,
-    /// Runs being shown, by run id, with where they're shown.
-    views: HashMap<String, (Conv, RunView)>,
-    accepting: bool,
-    /// Asked to stop (`/quit`).
-    quit: Arc<tokio::sync::Notify>,
 }
 
 fn print(who: &str, text: &str) {
@@ -106,33 +70,58 @@ pub fn note(text: &str) {
     print("chummyd", text);
 }
 
-impl Router {
-    pub fn new(
-        p: DaemonPlatform,
-        jobs: Manager<DaemonJobs>,
-        saver: Arc<Saver>,
-        matrix: Option<UnboundedSender<ToMatrix>>,
-        quit: Arc<tokio::sync::Notify>,
-    ) -> Self {
-        let terminal = p.0.bundle.channels.terminal.enabled;
-        let current =
-            p.0.bundle
-                .agents
-                .first()
-                .map(|a| a.id.clone())
-                .unwrap_or_default();
-        Self {
-            p,
-            jobs,
-            saver,
-            terminal,
-            current,
-            matrix,
-            rooms: vec![],
-            views: HashMap::new(),
-            accepting: true,
-            quit,
+/// The terminal as a channel: everything printed.
+struct TerminalOutlet;
+
+impl Outlet for TerminalOutlet {
+    fn send(&self, _to: &Conv, out: Out) {
+        match out {
+            Out::Notice(t) => note(&t),
+            Out::Text { from, text } => print(&from, &text),
+            Out::Run { from, lines, .. } => {
+                for l in lines {
+                    match l {
+                        Line::Reply(t) => print(&from, &t),
+                        Line::Notice(t) => print(&from, &format!("({})", t.trim())),
+                        Line::Figures(f) => {
+                            let mut out = std::io::stdout().lock();
+                            let _ = writeln!(out, "  · {f}");
+                        }
+                        // Shown when asked, and typed by the person.
+                        Line::Question(_) | Line::Answer(_) => {}
+                    }
+                }
+            }
+            Out::Asked {
+                from,
+                text,
+                question,
+                ..
+            } => {
+                if question {
+                    print(&from, &format!("{text} (your next message is the answer)"));
+                } else {
+                    print(&from, &format!("{text}\n/allow, or /deny [reason]"));
+                }
+            }
+            Out::Started { .. } | Out::Closed { .. } => {}
         }
+    }
+}
+
+/// The bundle's rules for conversations.
+pub struct DaemonHub {
+    p: DaemonPlatform,
+    jobs: Manager<DaemonJobs>,
+    saver: Arc<Saver>,
+    help: String,
+}
+
+impl Hub for DaemonHub {
+    type P = DaemonPlatform;
+
+    fn platform(&self) -> &DaemonPlatform {
+        &self.p
     }
 
     fn agent_name(&self, id: &str) -> String {
@@ -144,122 +133,195 @@ impl Router {
             .unwrap_or_else(|| id.to_string())
     }
 
-    fn to_matrix(&self, m: ToMatrix) {
-        if let Some(tx) = &self.matrix {
-            let _ = tx.send(m);
-        }
-    }
-
-    /// chummyd saying something in a conversation.
-    fn say(&self, to: &Conv, text: &str) {
-        match to {
-            Conv::Terminal(_) => {
-                if self.terminal {
-                    note(text)
-                }
-            }
-            Conv::Matrix(r) => self.to_matrix(ToMatrix::Notice {
-                room: r.room.clone(),
-                text: text.into(),
-            }),
-        }
-    }
-
-    fn terminal_conv(&self) -> Conv {
-        Conv::Terminal(self.current.clone())
-    }
-
-    /// Who a job reports to in Matrix.
-    fn job_room(&self, job_id: &str, agent: &str) -> Option<&RoomLink> {
-        let user = self
+    /// Over channels only if the bundle allows it for the agent; otherwise
+    /// refused (chummyd has no other place to answer).
+    fn approvals(&self, agent: &str, _channel: &str) -> Approvals {
+        if self
             .p
+            .0
+            .bundle
+            .agent(agent)
+            .is_some_and(|a| a.channel_approvals)
+        {
+            Approvals::Here
+        } else {
+            Approvals::Refuse
+        }
+    }
+
+    fn refuse_unseen_approvals(&self) -> bool {
+        true
+    }
+
+    fn jobs(&self, agent: &str) -> Vec<JobView> {
+        self.jobs
+            .overview()
+            .jobs
+            .into_iter()
+            .filter(|j| j.job.agent == agent)
+            .collect()
+    }
+
+    fn run_job(&self, id: &str) -> Result<(), String> {
+        self.jobs.run_now(id)
+    }
+
+    fn job_reports(&self, job: &str) -> Vec<(String, String)> {
+        self.p
             .0
             .bundle
             .channels
             .matrix
-            .as_ref()?
-            .report_to
-            .get(job_id)?;
-        self.rooms
-            .iter()
-            .find(|r| &r.user == user && r.agent == agent)
+            .as_ref()
+            .and_then(|m| m.report_to.get(job))
+            .map(|user| vec![(MATRIX.to_string(), user.clone())])
+            .unwrap_or_default()
     }
 
-    /// The Matrix room a chat belongs to.
-    fn chat_room(&self, agent: &str, chat: &str) -> Option<&RoomLink> {
-        self.rooms
-            .iter()
-            .find(|r| r.agent == agent && matrix_chat(&r.user) == chat)
+    fn console_help(&self) -> &str {
+        &self.help
     }
 
-    /// Where a question shows (and can be answered).
-    fn ask_convs(&self, q: &Pending) -> Vec<Conv> {
-        let Some(agent) = q.origin.agent_id.as_deref() else {
-            return vec![];
-        };
-        let mut out = vec![];
-        match q.origin.kind {
-            RunKind::Chat => match q.origin.chat_id.as_deref() {
-                Some(TERMINAL_CHAT) if self.terminal => out.push(Conv::Terminal(agent.into())),
-                Some(chat) => {
-                    if let Some(r) = self.chat_room(agent, chat) {
-                        out.push(Conv::Matrix(r.clone()));
-                    }
-                }
-                None => {}
-            },
-            RunKind::Job => {
-                if self.terminal {
-                    out.push(Conv::Terminal(agent.into()));
-                }
-                if let Some(r) = q
-                    .origin
-                    .job_id
-                    .as_deref()
-                    .and_then(|j| self.job_room(j, agent))
-                {
-                    out.push(Conv::Matrix(r.clone()));
-                }
-            }
-            RunKind::Test => {}
+    fn changed(&self, now: bool) {
+        if now {
+            self.saver.save_now();
+        } else {
+            self.p.mark_dirty();
         }
-        out
+    }
+}
+
+/// The terminal's own commands for the channels.
+#[derive(Debug, PartialEq)]
+enum Op {
+    /// `/pair`: a code for the current agent's Telegram bot.
+    Code,
+    /// `/pair [n] yes|no`.
+    Answer(Option<u32>, bool),
+    /// `/people`: who may talk to the current agent's bot.
+    People,
+    /// `/unpair <id>`.
+    Remove(String),
+}
+
+fn parse_op(text: &str) -> Option<Result<Op, String>> {
+    let t = text.trim();
+    let (first, rest) = t.split_once(char::is_whitespace).unwrap_or((t, ""));
+    let words: Vec<&str> = rest.split_whitespace().collect();
+    let answer = |w: &str| match w.to_lowercase().as_str() {
+        "yes" | "y" => Some(true),
+        "no" | "n" => Some(false),
+        _ => None,
+    };
+    let usage = || {
+        Err("Say /pair to make a code, then /pair yes or /pair no (with its number when several wait: /pair 2 yes).".to_string())
+    };
+    Some(match first {
+        "/pair" => match words.as_slice() {
+            [] => Ok(Op::Code),
+            [w] => answer(w)
+                .map(|a| Op::Answer(None, a))
+                .map_or_else(usage, Ok),
+            [n, w] => match (n.parse::<u32>(), answer(w)) {
+                (Ok(n), Some(a)) => Ok(Op::Answer(Some(n), a)),
+                _ => usage(),
+            },
+            _ => usage(),
+        },
+        "/people" if words.is_empty() => Ok(Op::People),
+        "/unpair" => match words.as_slice() {
+            [id] => Ok(Op::Remove(id.to_string())),
+            _ => Err("Say /unpair <id>, with the id /people shows.".into()),
+        },
+        _ => return None,
+    })
+}
+
+pub struct Router {
+    convs: Conversations<DaemonHub>,
+    terminal: bool,
+    /// The agent the terminal talks to.
+    current: String,
+    /// The channels running (Matrix, Telegram bots), by id.
+    channels: BTreeMap<String, UnboundedSender<ToChannel>>,
+    /// What each keeps (for `/people`).
+    #[cfg_attr(not(feature = "telegram"), allow(dead_code))]
+    kept: Kept,
+    /// Pairings waiting, and their channel.
+    pairings: BTreeMap<u32, String>,
+    /// Asked to stop (`/quit`).
+    quit: Arc<tokio::sync::Notify>,
+}
+
+impl Router {
+    pub fn new(
+        p: DaemonPlatform,
+        jobs: Manager<DaemonJobs>,
+        saver: Arc<Saver>,
+        channels: BTreeMap<String, UnboundedSender<ToChannel>>,
+        kept: Kept,
+        quit: Arc<tokio::sync::Notify>,
+    ) -> Self {
+        let terminal = p.0.bundle.channels.terminal.enabled;
+        let current =
+            p.0.bundle
+                .agents
+                .first()
+                .map(|a| a.id.clone())
+                .unwrap_or_default();
+        let mut help =
+            "\n/agents          the agents you can talk to\n/agent <name>    talk to another agent"
+                .to_string();
+        if !p.0.bundle.channels.telegram.is_empty() {
+            help.push_str("\n/pair            a code to let someone talk to this agent's Telegram bot\n/people          who may talk to it\n/unpair <id>     stop someone talking to it");
+        }
+        help.push_str("\n/quit            stop chummyd");
+        let mut convs = Conversations::new(DaemonHub {
+            p,
+            jobs,
+            saver,
+            help,
+        });
+        if terminal {
+            convs.add_channel(TERMINAL, Arc::new(TerminalOutlet));
+        }
+        for (id, tx) in &channels {
+            convs.add_channel(id, Arc::new(ChannelOutlet(tx.clone())));
+        }
+        Self {
+            convs,
+            terminal,
+            current,
+            channels,
+            kept,
+            pairings: BTreeMap::new(),
+            quit,
+        }
     }
 
-    /// Whether a question belongs to a conversation: its runs, or (for the
-    /// terminal, and the person a job reports to) its agent's jobs.
-    fn mine(&self, to: &Conv, q: &Pending) -> bool {
-        q.origin.agent_id.as_deref() == Some(to.agent())
-            && self.ask_convs(q).iter().any(|c| match (c, to) {
-                (Conv::Terminal(_), Conv::Terminal(_)) => true,
-                (Conv::Matrix(a), Conv::Matrix(b)) => a.room == b.room,
-                _ => false,
-            })
+    fn agent_name(&self, id: &str) -> String {
+        self.convs.hub().agent_name(id)
     }
 
-    /// Approvals may be answered over channels for this agent.
-    fn approvals_allowed(&self, agent: Option<&str>) -> bool {
-        agent
-            .and_then(|a| self.p.0.bundle.agent(a))
-            .is_some_and(|a| a.channel_approvals)
+    fn terminal_conv(&self) -> Conv {
+        Conv {
+            channel: TERMINAL.into(),
+            place: String::new(),
+            agent: self.current.clone(),
+            chat: TERMINAL_CHAT.into(),
+            who: "Terminal".into(),
+            console: true,
+        }
     }
 
-    pub fn greet(&self) {
+    pub fn greet(&mut self) {
         if self.terminal {
             note(&format!(
                 "Talking to {}. Type a message, or /help.",
                 self.agent_name(&self.current)
             ));
-            self.say_paused(&self.terminal_conv());
-        }
-    }
-
-    fn say_paused(&self, to: &Conv) {
-        if self.p.session().is_paused(to.agent(), &to.chat()) {
-            self.say(
-                to,
-                "This conversation has a paused run: /resume carries it on, /discard throws it away.",
-            );
+            let c = self.terminal_conv();
+            self.convs.set_convs(TERMINAL, vec![c]);
         }
     }
 
@@ -272,256 +334,179 @@ impl Router {
                         "The terminal closed; chummyd keeps running. Stop it with Ctrl-C (or SIGTERM).",
                     );
                 }
-                if self.matrix.is_some() {
+                if !self.channels.is_empty() {
                     chummy_log::system::warn(
-                        "matrix",
-                        "chummyd has no terminal (standard input closed), so Matrix verifications can't be confirmed until it runs with one",
+                        "app",
+                        "chummyd has no terminal (standard input closed), so Matrix verifications can't be confirmed, nor people let in to Telegram bots, until it runs with one",
                     );
                 }
             }
-            Input::Matrix(FromMatrix::Ready { rooms }) => {
-                // Once: Matrix says it again each time it reconnects.
-                let first = self.rooms.is_empty();
-                self.rooms = rooms;
-                if first {
-                    for r in self.rooms.clone() {
-                        self.say_paused(&Conv::Matrix(r));
-                    }
-                }
+            Input::Channel(id, FromChannel::Ready { convs }) => self.convs.set_convs(&id, convs),
+            Input::Channel(
+                _,
+                FromChannel::Message {
+                    conv,
+                    text,
+                    answers,
+                },
+            ) => {
+                self.convs.receive(&conv, &text, answers);
             }
-            Input::Matrix(FromMatrix::Message {
-                room,
-                text,
-                answers,
-            }) => self.matrix_message(room, text.trim(), answers),
-            Input::Update(u) => self.update(&u),
-            Input::Ask(AskEvent::Asked { pending }) => self.asked(&pending),
-            Input::Ask(AskEvent::Closed { id, .. }) => {
-                self.to_matrix(ToMatrix::Closed { ask_id: id })
+            Input::Pairing { channel, n } => {
+                self.pairings.insert(n, channel);
             }
-            Input::JobFinished(f) => self.job_finished(&f.0, &f.1),
-            Input::ShuttingDown => self.accepting = false,
+            Input::Over(n) => {
+                self.pairings.remove(&n);
+            }
+            Input::Update(u) => self.convs.update(&u),
+            Input::Ask(AskEvent::Asked { pending }) => self.convs.asked(&pending),
+            Input::Ask(AskEvent::Closed { id, .. }) => self.convs.closed(&id),
+            Input::JobFinished(f) => self.convs.job_finished(&f.0, &f.1),
+            Input::ShuttingDown => self.convs.stop_accepting(),
         }
     }
 
-    /// A line from the terminal. The operator's `/verify` and `/quit` work
-    /// even when the terminal isn't a channel.
+    /// A line from the terminal. The operator's `/verify`, `/pair`,
+    /// `/people`, `/unpair` and `/quit` work even when the terminal isn't a
+    /// channel.
     fn line(&mut self, text: &str) {
         if text.is_empty() {
             return;
         }
-        if let Some(v) = crate::link::parse_verify(text) {
+        if let Some(v) = chummy_channel::parse_verify(text) {
             match v {
-                Ok((n, matches)) if self.matrix.is_some() => {
-                    self.to_matrix(ToMatrix::Verify { n, matches })
-                }
-                Ok(_) => note("There's no Matrix channel."),
+                Ok((n, yes)) => match self.channels.get(MATRIX) {
+                    Some(m) => {
+                        let _ = m.send(ToChannel::Answer { n, yes });
+                    }
+                    None => note("There's no Matrix channel."),
+                },
                 Err(e) => note(&e),
             }
             return;
         }
-        let parsed = chummy_channel::parse(text);
-        if !self.terminal {
-            if matches!(parsed, Some(Ok(Command::Quit))) {
-                self.command(&self.terminal_conv(), Command::Quit);
-            } else {
-                note(
-                    "The terminal only takes /verify and /quit: it isn't a channel in this bundle.",
-                );
+        if let Some(op) = parse_op(text) {
+            match op {
+                Ok(op) => self.op(op),
+                Err(e) => note(&e),
             }
             return;
         }
-        if !self.accepting {
-            note("chummyd is shutting down.");
+        if !self.terminal {
+            if matches!(
+                chummy_channel::parse(text),
+                Some(Ok(chummy_channel::Command::Quit))
+            ) {
+                self.left(Left::Quit);
+            } else {
+                note(
+                    "The terminal only takes /verify, /pair, /people, /unpair and /quit: it isn't a channel in this bundle.",
+                );
+            }
             return;
         }
         let to = self.terminal_conv();
-        match parsed {
-            None => self.message(&to, text, None),
-            Some(Err(e)) => note(&e),
-            Some(Ok(c)) => self.command(&to, c),
+        if let Some(l) = self.convs.receive(&to, text, None) {
+            self.left(l);
         }
     }
 
-    fn matrix_message(&mut self, room: RoomLink, text: &str, answers: Option<String>) {
-        if text.is_empty() {
-            return;
-        }
-        let to = Conv::Matrix(room);
-        if !self.accepting {
-            self.say(&to, "chummyd is shutting down.");
-            return;
-        }
-        match chummy_channel::parse(text) {
-            None => self.message(&to, text, answers),
-            Some(Err(e)) => self.say(&to, &e),
-            Some(Ok(Command::Agents | Command::Agent(_) | Command::Quit)) => self.say(
-                &to,
-                "That's for the terminal: each room here talks to one agent.",
-            ),
-            Some(Ok(c)) => self.command(&to, c),
-        }
-    }
-
-    fn ensure_chat(&self, to: &Conv) {
-        let _ = self.p.0.chats.ensure(to.agent(), &to.chat(), &to.title());
-    }
-
-    fn message(&mut self, to: &Conv, text: &str, answers: Option<String>) {
-        // A question waiting for this conversation: this is the answer.
-        let waiting: Vec<Pending> = self
-            .p
-            .session()
-            .asks
-            .pending()
-            .into_iter()
-            .filter(|q| self.mine(to, q) && matches!(q.ask.kind, AskKind::Question))
-            .collect();
-        let q = match answers {
-            Some(id) => waiting.iter().find(|q| q.id == id),
-            // The terminal answers them in turn; in Matrix, by replying when
-            // several wait.
-            None if matches!(to, Conv::Terminal(_)) || waiting.len() == 1 => waiting.first(),
-            None if waiting.len() > 1 => {
-                self.say(
-                    to,
-                    "Several questions are waiting: reply to the one you're answering.",
-                );
-                return;
-            }
-            None => None,
+    /// `/pair`, `/people`, `/unpair`: for the current agent's Telegram bot
+    /// (answers go to whichever bot the pairing is for).
+    fn op(&mut self, op: Op) {
+        let agent = self.agent_name(&self.current);
+        let id = crate::channels::telegram_id(&self.current);
+        let bot = self.channels.get(&id).cloned();
+        let no_bot = || {
+            note(&format!(
+                "{agent} has no Telegram bot in this bundle (/agent switches agents)."
+            ))
         };
-        if let Some(q) = q {
-            if let Err(e) = chummy_session::answer(&self.p, &q.id, Answer::Text(text.into())) {
-                self.say(to, &e);
-            }
-            return;
-        }
-        self.ensure_chat(to);
-        match chummy_session::send_message(&self.p, to.agent(), &to.chat(), text) {
-            Ok(run) => self.track(to, run),
-            Err(e) if e.contains("still working") => self.say(
-                to,
-                "Busy with your last message: /stop it, or wait for the reply.",
-            ),
-            Err(e) => self.say(to, &e),
-        }
-    }
-
-    /// Shows a run in its conversation as it goes.
-    fn track(&mut self, to: &Conv, run: String) {
-        if let Conv::Matrix(r) = to {
-            self.to_matrix(ToMatrix::Started {
-                run_id: run.clone(),
-                room: r.room.clone(),
-            });
-        }
-        self.views
-            .insert(run.clone(), (to.clone(), RunView::new(run)));
-    }
-
-    /// The run going on in a conversation, if any.
-    fn running(&self, to: &Conv) -> Option<String> {
-        let chat = to.chat();
-        self.p
-            .session()
-            .runs()
-            .into_iter()
-            .find(|r| {
-                r.agent_id.as_deref() == Some(to.agent()) && r.chat_id.as_deref() == Some(&chat)
-            })
-            .map(|r| r.run_id)
-    }
-
-    fn approval(&self, to: &Conv) -> Option<Pending> {
-        self.p
-            .session()
-            .asks
-            .pending()
-            .into_iter()
-            .find(|q| self.mine(to, q) && !matches!(q.ask.kind, AskKind::Question))
-    }
-
-    fn command(&mut self, to: &Conv, c: Command) {
-        let session = self.p.session();
-        let (agent, chat) = (to.agent().to_string(), to.chat());
-        match c {
-            Command::Stop => match self.running(to) {
-                Some(r) => {
-                    session.stop(&r);
-                    self.say(to, "Stopping.");
-                }
-                None => self.say(to, "Nothing is running."),
-            },
-            Command::Pause => match self.running(to) {
-                Some(r) => match chummy_session::pause_run(&self.p, &r) {
-                    Ok(()) => self.say(to, "Pausing after this step…"),
-                    Err(e) => self.say(to, &e),
-                },
-                None => self.say(to, "Nothing is running."),
-            },
-            Command::Resume => match chummy_session::resume_run(&self.p, &agent, &chat) {
-                Ok(run) => {
-                    self.say(to, "Carrying on where it stopped.");
-                    self.track(to, run);
-                }
-                Err(e) => self.say(to, &e),
-            },
-            Command::Discard => {
-                if !session.is_paused(&agent, &chat) {
-                    self.say(to, "There's no paused run.");
-                } else {
-                    match chummy_session::discard_paused(&self.p, &agent, &chat) {
-                        Ok(()) => self.say(to, "The paused run was discarded."),
-                        Err(e) => self.say(to, &e),
+        match op {
+            Op::Code => {
+                let Some(bot) = bot else { return no_bot() };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                let _ = bot.send(ToChannel::NewCode(tx));
+                tokio::spawn(async move {
+                    match rx.await {
+                        Ok(Ok(c)) => note(&format!(
+                            "Pairing code for {agent}'s Telegram bot: {}\nAsk the person to send /start {} to the bot within 10 minutes; then you'll be asked here whether to let them in.",
+                            c.code, c.code
+                        )),
+                        Ok(Err(e)) => note(&e),
+                        Err(_) => note("The Telegram bot isn't running."),
                     }
-                }
+                });
             }
-            Command::New => {
-                if self.running(to).is_some() {
-                    self.say(to, "Busy: /stop the run first.");
-                } else if session.is_paused(&agent, &chat) {
-                    self.say(
-                        to,
-                        "This conversation has a paused run: /resume or /discard it first.",
-                    );
-                } else {
-                    self.ensure_chat(to);
-                    match self.p.0.chats.clear(&agent, &chat) {
-                        Ok(()) => {
-                            self.p.mark_dirty();
-                            self.say(to, "Started a fresh conversation.");
-                        }
-                        Err(e) => self.say(to, &e),
+            Op::Answer(n, yes) => {
+                let n = match n {
+                    Some(n) => n,
+                    None if self.pairings.len() == 1 => *self.pairings.keys().next().expect("one"),
+                    None if self.pairings.is_empty() => return note("No pairing is waiting."),
+                    None => {
+                        return note(&format!(
+                            "Several pairings are waiting ({}): say which, like /pair {} yes.",
+                            self.pairings
+                                .keys()
+                                .map(|k| k.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            self.pairings.keys().next().expect("some")
+                        ));
                     }
+                };
+                match self.pairings.get(&n).and_then(|c| self.channels.get(c)) {
+                    Some(ch) => {
+                        let _ = ch.send(ToChannel::Answer { n: Some(n), yes });
+                    }
+                    None => note(&format!("There's no pairing {n} waiting.")),
                 }
             }
-            Command::Status => self.status(to),
-            Command::Jobs => self.list_jobs(to),
-            Command::Run(name) => self.run_job(to, &name),
-            Command::Allow | Command::Deny(_) => {
-                let Some(q) = self.approval(to) else {
-                    self.say(to, "Nothing is waiting for an approval.");
-                    return;
-                };
-                if !self.approvals_allowed(q.origin.agent_id.as_deref()) {
-                    self.say(to, "Approvals aren't allowed here.");
-                    return;
+            Op::People => {
+                if bot.is_none() {
+                    return no_bot();
                 }
-                let a = match c {
-                    Command::Allow => Answer::Allow,
-                    Command::Deny(why) => Answer::Deny(why),
-                    _ => unreachable!(),
-                };
-                if let Err(e) = chummy_session::answer(&self.p, &q.id, a) {
-                    self.say(to, &e);
+                #[cfg(feature = "telegram")]
+                let people = self
+                    .kept
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(&id)
+                    .map(chummy_channel::telegram::people)
+                    .unwrap_or_default();
+                #[cfg(not(feature = "telegram"))]
+                let people: Vec<chummy_channel::Person> = vec![];
+                if people.is_empty() {
+                    note(&format!(
+                        "Nobody may talk to {agent}'s Telegram bot yet: /pair makes a code."
+                    ));
+                } else {
+                    let list: Vec<String> = people
+                        .iter()
+                        .map(|p| format!("{} (id {})", p.name, p.id))
+                        .collect();
+                    note(&format!(
+                        "Who may talk to {agent}'s Telegram bot:\n{}\n/unpair <id> stops someone.",
+                        list.join("\n")
+                    ));
                 }
             }
-            Command::Agents => {
-                let list: Vec<String> = self
-                    .p
-                    .0
-                    .bundle
+            Op::Remove(who) => {
+                let Some(bot) = bot else { return no_bot() };
+                let _ = bot.send(ToChannel::Remove { id: who.clone() });
+                note(&format!(
+                    "{who} can't talk to {agent}'s Telegram bot any more."
+                ));
+            }
+        }
+    }
+
+    /// The terminal's own commands.
+    fn left(&mut self, l: Left) {
+        let bundle = self.convs.hub().p.0.bundle.clone();
+        match l {
+            Left::Agents => {
+                let list: Vec<String> = bundle
                     .agents
                     .iter()
                     .map(|a| {
@@ -533,14 +518,11 @@ impl Router {
                         format!("{} [{}]{mark}", a.name, a.id)
                     })
                     .collect();
-                self.say(to, &list.join("\n"));
+                note(&list.join("\n"));
             }
-            Command::Agent(name) => {
+            Left::Agent(name) => {
                 let want = name.to_lowercase();
-                match self
-                    .p
-                    .0
-                    .bundle
+                match bundle
                     .agents
                     .iter()
                     .find(|a| a.id.to_lowercase() == want || a.name.to_lowercase() == want)
@@ -548,267 +530,16 @@ impl Router {
                     Some(a) => {
                         self.current = a.id.clone();
                         note(&format!("Now talking to {}.", a.name));
-                        self.say_paused(&self.terminal_conv());
+                        let c = self.terminal_conv();
+                        self.convs.set_convs(TERMINAL, vec![c.clone()]);
+                        self.convs.say_paused(&c);
                     }
                     None => note("There's no agent by that name: /agents lists them."),
                 }
             }
-            Command::Quit => {
+            Left::Quit => {
                 note("Stopping chummyd…");
                 self.quit.notify_one();
-            }
-            Command::Help => match to {
-                Conv::Terminal(_) => note(&format!(
-                    "{HELP}\n/agents          the agents you can talk to\n/agent <name>    talk to another agent\n/quit            stop chummyd"
-                )),
-                Conv::Matrix(_) => self.say(to, &format!("```\n{HELP}\n```")),
-            },
-        }
-    }
-
-    fn status(&self, to: &Conv) {
-        let session = self.p.session();
-        let mut lines = vec![];
-        for r in session.runs() {
-            if r.agent_id.as_deref() != Some(to.agent()) && matches!(to, Conv::Matrix(_)) {
-                continue;
-            }
-            let what = match (r.source, &r.chat_id) {
-                ("job", _) => format!("job {}", r.title),
-                (_, Some(_)) => format!("{} (conversation)", r.title),
-                _ => r.title.clone(),
-            };
-            let secs = chummy_session::now().saturating_sub(r.started_at);
-            lines.push(format!("Running: {what}, {secs}s"));
-        }
-        for p in session.paused() {
-            if p.agent_id != to.agent() && matches!(to, Conv::Matrix(_)) {
-                continue;
-            }
-            lines.push(format!(
-                "Paused: {} ({})",
-                self.agent_name(&p.agent_id),
-                p.reason.as_deref().unwrap_or("paused")
-            ));
-        }
-        let waiting = session
-            .asks
-            .pending()
-            .iter()
-            .filter(|q| matches!(to, Conv::Terminal(_)) || self.mine(to, q))
-            .count();
-        if waiting > 0 {
-            lines.push(format!("Waiting for an answer: {waiting}"));
-        }
-        if lines.is_empty() {
-            lines.push("Nothing is running.".into());
-        }
-        if let Conv::Terminal(_) = to {
-            lines.push(format!("Talking to {}.", self.agent_name(&self.current)));
-        }
-        self.say(to, &lines.join("\n"));
-    }
-
-    fn agent_jobs(&self, agent: &str) -> Vec<chummy_scheduler::JobView> {
-        self.jobs
-            .overview()
-            .jobs
-            .into_iter()
-            .filter(|j| j.job.agent == agent)
-            .collect()
-    }
-
-    fn list_jobs(&self, to: &Conv) {
-        let jobs = self.agent_jobs(to.agent());
-        if jobs.is_empty() {
-            self.say(to, &format!("{} has no jobs.", self.agent_name(to.agent())));
-            return;
-        }
-        let tz = self.p.job_time_zone();
-        let lines: Vec<String> = jobs
-            .iter()
-            .map(|j| {
-                let next = j
-                    .next_run
-                    .and_then(|t| jiff::Timestamp::from_second(t).ok())
-                    .map(|t| {
-                        format!(
-                            ", next {}",
-                            t.to_zoned_datetime(tz.clone()).strftime("%a %d %b %H:%M")
-                        )
-                    })
-                    .unwrap_or_default();
-                let schedule = if j.schedule.is_empty() {
-                    "by hand".to_string()
-                } else {
-                    j.schedule.join("; ")
-                };
-                format!(
-                    "{} [{}]: {schedule}{next} ({})",
-                    j.job.name, j.job.id, j.state
-                )
-            })
-            .collect();
-        self.say(to, &lines.join("\n"));
-    }
-
-    fn run_job(&self, to: &Conv, name: &str) {
-        let want = name.to_lowercase();
-        let Some(j) = self
-            .agent_jobs(to.agent())
-            .into_iter()
-            .find(|j| j.job.id.to_lowercase() == want || j.job.name.to_lowercase() == want)
-        else {
-            self.say(
-                to,
-                "There's no job by that name for this agent: /jobs lists them.",
-            );
-            return;
-        };
-        match self.jobs.run_now(&j.job.id) {
-            Ok(()) => self.say(to, &format!("Started “{}”.", j.job.name)),
-            Err(e) => self.say(to, &e),
-        }
-    }
-
-    fn update(&mut self, u: &Update) {
-        let mut done = vec![];
-        for (id, (to, v)) in self.views.iter_mut() {
-            let lines = v.update(u);
-            match to {
-                Conv::Terminal(agent) => {
-                    if !self.terminal {
-                        continue;
-                    }
-                    let agent = self
-                        .p
-                        .0
-                        .bundle
-                        .agent(agent)
-                        .map(|a| a.name.clone())
-                        .unwrap_or_default();
-                    for l in lines {
-                        match l {
-                            Line::Reply(t) => print(&agent, &t),
-                            Line::Notice(t) => print(&agent, &format!("({})", t.trim())),
-                            Line::Figures(f) => {
-                                let mut out = std::io::stdout().lock();
-                                let _ = writeln!(out, "  · {f}");
-                            }
-                            // Shown when asked, and typed by the person.
-                            Line::Question(_) | Line::Answer(_) => {}
-                        }
-                    }
-                }
-                Conv::Matrix(r) => {
-                    if (!lines.is_empty() || v.done())
-                        && let Some(tx) = &self.matrix
-                    {
-                        let _ = tx.send(ToMatrix::Run {
-                            run_id: id.clone(),
-                            room: r.room.clone(),
-                            text: v.text(),
-                            done: v.done(),
-                        });
-                    }
-                }
-            }
-            if v.done() {
-                done.push(id.clone());
-            }
-        }
-        for id in done {
-            self.views.remove(&id);
-        }
-        if matches!(u, Update::RunFinished(_)) {
-            self.saver.save_now();
-        }
-    }
-
-    fn asked(&mut self, q: &Pending) {
-        let agent = q.origin.agent_id.as_deref();
-        let who = match q.origin.kind {
-            RunKind::Job => format!("Job “{}”", q.origin.title),
-            _ => agent.map(|a| self.agent_name(a)).unwrap_or_default(),
-        };
-        let convs = self.ask_convs(q);
-        let text = match &q.ask.kind {
-            AskKind::Question => q.ask.text.clone(),
-            kind => {
-                if !self.approvals_allowed(agent) || convs.is_empty() {
-                    chummy_log::system::log(
-                        chummy_log::system::Level::Info,
-                        "questions",
-                        "Refused an approval: approvals aren't allowed over channels for this agent",
-                        &[("run", &q.origin.run_id)],
-                    );
-                    let _ = chummy_session::answer(&self.p, &q.id, Answer::Deny(NOT_HERE.into()));
-                    return;
-                }
-                match kind {
-                    AskKind::ToolApproval { tool, arguments } => {
-                        format!("wants to use {tool} with {arguments}")
-                    }
-                    _ => q.ask.text.clone(),
-                }
-            }
-        };
-        let question = matches!(q.ask.kind, AskKind::Question);
-        for c in convs {
-            match c {
-                Conv::Terminal(_) => {
-                    if question {
-                        print(&who, &format!("{text} (your next message is the answer)"));
-                    } else {
-                        print(&who, &format!("{text}\n/allow, or /deny [reason]"));
-                    }
-                }
-                Conv::Matrix(r) => {
-                    let how = if question {
-                        "Reply to this message to answer."
-                    } else {
-                        "Send /allow, or /deny [reason]."
-                    };
-                    self.to_matrix(ToMatrix::Question {
-                        room: r.room.clone(),
-                        ask_id: q.id.clone(),
-                        text: format!("**{who}:** {text}\n\n{how}"),
-                    });
-                }
-            }
-        }
-    }
-
-    fn job_finished(&mut self, job: &Job, r: &RunRecord) {
-        self.saver.save_now();
-        let how = match r.status {
-            RecordStatus::Completed => "finished",
-            RecordStatus::Failed => "failed",
-            RecordStatus::Stopped => "was stopped",
-            RecordStatus::Limit => "hit a limit",
-            RecordStatus::Missed => "was missed",
-            RecordStatus::Skipped => "was skipped",
-        };
-        let mut text = format!("“{}” ({}) {how}.", job.name, self.agent_name(&job.agent));
-        if !r.note.is_empty() {
-            text.push_str(&format!(" {}", r.note));
-        }
-        if self.terminal {
-            note(&text);
-            if !r.reply.is_empty() {
-                print(&self.agent_name(&job.agent), &r.reply);
-            }
-        }
-        if let Some(room) = self.job_room(&job.id, &job.agent).map(|r| r.room.clone()) {
-            self.to_matrix(ToMatrix::Notice {
-                room: room.clone(),
-                text,
-            });
-            if !r.reply.is_empty() {
-                self.to_matrix(ToMatrix::Text {
-                    room,
-                    text: r.reply.clone(),
-                });
             }
         }
     }
@@ -834,4 +565,25 @@ pub fn read_terminal(inbox: tokio::sync::mpsc::UnboundedSender<Input>) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pairing_commands_read_right() {
+        assert_eq!(parse_op("hello"), None);
+        assert_eq!(parse_op("/pair"), Some(Ok(Op::Code)));
+        assert_eq!(parse_op("/pair yes"), Some(Ok(Op::Answer(None, true))));
+        assert_eq!(
+            parse_op(" /pair 3 NO "),
+            Some(Ok(Op::Answer(Some(3), false)))
+        );
+        assert!(matches!(parse_op("/pair maybe"), Some(Err(_))));
+        assert_eq!(parse_op("/people"), Some(Ok(Op::People)));
+        assert_eq!(parse_op("/unpair 42"), Some(Ok(Op::Remove("42".into()))));
+        assert!(matches!(parse_op("/unpair"), Some(Err(_))));
+        assert_eq!(parse_op("/pairs"), None);
+    }
 }

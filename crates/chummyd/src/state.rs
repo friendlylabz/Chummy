@@ -55,6 +55,10 @@ pub struct Saved {
     /// The Matrix channel's login (access token, device) and rooms.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matrix: Option<serde_json::Value>,
+    /// What each agent's Telegram bot keeps (the people paired, where it
+    /// was), by agent id.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub telegram: BTreeMap<String, serde_json::Value>,
 }
 
 pub struct StateDir {

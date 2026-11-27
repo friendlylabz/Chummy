@@ -19,6 +19,7 @@
 //! the folder at all; they go to the OS keychain ([`secrets`]).
 
 pub mod paused;
+pub mod sealed;
 pub mod secrets;
 
 mod doc;

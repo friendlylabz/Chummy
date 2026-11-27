@@ -14,6 +14,13 @@ pub trait ChatStore: Send + Sync {
     fn load(&self, agent: &str, chat: &str) -> Result<Vec<ChatMessage>, String>;
     /// Adds a message to a chat. Returns the updated index.
     fn append(&self, agent: &str, chat: &str, message: &ChatMessage) -> Result<ChatIndex, String>;
+    /// Makes sure an agent has the chat `chat` (a channel's conversation),
+    /// making it with `title` if not. Returns the updated index when it was
+    /// made.
+    fn ensure(&self, agent: &str, chat: &str, title: &str) -> Result<Option<ChatIndex>, String>;
+    /// Empties a chat (a fresh conversation in the same place), keeping its
+    /// title. Returns the updated index.
+    fn clear(&self, agent: &str, chat: &str) -> Result<ChatIndex, String>;
     /// Deletes one message. Returns the updated index, the message and
     /// where it was.
     fn delete_message(

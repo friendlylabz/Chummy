@@ -85,7 +85,7 @@ crates/          Pure Rust libraries, no Tauri dependency, tested on their own
     engine/      chummy_engine.py: the OpenAI-compatible transformers server
   store/         Chummy folder layout, atomic versioned JSON, keychain secrets
   flow/          Loop format, block catalog, validation, the loop engine, templates
-    templates/   The Chummy and Terminal assistants' loop files and their generator (make_templates.py, assistant.py, terminal.py)
+    templates/   The Chummy assistants' loop files (small, medium, large) and their generator (make_templates.py, assistant.py, small.py, large.py)
   tools/         Python tools: format, locks, installer, sandboxes (Wasm, container, OpenShell)
     builtin/     The built-in tools and their pylock files
     support/     The in-sandbox runner and the `chummy` helper module

@@ -1,15 +1,17 @@
 //! The app's settings document (`settings.json` in the Chummy folder).
 //!
 //! Rules for changing this schema:
-//! - every field has a default (`#[serde(default)]`), so older files load;
-//! - renames or meaning changes bump [`VERSION`] and add a step to [`migrate`].
+//! - every field has a default (`#[serde(default)]`), so partial files load;
+//! - renames or meaning changes bump [`VERSION`]. Until 1.0 there are no
+//!   migrations: a file from an older version that no longer reads is set
+//!   aside and Chummy starts fresh.
 
 use std::collections::BTreeMap;
 
 use chummy_llm::ProviderConfig;
 use serde::{Deserialize, Serialize};
 
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -20,7 +22,7 @@ pub enum Theme {
     Light,
 }
 
-pub use chummy_agent::{Agent, AgentConfig, Permissions, ToolPref, Workspace};
+pub use chummy_agent::{Agent, AgentConfig, AgentTool, Permissions, Workspace};
 
 /// What closing the main window does.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -157,12 +159,100 @@ pub struct Settings {
     /// The agent shown in the chat window.
     pub active_agent: Option<String>,
     pub local: LocalSettings,
-    /// Per-tool switches, by tool name.
-    pub tools: BTreeMap<String, ToolPref>,
     pub general: General,
     pub logging: Logging,
     /// Where tool calls run (Security and Privacy → Sandbox).
     pub sandbox: chummy_tools::SandboxSettings,
+    /// Outside channels agents can be talked to through (Settings →
+    /// Channels). Their passwords and logins are in the keychain.
+    pub channels: Vec<ChannelConfig>,
+}
+
+/// A channel: a way to talk to one agent from outside Chummy.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChannelConfig {
+    pub id: String,
+    pub name: String,
+    /// Off: not connected, but kept as it is.
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    /// The agent people talk to through it.
+    pub agent: String,
+    /// Approvals from the agent's runs may be answered in the channel (off:
+    /// only in Chummy's window).
+    #[serde(default)]
+    pub approvals: bool,
+    #[serde(flatten)]
+    pub kind: ChannelKind,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// What carries the messages. One implementation of each, shared with
+/// chummyd (`chummy-channel`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ChannelKind {
+    /// End-to-end encrypted Matrix rooms, one per allowed person, with the
+    /// bot's account.
+    Matrix(MatrixChannel),
+    /// A Telegram bot for the agent; people pair with a code. Not
+    /// end-to-end encrypted.
+    Telegram(TelegramChannel),
+}
+
+impl ChannelKind {
+    /// "Matrix", "Telegram".
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Matrix(_) => "Matrix",
+            Self::Telegram(_) => "Telegram",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TelegramChannel {
+    /// The Bot API server (Telegram's own unless someone runs one). The
+    /// bot's token is in the keychain; who was let in, in its sealed file.
+    #[serde(default = "telegram_api")]
+    pub api_url: String,
+    /// Largest file accepted, in MB (bots get 20 MB at most).
+    #[serde(default = "telegram_upload_mb")]
+    pub upload_mb: u32,
+    /// Show answers as they're written.
+    #[serde(default = "yes")]
+    pub stream: bool,
+}
+
+fn telegram_api() -> String {
+    chummy_bundle::TELEGRAM_API.into()
+}
+
+fn telegram_upload_mb() -> u32 {
+    chummy_bundle::MAX_TELEGRAM_UPLOAD_MB
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MatrixChannel {
+    /// The homeserver's address (https, or http only on this computer or
+    /// the local network).
+    pub homeserver: String,
+    /// The bot's Matrix ID (`@name:server`). Its password is in the
+    /// keychain.
+    pub user_id: String,
+    /// Who may talk to the agent (Matrix IDs).
+    #[serde(default)]
+    pub users: Vec<String>,
+    /// Largest file accepted, in MB.
+    #[serde(default = "upload_mb")]
+    pub upload_mb: u32,
+}
+
+fn upload_mb() -> u32 {
+    100
 }
 
 impl Default for Settings {
@@ -176,10 +266,10 @@ impl Default for Settings {
             agents: Vec::new(),
             active_agent: None,
             local: LocalSettings::default(),
-            tools: BTreeMap::new(),
             general: General::default(),
             logging: Logging::default(),
             sandbox: chummy_tools::SandboxSettings::default(),
+            channels: Vec::new(),
         }
     }
 }
@@ -197,9 +287,6 @@ impl AgentConfig for Settings {
     fn permissions(&self) -> &Permissions {
         &self.permissions
     }
-    fn tool_prefs(&self) -> &BTreeMap<String, ToolPref> {
-        &self.tools
-    }
 }
 
 /// The shared rules (see [`AgentConfig`]), callable without importing it.
@@ -216,10 +303,6 @@ impl Settings {
         AgentConfig::default_model(self)
     }
 
-    pub fn tool(&self, name: &str) -> ToolPref {
-        AgentConfig::tool(self, name)
-    }
-
     pub fn agent_model(&self, agent: &Agent) -> Option<&ProviderConfig> {
         AgentConfig::agent_model(self, agent)
     }
@@ -233,45 +316,11 @@ impl Settings {
     }
 }
 
-/// Upgrades older documents step by step.
+/// Reads a settings document as it is: there are no migrations before 1.0
+/// (see the module notes). Only the version is brought up to date.
 pub fn migrate(mut v: serde_json::Value) -> serde_json::Value {
-    let version = v["version"].as_u64().unwrap_or(0);
-    if version < 1 {
-        // 0 → 1: first versioned schema; nothing to move.
-        v["version"] = 1.into();
-    }
-    if version < 2 {
-        // 1 → 2: the single global workspace became one workspace per agent.
-        // There were no agents in v1, so the old folder is dropped; it is
-        // chosen again when the first agent is set up.
-        if let Some(o) = v.as_object_mut() {
-            o.remove("workspace");
-        }
-        v["version"] = 2.into();
-    }
-    if version < 3 {
-        // 2 → 3: tools and internet became per agent too. Existing agents keep
-        // what they could do: every tool switched on, and internet access if
-        // it was on.
-        let tools: Vec<serde_json::Value> = v["tools"]
-            .as_object()
-            .map(|t| {
-                t.iter()
-                    .filter(|(_, p)| p["enabled"].as_bool() == Some(true))
-                    .map(|(n, _)| n.clone().into())
-                    .collect()
-            })
-            .unwrap_or_default();
-        let network = v["permissions"]["network"].as_bool().unwrap_or(false);
-        if let Some(agents) = v.get_mut("agents").and_then(|a| a.as_array_mut()) {
-            for a in agents {
-                if let Some(o) = a.as_object_mut() {
-                    o.entry("tools").or_insert_with(|| tools.clone().into());
-                    o.entry("network").or_insert(network.into());
-                }
-            }
-        }
-        v["version"] = 3.into();
+    if v.get("version").is_none() && v.is_object() {
+        v["version"] = VERSION.into();
     }
     v
 }
@@ -358,29 +407,6 @@ pub fn log_changes(old: &Settings, new: &Settings) {
             ),
         ));
     }
-    let names: std::collections::BTreeSet<&String> =
-        old.tools.keys().chain(new.tools.keys()).collect();
-    for name in names {
-        let (x, y) = (
-            old.tools.get(name).cloned().unwrap_or_default(),
-            new.tools.get(name).cloned().unwrap_or_default(),
-        );
-        if x.enabled != y.enabled {
-            changes.push((Level::Info, format!("Tool {name} turned {}", on(y.enabled))));
-        }
-        if x.network != y.network {
-            changes.push((
-                Level::Warn,
-                format!("Internet for tool {name} turned {}", on(y.network)),
-            ));
-        }
-        if x.ask != y.ask {
-            changes.push((
-                Level::Info,
-                format!("Ask before each use of {name} turned {}", on(y.ask)),
-            ));
-        }
-    }
     for agent in &new.agents {
         match old.agents.iter().find(|a| a.id == agent.id) {
             None => changes.push((
@@ -408,30 +434,8 @@ pub fn log_changes(old: &Settings, new: &Settings) {
                         format!("Agent {} now uses loop {}", agent.name, agent.loop_id),
                     ));
                 }
-                if prev.tools != agent.tools {
-                    let list: Vec<&str> = agent.tools.iter().map(|t| t.as_str()).collect();
-                    changes.push((
-                        Level::Info,
-                        format!(
-                            "Agent {} may use: {}",
-                            agent.name,
-                            if list.is_empty() {
-                                "no tools".into()
-                            } else {
-                                list.join(", ")
-                            }
-                        ),
-                    ));
-                }
-                if prev.network != agent.network {
-                    changes.push((
-                        Level::Warn,
-                        format!(
-                            "Internet for agent {} turned {}",
-                            agent.name,
-                            on(agent.network)
-                        ),
-                    ));
+                for change in tool_changes(&prev.tools, &agent.tools) {
+                    changes.push((change.0, format!("Agent {}: {}", agent.name, change.1)));
                 }
                 if prev.model_options != agent.model_options {
                     changes.push((
@@ -494,6 +498,46 @@ pub fn log_changes(old: &Settings, new: &Settings) {
     }
 }
 
+/// What changed in an agent's tool switches, one line per change.
+fn tool_changes(
+    old: &BTreeMap<String, AgentTool>,
+    new: &BTreeMap<String, AgentTool>,
+) -> Vec<(chummy_log::system::Level, String)> {
+    use chummy_log::system::Level;
+    let on = |b: bool| if b { "on" } else { "off" };
+    let names: std::collections::BTreeSet<&String> = old.keys().chain(new.keys()).collect();
+    let mut out = Vec::new();
+    for name in names {
+        match (old.get(name), new.get(name)) {
+            (None, Some(t)) => out.push((
+                Level::Info,
+                format!(
+                    "tool {name} turned on{}{}",
+                    if t.ask { ", asks first" } else { "" },
+                    if t.network { ", with internet" } else { "" }
+                ),
+            )),
+            (Some(_), None) => out.push((Level::Info, format!("tool {name} turned off"))),
+            (Some(x), Some(y)) => {
+                if x.network != y.network {
+                    out.push((
+                        Level::Warn,
+                        format!("internet for tool {name} turned {}", on(y.network)),
+                    ));
+                }
+                if x.ask != y.ask {
+                    out.push((
+                        Level::Info,
+                        format!("ask before each use of {name} turned {}", on(y.ask)),
+                    ));
+                }
+            }
+            (None, None) => {}
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -505,13 +549,28 @@ mod tests {
         let old = Settings::default();
         let mut new = old.clone();
         new.permissions.network = true;
-        new.tools.insert(
-            "calculator".into(),
-            ToolPref {
-                enabled: true,
-                ..Default::default()
-            },
-        );
+        let agent = |tools: BTreeMap<String, AgentTool>| Agent {
+            id: "a".into(),
+            name: "A".into(),
+            tools,
+            ..serde_json::from_value(serde_json::json!({
+                "id": "a", "name": "A", "loop_id": "l",
+                "workspace": { "path": "/tmp/w", "confirmed_at": 1 }, "created_at": 1
+            }))
+            .unwrap()
+        };
+        let mut old = old;
+        old.agents.push(agent(BTreeMap::new()));
+        new.agents.push(agent(
+            [(
+                "calculator".to_string(),
+                AgentTool {
+                    ask: true,
+                    network: false,
+                },
+            )]
+            .into(),
+        ));
         log_changes(&old, &new);
         let said: Vec<String> = log.recent().into_iter().map(|e| e.message).collect();
         assert!(
@@ -519,7 +578,7 @@ mod tests {
             "{said:?}"
         );
         assert!(
-            said.contains(&"Tool calculator turned on".to_string()),
+            said.contains(&"Agent A: tool calculator turned on, asks first".to_string()),
             "{said:?}"
         );
     }
@@ -538,9 +597,9 @@ mod tests {
         // and no container image is approved.
         assert_eq!(s.sandbox.kind, chummy_tools::SandboxKind::Native);
         assert!(s.sandbox.container.approved_id.is_none());
-        // Older files without the new switch get the safe default.
+        // Files without the newer switches get the safe defaults.
         let s: Settings = serde_json::from_value(migrate(
-            serde_json::json!({ "version": 2, "permissions": { "network": true } }),
+            serde_json::json!({ "version": VERSION, "permissions": { "network": true } }),
         ))
         .unwrap();
         assert!(s.permissions.network && s.permissions.confirm_online_tools);
@@ -572,32 +631,5 @@ mod tests {
         let mut s = s;
         s.providers[0].use_in_app = true;
         assert!(s.in_app_model(&agent).is_some());
-    }
-
-    #[test]
-    fn older_settings_are_migrated() {
-        let v1 = serde_json::json!({
-            "version": 1, "theme": "light",
-            "workspace": { "path": "/tmp/x", "confirmed_at": 1 }
-        });
-        let v = migrate(v1);
-        assert!(v.get("workspace").is_none());
-        let s: Settings = serde_json::from_value(v).unwrap();
-        assert_eq!((s.version, s.theme), (VERSION, Theme::Light));
-
-        // (was v2_agents_keep_their_tools)
-        {
-            let v2 = serde_json::json!({
-                "version": 2,
-                "permissions": { "network": true, "tools": true },
-                "tools": { "calculator": { "enabled": true }, "fetch_page": { "enabled": false, "network": true } },
-                "agents": [{ "id": "a", "name": "A", "loop_id": "l",
-                             "workspace": { "path": "/tmp/a", "confirmed_at": 1 }, "created_at": 1 }]
-            });
-            let s: Settings = serde_json::from_value(migrate(v2)).unwrap();
-            let a = &s.agents[0];
-            assert_eq!(a.tools.iter().collect::<Vec<_>>(), ["calculator"]);
-            assert!(a.network);
-        }
     }
 }

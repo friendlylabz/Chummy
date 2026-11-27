@@ -199,6 +199,51 @@ PARSERS = {p.name: p for p in (HermesParser(), MistralParser(), Llama3JsonParser
 
 
 # --------------------------------------------------------------------------
+REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high")
+
+
+def sampling_options(req: dict) -> dict:
+    """The generation settings beyond temperature and length that the engine
+    uses, checked: top_p, top_k, min_p, repetition_penalty (sent as
+    repeat_penalty or repetition_penalty), seed, stop (up to 4 strings) and
+    reasoning_effort. Raises ValueError for a bad value."""
+    out = {}
+    for key, lo, hi in (("top_p", 0.0, 1.0), ("min_p", 0.0, 1.0)):
+        v = req.get(key)
+        if v is not None:
+            v = float(v)
+            if not lo <= v <= hi:
+                raise ValueError(f"{key} must be between {lo} and {hi}")
+            out[key] = v
+    if req.get("top_k") is not None:
+        k = int(req["top_k"])
+        if k < 0:
+            raise ValueError("top_k can't be negative")
+        if k > 0:
+            out["top_k"] = k
+    rp = req.get("repetition_penalty", req.get("repeat_penalty"))
+    if rp is not None:
+        rp = float(rp)
+        if not 0.0 < rp <= 10.0:
+            raise ValueError("repetition_penalty must be more than 0 and at most 10")
+        out["repetition_penalty"] = rp
+    if req.get("seed") is not None:
+        out["seed"] = int(req["seed"]) & 0xFFFF_FFFF_FFFF_FFFF
+    stop = req.get("stop")
+    if isinstance(stop, str):
+        stop = [stop]
+    if stop:
+        if not isinstance(stop, list) or not all(isinstance(x, str) and x for x in stop):
+            raise ValueError("stop must be a list of strings")
+        out["stop"] = stop[:4]
+    effort = req.get("reasoning_effort")
+    if effort is not None:
+        if effort not in REASONING_EFFORTS:
+            raise ValueError(f"reasoning_effort must be one of {', '.join(REASONING_EFFORTS)}")
+        out["reasoning_effort"] = effort
+    return out
+
+
 # Streaming splitter: routes generated text into reasoning / visible text /
 # a held-back tool-call section, without ever showing a marker to the user.
 # --------------------------------------------------------------------------
@@ -334,7 +379,7 @@ class FakeBackend:
     def load(self):
         time.sleep(0.05)
 
-    def generate(self, messages, tools, max_tokens, temperature, stop=None) -> Iterator[str]:
+    def generate(self, messages, tools, max_tokens, temperature, stop=None, opts=None) -> Iterator[str]:
         # A step reminder sent last (the Chummy assistant's Work block) isn't
         # what the rules answer: look past it.
         if (messages and messages[-1]["role"] == "user"
@@ -478,7 +523,7 @@ class TransformersBackend:
         return set(parser.markers) | {"<think>", "</think>", "<|/tool_call|>", "[ARGS]", "</tool_call>"}
 
     def generate(self, messages, tools, max_tokens, temperature, parser: Parser,
-                 stop: threading.Event | None = None) -> Iterator[str]:
+                 stop: threading.Event | None = None, opts: dict | None = None) -> Iterator[str]:
         import torch
         from transformers import StoppingCriteria, StoppingCriteriaList, TextIteratorStreamer
 
@@ -488,6 +533,16 @@ class TransformersBackend:
             def __call__(self, input_ids, scores, **kwargs):
                 return stop.is_set()
 
+        opts = opts or {}
+        # Reasoning effort goes to the chat template: templates that know it
+        # read `reasoning_effort` (gpt-oss) or `enable_thinking` (Qwen3 and
+        # others); the rest ignore both.
+        template_kwargs = {}
+        effort = opts.get("reasoning_effort")
+        if effort:
+            template_kwargs["reasoning_effort"] = effort
+            template_kwargs["enable_thinking"] = effort != "none"
+
         with self.lock:
             enc = self.tok.apply_chat_template(
                 messages,
@@ -495,6 +550,7 @@ class TransformersBackend:
                 add_generation_prompt=True,
                 return_tensors="pt",
                 return_dict=True,
+                **template_kwargs,
             )
             enc = {k: v.to(self.model.device) for k, v in enc.items()}
             streamer = TextIteratorStreamer(self.tok, skip_prompt=True, skip_special_tokens=False)
@@ -506,8 +562,18 @@ class TransformersBackend:
             prompt_opens_think = tail.rstrip().endswith("<think>")
             if temperature and temperature > 0:
                 gen.update(do_sample=True, temperature=float(temperature))
+                # Sampling settings only mean something when sampling.
+                for key in ("top_p", "top_k", "min_p"):
+                    if opts.get(key) is not None:
+                        gen[key] = opts[key]
             else:
                 gen.update(do_sample=False)
+            if opts.get("repetition_penalty") is not None:
+                gen["repetition_penalty"] = opts["repetition_penalty"]
+            if opts.get("stop"):
+                gen.update(stop_strings=opts["stop"], tokenizer=self.tok)
+            if opts.get("seed") is not None:
+                torch.manual_seed(opts["seed"])
             if self.tok.pad_token_id is None:
                 gen["pad_token_id"] = self.tok.eos_token_id
 
@@ -660,9 +726,10 @@ def make_handler(state: State):
                 messages = to_hf_messages(req.get("messages") or [])
                 tools = req.get("tools") or []
                 max_tokens = int(req.get("max_tokens") or req.get("max_completion_tokens") or 2048)
-                max_tokens = max(1, min(max_tokens, 131072))
+                max_tokens = max(1, min(max_tokens, 262144))
                 temperature = req.get("temperature")
                 temperature = float(temperature) if temperature is not None else None
+                opts = sampling_options(req)
             except (TypeError, ValueError, AttributeError) as e:
                 return self._json(400, {"error": {"message": f"bad request: {e}"}})
             stream = bool(req.get("stream"))
@@ -685,10 +752,10 @@ def make_handler(state: State):
 
             def pieces():
                 if isinstance(state.backend, FakeBackend):
-                    yield from state.backend.generate(messages, tools, max_tokens, temperature, stop)
+                    yield from state.backend.generate(messages, tools, max_tokens, temperature, stop, opts)
                 else:
                     yield from state.backend.generate(messages, tools, max_tokens, temperature, state.parser,
-                                                      stop)
+                                                      stop, opts)
 
             if stream:
                 self.send_response(200)

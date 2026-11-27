@@ -1,4 +1,24 @@
+<script lang="ts" module>
+  import type { AgentTool, Overrides } from "$lib/ipc";
+  import type { ModelOverrides } from "$lib/generation";
+
+  /** A template agent left for another pane (to add a model or set up
+   *  tools), picked up again when Agents opens. */
+  interface Stash {
+    name: string;
+    loopId: string;
+    model: string;
+    wsToken: string | null;
+    wsPath: string;
+    tools: Record<string, AgentTool>;
+    modelOptions: ModelOverrides;
+    blocks: Overrides;
+  }
+  let stash: Stash | null = null;
+</script>
+
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import { commands, errorText, type Agent } from "$lib/ipc";
   import { date } from "$lib/format";
   import { settings } from "$lib/stores/settings.svelte";
@@ -10,22 +30,58 @@
   import AgentLoopConfig from "./AgentLoopConfig.svelte";
   import AgentModelOptions from "./AgentModelOptions.svelte";
 
-  let { gotoModels, gotoTools }: { gotoModels: () => void; gotoTools: () => void } = $props();
+  let {
+    gotoModels,
+    gotoTools,
+    gotoSecurity,
+  }: { gotoModels: () => void; gotoTools: () => void; gotoSecurity: () => void } = $props();
 
-  let editing = $state<Agent | "new" | null>(null);
-  let name = $state("");
-  let loopId = $state("");
-  let model = $state("");
-  let wsToken = $state<string | null>(null);
-  let wsPath = $state("");
+  // Carry on with a template agent left for another pane, if there is one.
+  const kept = stash;
+  stash = null;
+  let editing = $state<Agent | "new" | null>(kept ? "new" : null);
+  let name = $state(kept?.name ?? "");
+  let loopId = $state(kept?.loopId ?? "");
+  let model = $state(kept?.model ?? "");
+  let wsToken = $state<string | null>(kept?.wsToken ?? null);
+  let wsPath = $state(kept?.wsPath ?? "");
   let error = $state("");
   let saving = $state(false);
+  // A template agent's settings, kept here until "Create agent" saves them.
+  let tplTools = $state<Record<string, AgentTool>>(kept?.tools ?? {});
+  let tplModel = $state<ModelOverrides>(kept?.modelOptions ?? {});
+  let tplBlocks = $state<Overrides>(kept?.blocks ?? {});
+  onDestroy(() => {
+    if (editing === "new") {
+      stash = {
+        name,
+        loopId,
+        model,
+        wsToken,
+        wsPath,
+        tools: $state.snapshot(tplTools),
+        modelOptions: $state.snapshot(tplModel),
+        blocks: $state.snapshot(tplBlocks),
+      };
+    }
+  });
 
   const agents = $derived(settings.current.agents);
   /** The agent being edited, kept current as its settings change. */
   const live = $derived.by(() => {
     const e = editing;
     return e && e !== "new" ? (agents.find((a) => a.id === e.id) ?? null) : null;
+  });
+  /** The agent being created, as the sections below show it. */
+  const template = $derived<Agent>({
+    id: "",
+    name,
+    loop_id: loopId,
+    model: model || null,
+    workspace: { path: wsPath, confirmed_at: 0 },
+    created_at: 0,
+    tools: tplTools,
+    model_options: tplModel,
   });
   const providers = $derived(settings.current.providers);
   const defaultModel = $derived(
@@ -36,10 +92,13 @@
     editing = a;
     error = "";
     wsToken = null;
+    tplTools = {};
+    tplModel = {};
+    tplBlocks = {};
     if (a === "new") {
       name = agents.length ? "" : "Assistant";
       // The recommended loop, if it's in the library.
-      loopId = (loops.list.find((l) => l.name === "Chummy assistant") ?? loops.list[0])?.id ?? "";
+      loopId = (loops.list.find((l) => l.name === "Chummy assistant (medium)") ?? loops.list[0])?.id ?? "";
       // Nothing set up yet: start with the recommended loop.
       if (!loops.list.length) {
         commands
@@ -71,12 +130,26 @@
   async function save() {
     saving = true;
     error = "";
+    let created = "";
     try {
       const id = editing && editing !== "new" ? editing.id : "";
-      await commands.saveAgent({ id, name, loop_id: loopId, model: model || null }, wsToken);
+      created = await commands.saveAgent({ id, name, loop_id: loopId, model: model || null }, wsToken);
+      if (!id) {
+        // A template agent: now that it exists, save the rest. Tools ask
+        // for confirmation where they must.
+        if (Object.keys(tplTools).length) await commands.setAgentAccess(created, tplTools);
+        if (Object.keys(tplModel).length) await commands.setAgentModelOptions(created, tplModel);
+        for (const [key, o] of Object.entries(tplBlocks)) await commands.setAgentBlockConfig(created, key, o);
+      }
       editing = null;
     } catch (e) {
       error = errorText(e);
+      // Created, but not everything saved: carry on editing the real agent.
+      const made = created && settings.current.agents.find((a) => a.id === created);
+      if (made && editing === "new") {
+        editing = made;
+        wsToken = null;
+      }
     } finally {
       saving = false;
     }
@@ -93,7 +166,7 @@
   <h1>{editing === "new" ? "New agent" : `Edit ${editing.name}`}</h1>
   <p class="pane-sub">An agent runs one loop with one model, inside its own workspace folder.</p>
   {#if editing === "new"}
-    <p class="pane-sub">New agents start with no tools and no internet. You can turn them on here after creating it.</p>
+    <p class="pane-sub">Set everything up here, then create it. New agents start with no tools; switch on what this one needs below.</p>
   {/if}
 
   <div class="card card-pad">
@@ -167,19 +240,30 @@
       </span>
     </div>
 
-    {#if error}<div class="notice danger" style="margin-top: var(--space-4)"><Icon name="x-circle" size={16} /><span>{error}</span></div>{/if}
+    {#if editing !== "new"}
+      {@render actions()}
+    {/if}
+  </div>
 
+  {#snippet actions()}
+    {#if error}<div class="notice danger" style="margin-top: var(--space-4)"><Icon name="x-circle" size={16} /><span>{error}</span></div>{/if}
     <div class="actions">
+      {#if editing === "new" && !wsPath}<span class="muted small">Choose a workspace folder to create the agent.</span>{/if}
       <span class="spacer"></span>
       <Button variant="ghost" onclick={() => (editing = null)}>Cancel</Button>
       <Button variant="primary" onclick={save} disabled={saving || !name.trim() || !loopId || !wsPath}>
         {editing === "new" ? "Create agent" : "Save"}
       </Button>
     </div>
-  </div>
+  {/snippet}
 
-  {#if live}
-    <AgentAccess agent={live} {gotoTools} />
+  {#if editing === "new"}
+    <AgentAccess agent={template} {gotoTools} {gotoSecurity} template bind:value={tplTools} />
+    <AgentModelOptions agent={template} template bind:value={tplModel} />
+    {#if loopId}<AgentLoopConfig agent={template} template bind:value={tplBlocks} />{/if}
+    <div class="card card-pad create">{@render actions()}</div>
+  {:else if live}
+    <AgentAccess agent={live} {gotoTools} {gotoSecurity} />
     <AgentModelOptions agent={live} />
     {#if loopId !== live.loop_id}
       <div class="card card-pad">
@@ -211,6 +295,7 @@
 
   {#each agents as a (a.id)}
     {@const loopName = loops.name(a.loop_id)}
+    {@const n = Object.keys(a.tools ?? {}).length}
     <div class="card card-pad agent">
       <div class="a-head">
         <div class="a-main">
@@ -224,8 +309,8 @@
           </div>
           <div class="faint xs mono a-ws" title={a.workspace.path}>{a.workspace.path}</div>
           <div class="faint xs">
-            {(a.tools ?? []).length ? `${(a.tools ?? []).length} tool${(a.tools ?? []).length === 1 ? "" : "s"}` : "No tools"}
-            · {a.network ? "internet allowed" : "offline"}
+            {n ? `${n} tool${n === 1 ? "" : "s"}` : "No tools"}
+            · {Object.values(a.tools ?? {}).some((t) => t.network) ? "internet allowed" : "offline"}
             {#if Object.keys(a.loop_config?.[a.loop_id] ?? {}).length}· custom block settings{/if}
           </div>
         </div>
@@ -312,5 +397,8 @@
   }
   .warn-text {
     color: var(--warn);
+  }
+  .create .actions {
+    margin-top: 0;
   }
 </style>

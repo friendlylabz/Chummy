@@ -34,7 +34,9 @@ use zeroize::Zeroizing;
 
 pub use config::{
     BundleAgent, CONFIG_FORMAT, CONFIG_VERSION, Channels, Config, Instance, Limits, Logging,
-    MAX_RUNS, MAX_UPLOAD_MB, MatrixChannel, Report, TerminalChannel, valid_id, valid_matrix_id,
+    MAX_CHAT_MESSAGES, MAX_CHATS, MAX_RUNS, MAX_TELEGRAM_UPLOAD_MB, MAX_UPLOAD_MB, MatrixChannel,
+    Report, TELEGRAM_API, TelegramBot, TerminalChannel, telegram_bot_id, valid_id, valid_matrix_id,
+    valid_telegram_token,
 };
 pub use password::{generate_password, password_problem};
 
@@ -308,7 +310,7 @@ pub fn open_unchecked(bytes: &[u8], key: &BundleKey) -> Result<Config, BundleErr
     let config: Config = serde_json::from_slice(&plain).map_err(|e| {
         BundleError::Invalid(vec![format!("Its configuration can't be read: {e}.")])
     })?;
-    if config.format != CONFIG_FORMAT || !(1..=CONFIG_VERSION).contains(&config.version) {
+    if config.format != CONFIG_FORMAT || config.version != CONFIG_VERSION {
         return Err(BundleError::Version);
     }
     if config.instance.id != header.instance_id {

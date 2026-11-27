@@ -1,9 +1,10 @@
-//! Tools: setting up the sandbox, and each tool's switches.
+//! Tools: setting up the sandbox and listing what's installed.
 //!
-//! Tools are off by default. Using one needs the Tools permission and the
-//! tool's own switch. A tool that asks for the internet also needs the
-//! Internet permission and its own internet switch, which asks for
-//! confirmation. There is no way to run a tool outside the sandbox.
+//! Tools are off by default. Using one needs the Tools permission (Security
+//! and Privacy) and the tool switched on for the agent (see
+//! `agent_setup::set_agent_access`). A tool that asks for the internet also
+//! needs the Internet permission and its internet switch for that agent.
+//! There is no way to run a tool outside the sandbox.
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State, WebviewWindow};
@@ -17,11 +18,8 @@ use crate::state::{AppState, lock};
 pub struct ToolView {
     #[serde(flatten)]
     pub manifest: chummy_tools::ToolManifest,
-    pub enabled: bool,
-    /// The user let this tool use the internet.
-    pub network_allowed: bool,
-    /// Every call waits for the user's OK.
-    pub ask: bool,
+    /// Names of the agents that have this tool switched on.
+    pub agents: Vec<String>,
     /// Why the chosen sandbox can't run it (shown greyed out), if it can't.
     pub unusable: Option<String>,
 }
@@ -51,15 +49,15 @@ pub fn status(state: &AppState) -> ToolsStatus {
         installing: *lock(&state.tools_installing),
         tools: chummy_tools::installed(&state.tool_paths)
             .into_iter()
-            .map(|m| {
-                let pref = s.tool(&m.name);
-                ToolView {
-                    enabled: pref.enabled,
-                    network_allowed: pref.network && m.network,
-                    ask: pref.ask,
-                    unusable: chummy_tools::unusable(&m, &health),
-                    manifest: m,
-                }
+            .map(|m| ToolView {
+                agents: s
+                    .agents
+                    .iter()
+                    .filter(|a| a.tools.contains_key(&m.name))
+                    .map(|a| a.name.clone())
+                    .collect(),
+                unusable: chummy_tools::unusable(&m, &health),
+                manifest: m,
             })
             .collect(),
         builtin_count: chummy_tools::builtins().len(),
@@ -150,7 +148,7 @@ pub async fn setup_tools(
         "Chummy will set up the Python {} for WebAssembly that comes with it, and download the few packages \
          its built-in tools need from PyPI (pinned, and checked against their hashes). Everything goes in the \
          Chummy folder.\n\nTools run in a sandbox that can only see the agent's workspace folder. Each tool \
-         stays off until you switch it on.",
+         stays off until you switch it on for an agent.",
         chummy_tools::PYTHON_VERSION
     );
     if !dialogs::confirm(
@@ -210,107 +208,5 @@ pub async fn setup_tools(
         }
         changed(&app2, &state);
     });
-    Ok(true)
-}
-
-/// Switches a tool on or off for agents. Turning on a tool marked
-/// "potentially unsafe" (the command tool) asks first, and switches on
-/// "Ask me before each use" for it. Returns whether the tool is now on.
-#[tauri::command]
-pub async fn set_tool_enabled(
-    app: AppHandle,
-    window: WebviewWindow,
-    state: State<'_, AppState>,
-    name: String,
-    enabled: bool,
-) -> CmdResult<bool> {
-    let m = chummy_tools::manifest(&state.tool_paths, &name)
-        .ok_or_else(|| format!("The tool “{name}” isn't installed."))?;
-    let was_on = state.settings().tool(&name).enabled;
-    let first_risky_on = enabled && m.risky && !was_on;
-    if first_risky_on {
-        let msg = format!(
-            "“{}” is potentially unsafe.\n\n{}\n\nIt still runs in the sandbox, so it can't see anything outside the \
-             agent's workspace or go online, but inside the workspace one command can change or delete many files \
-             at once. Keep a copy of anything important in that folder.\n\nChummy will ask you before each use; you \
-             can turn that off below the tool.",
-            m.title, m.description
-        );
-        let title = format!("Turn on “{}”?", m.title);
-        if !dialogs::confirm(&app, window.label(), &title, &msg, "Turn on", true).await {
-            return Ok(false);
-        }
-    }
-    state.update(&app, |s| {
-        let pref = s.tools.entry(name).or_default();
-        pref.enabled = enabled;
-        if first_risky_on {
-            pref.ask = true;
-        }
-    })?;
-    changed(&app, &state);
-    Ok(enabled)
-}
-
-/// Lets a tool that asks for it use the internet. Asks first.
-#[tauri::command]
-pub async fn set_tool_network(
-    app: AppHandle,
-    window: WebviewWindow,
-    state: State<'_, AppState>,
-    name: String,
-    enabled: bool,
-) -> CmdResult<bool> {
-    let m = chummy_tools::manifest(&state.tool_paths, &name)
-        .ok_or_else(|| format!("The tool “{name}” isn't installed."))?;
-    if enabled {
-        if !m.network {
-            return Err(format!("“{}” doesn't use the internet.", m.title));
-        }
-        let msg = format!(
-            "“{}” will be able to make web requests for agents: {}\n\nIt can't reach this computer or your \
-             local network, and it still can't see anything outside the agent's workspace. Internet access \
-             also has to be on in Security and Privacy.",
-            m.title, m.description
-        );
-        let title = format!("Let “{}” use the internet?", m.title);
-        if !dialogs::confirm(&app, window.label(), &title, &msg, "Allow", true).await {
-            return Ok(false);
-        }
-    }
-    state.update(&app, |s| s.tools.entry(name).or_default().network = enabled)?;
-    changed(&app, &state);
-    Ok(enabled)
-}
-
-/// Makes every call to a tool wait for the user's OK (or stop waiting).
-/// Asking is the safe side: turning it on never asks. Turning it off for a
-/// potentially unsafe tool asks natively first. Returns false if the user
-/// said no.
-#[tauri::command]
-pub async fn set_tool_ask(
-    app: AppHandle,
-    window: WebviewWindow,
-    state: State<'_, AppState>,
-    name: String,
-    ask: bool,
-) -> CmdResult<bool> {
-    let Some(m) = chummy_tools::manifest(&state.tool_paths, &name) else {
-        return Err(format!("The tool “{name}” isn't installed."));
-    };
-    if !ask && m.risky && state.settings().tool(&name).ask {
-        let msg = format!(
-            "“{}” is potentially unsafe: inside the agent's workspace one call can change or delete many files at \
-             once.\n\nWithout asking, agents will use it whenever the model decides to, including in scheduled \
-             jobs while you're away, and a file or web page the model reads could talk it into a harmful command.",
-            m.title
-        );
-        let title = format!("Stop asking before each use of “{}”?", m.title);
-        if !dialogs::confirm(&app, window.label(), &title, &msg, "Stop asking", true).await {
-            return Ok(false);
-        }
-    }
-    state.update(&app, |s| s.tools.entry(name).or_default().ask = ask)?;
-    changed(&app, &state);
     Ok(true)
 }

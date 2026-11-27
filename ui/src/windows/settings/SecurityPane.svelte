@@ -93,14 +93,14 @@
   <div class="row">
     <div>
       <div class="row-title">Internet access</div>
-      <div class="row-sub">The app-wide switch. A tool goes online only if this, the tool's internet switch in Tools, the agent's internet switch in Agents, and the block's “may use the internet” are all on.</div>
+      <div class="row-sub">The app-wide switch. A tool goes online only if this is on, the tool's Internet switch is on for the agent (Agents), and the loop block doesn't turn the internet off.</div>
     </div>
     <Toggle checked={perms.network} label="Internet access" onchange={(v) => commands.setPermission("network", v)} />
   </div>
   <div class="row">
     <div>
       <div class="row-title">Tools</div>
-      <div class="row-sub">The app-wide switch. A tool runs only if this and the tool are on in Tools, the agent may use it (Agents), and the loop block ticks it. Tools stay locked to the agent's workspace.</div>
+      <div class="row-sub">The app-wide switch. A tool runs only if this is on, the tool is on for the agent (Agents), and the loop block doesn't switch it off. Tools stay locked to the agent's workspace.</div>
     </div>
     <Toggle checked={perms.tools} label="Tools" onchange={(v) => commands.setPermission("tools", v)} />
   </div>

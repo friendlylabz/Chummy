@@ -2,13 +2,13 @@
 //! paused runs, loops that need no model. What's checked here holds for
 //! every program that runs agents through `chummy-session`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use chummy_agent::{Agent, AgentConfig, Permissions, ToolPref, Workspace};
+use chummy_agent::{Agent, AgentConfig, Permissions, Workspace};
 use chummy_flow::{Answer, Block, Link, LoopFile, Position};
 use chummy_llm::ProviderConfig;
 use chummy_log::runs::LogOptions;
@@ -46,7 +46,6 @@ struct Config {
     agents: Vec<Agent>,
     providers: Vec<ProviderConfig>,
     permissions: Permissions,
-    tools: BTreeMap<String, ToolPref>,
 }
 
 impl AgentConfig for Config {
@@ -61,9 +60,6 @@ impl AgentConfig for Config {
     }
     fn permissions(&self) -> &Permissions {
         &self.permissions
-    }
-    fn tool_prefs(&self) -> &BTreeMap<String, ToolPref> {
-        &self.tools
     }
 }
 
@@ -222,7 +218,6 @@ fn platform(loop_file: LoopFile) -> TestPlatform {
         },
         created_at: 1,
         tools: Default::default(),
-        network: false,
         loop_config: Default::default(),
         model_options: Default::default(),
     };
@@ -232,7 +227,6 @@ fn platform(loop_file: LoopFile) -> TestPlatform {
             agents: vec![agent],
             providers: vec![provider],
             permissions: Permissions::default(),
-            tools: BTreeMap::new(),
         },
         chats: FileChats::new(dir.path().join("chats")),
         paused: MemoryPaused::default(),
@@ -300,6 +294,26 @@ async fn a_message_gets_one_response() {
 }
 
 #[tokio::test]
+async fn finished_runs_are_kept_three_to_an_agent() {
+    let p = platform(echo(false));
+    let c = chat(&p);
+    let mut ids = vec![];
+    for i in 0..4 {
+        let run = chummy_session::send_message(&p, "a1", &c, &format!("m{i}")).unwrap();
+        until("the run to end", || {
+            p.session().recent().iter().any(|r| r.info.run_id == run)
+        })
+        .await;
+        ids.push(run);
+    }
+    let recent = p.session().recent();
+    let got: Vec<&str> = recent.iter().map(|r| r.info.run_id.as_str()).collect();
+    assert_eq!(got, [ids[3].as_str(), ids[2].as_str(), ids[1].as_str()]);
+    assert!(recent.iter().all(|r| r.status == "completed"));
+    assert_eq!(recent[0].info.agent_id.as_deref(), Some("a1"));
+}
+
+#[tokio::test]
 async fn a_paused_run_carries_on_as_one_response() {
     let p = platform(echo(true));
     let c = chat(&p);
@@ -311,6 +325,9 @@ async fn a_paused_run_carries_on_as_one_response() {
     chummy_session::pause_run(&p, &run).unwrap();
     until("the pause", || finished(&p, &run) == 1).await;
     assert!(p.session().is_paused("a1", &c));
+    // Paused runs aren't among the recent ones: they're paused runs.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(!p.session().recent().iter().any(|r| r.info.run_id == run));
     assert!(p.session().asks.pending().is_empty(), "withdrawn");
     let msgs = p.chats().load("a1", &c).unwrap();
     assert_eq!(msgs.last().unwrap().role, "notice");
@@ -330,6 +347,14 @@ async fn a_paused_run_carries_on_as_one_response() {
     let q = p.session().asks.pending()[0].id.clone();
     chummy_session::answer(&p, &q, Answer::Text("the second".into())).unwrap();
     until("the run to finish", || finished(&p, &run) == 2).await;
+    // Finished: among the recent runs once.
+    until("the run among the recent ones", || {
+        p.session().recent().iter().any(|r| r.info.run_id == run)
+    })
+    .await;
+    let recent = p.session().recent();
+    assert_eq!(recent.iter().filter(|r| r.info.run_id == run).count(), 1);
+    assert_eq!(recent[0].status, "completed");
 
     let msgs = p.chats().load("a1", &c).unwrap();
     let roles: Vec<&str> = msgs.iter().map(|m| m.role.as_str()).collect();

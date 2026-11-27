@@ -137,7 +137,7 @@ pub const MIN_CONTEXT: u32 = 512;
 pub const DEFAULT_MAX_TOKENS: u32 = 1024;
 /// The shortest and longest "Longest answer" accepted, in tokens.
 pub const MIN_ANSWER_TOKENS: u32 = 16;
-pub const MAX_ANSWER_TOKENS: u32 = 32_768;
+pub const MAX_ANSWER_TOKENS: u32 = 262_144;
 
 fn default_max_tokens() -> u32 {
     DEFAULT_MAX_TOKENS

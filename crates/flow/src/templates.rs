@@ -5,10 +5,15 @@ use serde::Serialize;
 
 use crate::format::LoopFile;
 
-/// The id of the template new agents get when nothing is configured.
-pub const ASSISTANT: &str = "assistant";
-/// The Chummy assistant's loop, working only through the terminal.
-pub const TERMINAL: &str = "terminal";
+/// The id of the template new agents get when nothing is configured: the
+/// Chummy assistant (medium).
+pub const ASSISTANT: &str = "assistant_medium";
+/// The Chummy assistant for small models: more steering and checks, a
+/// light context.
+pub const ASSISTANT_SMALL: &str = "assistant_small";
+/// The Chummy assistant for large models: no step decided for it, a big
+/// context.
+pub const ASSISTANT_LARGE: &str = "assistant_large";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Template {
@@ -22,24 +27,32 @@ pub struct Template {
 include!(concat!(env!("OUT_DIR"), "/template_prints.rs"));
 
 /// The built-in templates: id, file name in `templates/`, name, description
-/// and the file itself. The assistant and terminal files are written by
-/// `templates/make_templates.py` (from `assistant.py` and `terminal.py`);
-/// the other two are written by hand. Every file must be exactly what
-/// Chummy would save (a test checks), so its hash is its fingerprint.
+/// and the file itself. The three assistants are written by
+/// `templates/make_templates.py` (from `assistant.py`, `small.py` and
+/// `large.py`); the other two are written by hand. Every file must be
+/// exactly what Chummy would save (a test checks), so its hash is its
+/// fingerprint.
 const FILES: &[(&str, &str, &str, &str, &str)] = &[
     (
-        ASSISTANT,
-        "assistant.chummy.json",
-        "Chummy assistant",
-        "The default: one agent loop, like a coding agent's. The model works with tools, call after call, until it's done. It says what it's doing as it goes, keeps its own to-do list for bigger jobs, reads CHUMMY.md from the folder for your instructions, and summarises long conversations. Sent back to finish if it stops with steps unchecked.",
-        include_str!("../templates/assistant.chummy.json"),
+        ASSISTANT_SMALL,
+        "assistant-small.chummy.json",
+        "Chummy assistant (small)",
+        "For small models (about 1B to 14B). The medium assistant with more help: it decides each step for the model, checks the last change and asks you when it's unclear or going in circles, checks the answer before it's final, and keeps its context light.",
+        include_str!("../templates/assistant-small.chummy.json"),
     ),
     (
-        TERMINAL,
-        "terminal.chummy.json",
-        "Terminal assistant",
-        "The Chummy assistant, working only through the terminal: every tool is off except Run command (Chummy's own sandboxed shell), Run shell and Fetch page, and its prompts teach the shell's commands (grep, find, sed, awk, xargs, heredocs, python…) with examples. Each command it runs is shown in the run's pane.",
-        include_str!("../templates/terminal.chummy.json"),
+        ASSISTANT,
+        "assistant-medium.chummy.json",
+        "Chummy assistant (medium)",
+        "The default, for mid-sized models (about 14B to 70B): one agent loop, like a coding agent's. The model works with tools, call after call, until it's done, one decided step at a time. It says what it's doing as it goes, keeps its own to-do list for bigger jobs, reads CHUMMY.md from the folder for your instructions, and summarises long conversations. Sent back to finish if it stops with steps unchecked.",
+        include_str!("../templates/assistant-medium.chummy.json"),
+    ),
+    (
+        ASSISTANT_LARGE,
+        "assistant-large.chummy.json",
+        "Chummy assistant (large)",
+        "For large and frontier models: the medium assistant without the steering. The model plans the job and tries to do it in one go, keeps much more in its context to remember the details, and is sent back at most once.",
+        include_str!("../templates/assistant-large.chummy.json"),
     ),
     (
         "blank",
@@ -157,9 +170,6 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::AtomicBool;
 
-    /// The only tools the Terminal assistant's Work block may use.
-    const TERMINAL_TOOLS: [&str; 3] = ["fetch_page", "run_command", "run_shell"];
-
     #[test]
     fn only_the_working_blocks_get_tools() {
         use crate::blocks::{BlockKind, Switch};
@@ -177,16 +187,7 @@ mod tests {
                     "{} {} inherits the model's",
                     t.id, blk.id
                 );
-                if blk.id == "work" && t.id == TERMINAL {
-                    // Only the shell tools (and the agent's own settings on top).
-                    assert_eq!(p.tools.all, Switch::Off);
-                    assert_eq!(
-                        p.tools.each.keys().map(String::as_str).collect::<Vec<_>>(),
-                        TERMINAL_TOOLS
-                    );
-                    assert!(p.tools.each.values().all(|s| *s == Switch::Inherit));
-                    assert_eq!(p.network, Switch::Inherit);
-                } else if blk.id == "work" {
+                if blk.id == "work" {
                     assert!(
                         p.tools.is_inherit() && p.network == Switch::Inherit,
                         "{}",
@@ -231,25 +232,18 @@ mod tests {
         seen: Mutex<Vec<String>>,
         /// Ask to pause after this many model calls (0: never).
         pause_after: usize,
+        /// What "Check the answer" calls say, in order (then "OK").
+        check_says: Mutex<Vec<String>>,
+        /// "Check the answer" calls so far.
+        checks: Mutex<u32>,
+        /// What each "Decide what's next" call was asked.
+        decided: Mutex<Vec<String>>,
         pause: std::sync::Arc<AtomicBool>,
     }
 
     fn says(t: &str) -> LlmAnswer {
         LlmAnswer {
             text: t.into(),
-            ..Default::default()
-        }
-    }
-
-    fn command(t: &str, n: u32, command: &str) -> LlmAnswer {
-        LlmAnswer {
-            text: t.into(),
-            calls: vec![ToolCall {
-                id: format!("c{n}"),
-                name: "run_command".into(),
-                arguments: json!({ "command": command }),
-                network: crate::blocks::Switch::Inherit,
-            }],
             ..Default::default()
         }
     }
@@ -319,8 +313,20 @@ mod tests {
                 *self.summaries.lock().unwrap() += 1;
                 return Ok(says("SUMMARY of the work"));
             }
+            if last.contains("check the answer") {
+                assert!(call.tools.is_empty(), "checking gets no tools");
+                *self.checks.lock().unwrap() += 1;
+                let mut said = self.check_says.lock().unwrap();
+                let text = if said.is_empty() {
+                    "OK".to_string()
+                } else {
+                    said.remove(0)
+                };
+                return Ok(says(&text));
+            }
             if last.contains("decide the one next step") {
                 assert!(call.tools.is_empty(), "deciding what's next gets no tools");
+                self.decided.lock().unwrap().push(last.clone());
                 let mut n = self.nexts.lock().unwrap();
                 *n += 1;
                 // A second line, which only the first line of is kept.
@@ -862,76 +868,105 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // The Terminal assistant: the same loop, through the terminal only.
+    // The small and large assistants: the same loop, with more help or less.
 
     #[tokio::test]
-    async fn terminal_assistant_only_offers_the_shell_tools() {
+    async fn small_assistant_checks_the_answer_and_sends_it_back_to_fix_it() {
         let host = Agentic::with(vec![
-            command("I'll count them.", 1, "grep -c TODO *.py\nwc -l notes.txt"),
-            says("There are 3."),
+            echo("I'll look.", 1),
+            says("It says bye."),
+            says("It says hi."),
         ]);
-        let out = assist_with(TERMINAL, &host, "How many TODOs?").await;
+        *host.check_says.lock().unwrap() =
+            vec!["Problem: the tool said hi, not bye.".into(), "OK.".into()];
+        let out = assist_with(ASSISTANT_SMALL, &host, "What does echo say?").await;
         assert_eq!(out.status, RunStatus::Completed, "{out:?}");
-        assert_eq!(out.replies, ["I'll count them.", "There are 3."]);
-        // The host has echo, read_file and run_command: Work gets only the shell.
-        for call in host.work.lock().unwrap().iter() {
-            let names: Vec<&str> = call.tools.iter().map(|t| t.name.as_str()).collect();
-            assert_eq!(names, ["run_command"]);
-        }
+        assert_eq!(out.replies.last().unwrap(), "It says hi.");
         assert_eq!(
-            *host.tools_run.lock().unwrap(),
-            [json!({ "command": "grep -c TODO *.py\nwc -l notes.txt" })]
+            *host.checks.lock().unwrap(),
+            2,
+            "each final answer is checked"
         );
-        // The prompts teach the shell.
-        let sys = host.system(0);
-        for part in [
-            "sed -i 's/old/new/g'",
-            "<<'EOF'",
-            "awk -F,",
-            "Doesn't work: variables",
-            "[exit code N]",
-        ] {
-            assert!(sys.contains(part), "{part}: {sys}");
-        }
+        // The check went back to the model, and is in the pane.
+        let sent = host.sent(2).join("\n");
+        assert!(sent.contains("the tool said hi, not bye"), "{sent}");
         assert!(
-            sys.contains("docs/\nnotes.txt"),
-            "the folder is still listed"
+            host.pane
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|p| p.starts_with("Problem:"))
         );
+        // A light context, and steering that knows to check and to ask.
+        assert!(host.system(0).contains("ask the user one short question"));
+        let next = host.decided.lock().unwrap()[0].clone();
+        assert!(next.contains("ask the user"), "{next}");
     }
 
     #[tokio::test]
-    async fn terminal_assistant_shows_each_command_in_the_pane() {
-        let host = Agentic::with(vec![
-            command("Looking.", 1, "ls -la\necho more"),
-            says("Done."),
-        ]);
-        let out = assist_with(TERMINAL, &host, "What's here?").await;
+    async fn small_assistant_takes_the_answer_if_the_check_fails() {
+        let host = Agentic {
+            fail_on: Some("check the answer"),
+            ..Agentic::with(vec![says("Paris.")])
+        };
+        let out = assist_with(ASSISTANT_SMALL, &host, "Capital of France?").await;
         assert_eq!(out.status, RunStatus::Completed, "{out:?}");
-        // The step, then the command (its first line), then the next step.
-        assert_eq!(
-            *host.pane.lock().unwrap(),
-            ["Next move 1.", "$ ls -la", "Next move 2."]
-        );
-        // Not in the chat.
-        assert!(out.replies.iter().all(|r| !r.contains("$ ls")));
+        assert_eq!(out.replies, ["Paris."]);
     }
 
     #[tokio::test]
-    async fn terminal_assistant_reports_a_failure_and_tries_again() {
+    async fn large_assistant_works_without_being_steered() {
+        let host = Agentic::with(vec![
+            echo("I'll look it up.", 1),
+            echo("", 2),
+            says("It says hi, twice."),
+        ]);
+        let out = assist_with(ASSISTANT_LARGE, &host, "What does echo say?").await;
+        assert_eq!(out.status, RunStatus::Completed, "{out:?}");
+        assert_eq!(out.replies, ["I'll look it up.", "It says hi, twice."]);
+        // No step decided, no reminder, no check: only Work calls.
+        assert_eq!(*host.nexts.lock().unwrap(), 0);
+        assert_eq!(*host.checks.lock().unwrap(), 0);
+        assert_eq!(out.llm_calls, 3);
+        assert!(host.pane.lock().unwrap().is_empty());
+        for i in 0..3 {
+            assert!(host.sent(i).iter().all(|t| !t.contains("Your step now")));
+        }
+        let sys = host.system(0);
+        assert!(!sys.contains("# Your current step"), "{sys}");
+        assert!(
+            sys.contains("# If your last try failed\n(nothing has failed)"),
+            "{sys}"
+        );
+    }
+
+    #[tokio::test]
+    async fn large_assistant_is_sent_back_once_at_most() {
+        let host = Agentic::with(vec![
+            says("- [x] one\n- [ ] two\nDone with one."),
+            says("- [x] one\n- [ ] two\nStill not two."),
+        ]);
+        let out = assist_with(ASSISTANT_LARGE, &host, "Do one and two").await;
+        assert_eq!(out.status, RunStatus::Completed, "{out:?}");
+        assert_eq!(host.calls(), 2, "sent back once, then taken");
+        assert_eq!(
+            out.replies.last().unwrap(),
+            "- [x] one\n- [ ] two\nStill not two."
+        );
+    }
+
+    #[tokio::test]
+    async fn large_assistant_tells_the_next_try_what_failed() {
         let host = Agentic::with(vec![says("All done.")]);
         *host.fail_work.lock().unwrap() = 1;
-        let out = assist_with(TERMINAL, &host, "Do it").await;
+        let out = assist_with(ASSISTANT_LARGE, &host, "Do it").await;
         assert_eq!(out.status, RunStatus::Completed, "{out:?}");
         assert_eq!(out.replies.last().unwrap(), "All done.");
-        let reports = host.reports.lock().unwrap();
-        assert_eq!(reports.len(), 1);
+        assert_eq!(host.reports.lock().unwrap().len(), 1);
+        let sys = host.system(1);
         assert!(
-            reports[0]
-                .messages
-                .last()
-                .unwrap()
-                .text
-                .contains("which command")
+            sys.contains("# If your last try failed\nThe last try failed: The server was busy"),
+            "{sys}"
         );
     }
 }

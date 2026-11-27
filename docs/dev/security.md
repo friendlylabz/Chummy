@@ -115,7 +115,7 @@ A tool says what it needs in its header:
 - `requires-python`: the sandbox's Python must satisfy it (the built-ins need
   3.14 or newer, so a container image needs Python 3.14+).
 
-Settings → Tools and each agent's tool list **grey out** tools the current
+Settings → Tools and each agent's tool switchboard **grey out** tools the current
 sandbox can't run, with the reason. They're never offered to the model (a
 block can't turn them on either). A greyed tool can still be switched off,
 but not on. If the sandbox isn't ready (Docker isn't running, no image yet,
@@ -221,7 +221,7 @@ without noticing.
    example in a URL), including in unattended jobs. Now every call to a tool
    that can go online waits for your OK by default, in chats and in jobs.
    Turning that off asks for confirmation and explains why it matters. Any
-   tool can also be set to **Ask me before each use**, and a Run tool block
+   tool can also be set to **Ask first** for an agent, and a Run tool block
    can ask for every call.
 2. **Approvals could hide what a tool would do.** Argument values were cut
    at 300 characters, so a long URL could hide its end. Text-direction and
@@ -298,14 +298,19 @@ without noticing.
 - Secrets are only in the OS keychain. The Chummy folder is private to the
   user (0700 on Unix).
 
-## Tool switches (two levels)
+## Tool switches (app, agent, block)
 
-- A tool is offered only when it is on **app-wide**: tools on in Permissions
-  and the tool on in Settings → Tools. Nothing in a loop can get past this.
-- Then the **agent's** switch decides. Loop blocks use the agent's tools; a
-  block can only **disable** tools for itself (all of them, or chosen ones),
-  never turn on one the agent has off. The same goes for the block's internet
-  switch, which can only turn internet off. A loop downloaded from someone
+- **App-wide** master switches in Security and Privacy: Tools, Internet
+  access, and Ask before tools go online. Nothing in a loop can get past
+  them.
+- Each **agent** has a switchboard: per tool, **On**, **Ask first** and
+  **Internet**. A tool absent from it is off. (Since v0.1.6; before that a
+  tool also had app-wide switches in Settings → Tools and the agent one
+  internet switch for all its tools.)
+- Loop blocks use the agent's tools; a block can only **disable** tools for
+  itself (all of them, or chosen ones), never turn on one the agent has off.
+  The same goes for the block's internet switch, which can only turn
+  internet off. A loop downloaded from someone
   else therefore can't give itself more than the agent allows. (Until
   v0.1.1 a block could also turn a tool on; old loops that did now just
   use the agent's setting.)
@@ -331,7 +336,7 @@ What it *can* do is a lot of damage inside the folder in one call (`rm -rf
 src`, a `python` script that rewrites every file). So it is marked
 **Potentially unsafe** (`risky = true` in its header): it starts off like
 every tool, switching it on shows a native confirmation that says so, and
-switching it on the first time also turns on **Ask me before each use**, so
+switching it on for an agent also turns on **Ask first** for it, so
 each command waits for your OK in chat until you turn that off. Keep a copy
 of anything important in a folder you give an agent with this tool.
 
@@ -528,7 +533,7 @@ Fixed:
   consent. A yes is remembered for that connection and server until Chummy
   quits.
 - **Per-block tools are disable-only** (see Tool switches above).
-- **Turning off "Ask me before each use"** for a risky tool (one that writes
+- **Turning off "Ask first"** for a risky tool (one that writes
   files, runs commands or goes online) needs a native confirmation.
 - **Workspaces stay the agent's to change.** Choosing a folder now warns
   that files the agent writes come from a model and should be checked
@@ -755,7 +760,7 @@ In rough order of importance:
 1. **Prompt injection inside the agent's folder.** Content the model reads
    can still steer it to misuse tools that don't go online, for example
    overwriting or deleting files in its folder with write tools. Today's
-   mitigations are the jail and per-tool **Ask me before each use**.
+   mitigations are the jail and per-tool **Ask first**.
    Per-agent tool lists (pass 6) let an agent that reads untrusted files
    have no write tool. *Next:* a one-click "undo this run" that snapshots
    files before a job changes them.
@@ -819,6 +824,45 @@ backup is off. Uploads go through the agent's jail, with cleaned,
 de-duplicated names, under a size cap. *Known limits:* the bot password sits
 in the bundle (needed for cross-signing's password check); restoring an old
 state folder rolls the Matrix keys back (people may need to verify again).
+
+**Channels in the app** (v0.1.6, Settings → Channels): the same Matrix
+implementation and conversation rules as chummyd (`chummy-channel`), so
+everything above about rooms, verification and what's acted on holds. What
+differs: each channel is one agent and the people allowed to it; the bot's
+password is in the keychain (never in settings); its session (an access
+token) is sealed in `channels/<id>/login.sealed` with XChaCha20-Poly1305 and
+a key kept only in the keychain (`channel:<id>:key`), which also gives the
+passphrase of its SQLite stores (`channels/<id>/matrix/`), all inside the
+Chummy folder that agents can't reach. Emoji are confirmed in the channel's
+card (a notification says when one waits). Adding a channel, turning one on,
+adding people, changing the agent or homeserver, and moving approvals to
+Matrix each ask natively first; approvals stay in Chummy's window by default
+(the room is told), and `/allow` works only when the channel allows it.
+Plain http to a homeserver off the local network is refused, and two
+channels can't share a bot. Deleting a channel deletes its password, key,
+login and stores. A channel's chats (`m-…`) aren't renamed by the in-app
+model, and its runs are ordinary chat runs (logs, sessions panel, pane).
+
+**Telegram channels** (v0.1.6, the app and chummyd, one implementation in
+`chummy-channel`): one bot per agent, private chats only (it leaves groups).
+*Not end-to-end encrypted*: Telegram can read the chats; the form, the
+confirmations and `chummyd check` say so. The token is the bot's whole
+login: in the keychain (app) or the bundle (chummyd), and in the address of
+every call, so no address is ever logged or put in an error (reqwest errors
+lose their URL, and anything a server says has the token blanked out;
+tests check the token never shows). People are let in only by pairing: a
+six-digit code made in the program (once, for ten minutes; ten wrong tries
+end it), sent as `/start <code>`, then confirmed by the user (natively in
+the app, `/pair n yes` in chummyd's terminal). Messages and button presses
+from anyone else get no answer. Who was let in is kept sealed (the app's
+`channels/<id>/login.sealed`, chummyd's state) and starts empty for another
+bot. Messages older than ten minutes get a note, not a run. Approvals come
+with Allow and Deny buttons only when the channel (or the bundle, for the
+agent) allows approvals there; a press is checked against the person and
+the question still waiting. It polls Telegram (no webhook, nothing
+listening); a webhook on the bot or another program reading it is reported,
+never overridden. Files: at most 20 MB, through the agent's jail as for
+Matrix.
 
 chummyd, the background service being built, raises the stakes
 (unattended hosts, answers from messaging apps). Its design keeps it

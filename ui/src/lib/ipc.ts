@@ -94,14 +94,20 @@ export interface Agent {
   model: string | null;
   workspace: Workspace;
   created_at: number;
-  /** Tools this agent may use (each must also be on in Settings → Tools). */
-  tools?: string[];
-  /** Whether this agent's tools may go online (needs the app switch too). */
-  network?: boolean;
+  /** The agent's tool switchboard: the tools it may use, by name. */
+  tools?: Record<string, AgentTool>;
   /** Per-loop block settings that replace the loop file's, by loop id. */
   loop_config?: Record<string, Overrides>;
   /** Changes to its model's settings; anything missing inherits the model's. */
   model_options?: ModelOverrides;
+}
+
+/** One tool switched on for an agent. */
+export interface AgentTool {
+  /** Every use waits for the user's OK. */
+  ask: boolean;
+  /** It may go online (needs Internet access in Security and Privacy too). */
+  network: boolean;
 }
 
 /** Block settings by block id (or `function/block`); `null` removes a key. */
@@ -116,7 +122,6 @@ export interface Settings {
   default_provider: string | null;
   local: { device: string };
   hf_token_set: boolean;
-  tools: Record<string, { enabled: boolean; network: boolean; ask: boolean }>;
   general: General;
   logging: Logging;
   sandbox: SandboxSettings;
@@ -566,6 +571,79 @@ export interface RunInfo {
   resumed_ms?: number;
 }
 
+/** A run that finished lately (three are kept for each agent). */
+export interface RecentRun extends RunInfo {
+  /** Unix seconds. */
+  finished_at: number;
+  status: "completed" | "failed" | "stopped" | "limit" | "paused" | "ended";
+}
+
+// ---- channels
+
+/** Where the messages go: one implementation of each kind, shared with chummyd. */
+export interface MatrixChannelKind {
+  type: "matrix";
+  homeserver: string;
+  /** The bot's Matrix ID. Its password is in the keychain. */
+  user_id: string;
+  /** Who may talk to the agent (Matrix IDs). */
+  users: string[];
+  upload_mb: number;
+}
+
+/** A Telegram bot: its token is in the keychain; people pair with a code. */
+export interface TelegramChannelKind {
+  type: "telegram";
+  /** The Bot API server (Telegram's own unless you run one). */
+  api_url: string;
+  /** At most 20. */
+  upload_mb: number;
+  /** Show answers as they're written. */
+  stream: boolean;
+}
+
+/** A channel: a way to talk to one agent from outside Chummy. */
+export type ChannelConfig = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  agent: string;
+  /** Tool approvals may be answered in the channel. */
+  approvals: boolean;
+} & (MatrixChannelKind | TelegramChannelKind);
+
+/** A pairing code, and when it stops working (Unix ms). */
+export interface PairingCode {
+  code: string;
+  expires_at: number;
+}
+
+export interface ChannelLive {
+  state: "" | "off" | "connecting" | "connected" | "problem";
+  message: string | null;
+  /** What waits: emoji to compare (Matrix), someone to let in (Telegram). */
+  pending: { n: number; kind: "emoji" | "pairing"; who: string; emoji: [string, string][] }[];
+  note: string | null;
+  /** The bot, as people find it ("@helper_bot"). */
+  account: string | null;
+  /** The pairing code made last. */
+  code: PairingCode | null;
+}
+
+/** Someone let in to a Telegram bot. */
+export interface ChannelPerson {
+  id: string;
+  name: string;
+  since: number;
+}
+
+export type ChannelView = ChannelConfig & {
+  /** Its password (Matrix) or bot token (Telegram) is saved. */
+  has_secret: boolean;
+  people: ChannelPerson[];
+  live: ChannelLive;
+};
+
 /** A paused chat run, kept until its chat resumes or discards it. */
 export interface PausedInfo {
   agent_id: string;
@@ -775,9 +853,8 @@ export interface ToolView {
   dependencies: string[];
   packages: { name: string; version: string }[];
   builtin: boolean;
-  enabled: boolean;
-  network_allowed: boolean;
-  ask: boolean;
+  /** Names of the agents that have it switched on. */
+  agents: string[];
   /** What it needs from the sandbox beyond Python ("programs"). */
   needs: string[];
   requires_python: string | null;
@@ -956,12 +1033,18 @@ export interface ChummydDraft {
   name: string;
   time_zone: string;
   max_runs: number;
+  /** Messages each chat keeps (older ones are dropped). */
+  chat_messages: number;
+  /** Chats each agent keeps (the least recently used go first). */
+  chats: number;
   agents: string[];
   approvals: string[];
   jobs: string[];
   terminal: boolean;
   /** The Matrix channel, if it's on. */
   matrix?: ChummydMatrix | null;
+  /** Agents' Telegram bots (one each). */
+  telegram?: ChummydTelegram[];
   message_text: boolean;
   /** An opened bundle this one replaces. */
   base?: string | null;
@@ -979,6 +1062,17 @@ export interface ChummydMatrix {
   /** Who each job reports to, by job id. */
   report_to: Record<string, string>;
   upload_mb: number;
+}
+
+export interface ChummydTelegram {
+  agent: string;
+  /** Typed here; empty keeps the opened bundle's. Never sent back. */
+  token: string;
+  /** The opened bundle has one for this agent. */
+  has_token: boolean;
+  api_url: string;
+  upload_mb: number;
+  stream: boolean;
 }
 
 export interface ChummydReport {
@@ -1077,11 +1171,10 @@ export const commands = {
   ) => call<string>("save_agent", { agent, workspaceToken }),
   deleteAgent: (id: string) => call<boolean>("delete_agent", { id }),
   setActiveAgent: (id: string) => call<void>("set_active_agent", { id }),
-  setAgentAccess: (agentId: string, tools: string[], network: boolean) =>
-    call<{ tools: string[]; network: boolean }>("set_agent_access", { agentId, tools, network }, () => ({
-      tools,
-      network,
-    })),
+  /** Saves an agent's tool switchboard; returns what was saved (less where a
+   *  confirmation was declined). */
+  setAgentAccess: (agentId: string, tools: Record<string, AgentTool>) =>
+    call<Record<string, AgentTool>>("set_agent_access", { agentId, tools }, () => tools),
   agentLoopConfig: (agentId: string) => call<AgentLoopConfig>("agent_loop_config", { agentId }),
   setAgentBlockConfig: (agentId: string, block: string, params: Record<string, unknown> | null) =>
     call<void>("set_agent_block_config", { agentId, block, params }),
@@ -1169,6 +1262,22 @@ export const commands = {
   listRuns: () => call<RunInfo[]>("list_runs", undefined, () => []),
   /** What a running run's Pane output blocks have shown, newest first. */
   runPane: (runId: string) => call<string[]>("run_pane", { runId }, () => []),
+  recentRuns: () => call<RecentRun[]>("recent_runs", undefined, () => []),
+
+  listChannels: () => call<ChannelView[]>("list_channels", undefined, () => []),
+  /** Adds or changes a channel; `password` (its password or bot token) empty keeps the saved one. Returns its id, or null if declined. */
+  saveChannel: (channel: ChannelConfig, password: string | null) =>
+    call<string | null>("save_channel", { channel, password }),
+  /** Turning one on asks natively. Returns whether it's on. */
+  setChannelEnabled: (id: string, enabled: boolean) => call<boolean>("set_channel_enabled", { id, enabled }),
+  /** Asks natively first. False: cancelled. */
+  deleteChannel: (id: string) => call<boolean>("delete_channel", { id }),
+  /** Emoji that match, or someone to let in (asks natively). False: cancelled. */
+  answerChannelPending: (channel: string, n: number, yes: boolean) =>
+    call<boolean>("answer_channel_pending", { channel, n, yes }),
+  channelPairingCode: (channel: string) => call<PairingCode>("channel_pairing_code", { channel }),
+  removeChannelPerson: (channel: string, person: string) =>
+    call<void>("remove_channel_person", { channel, person }),
   setPermission: (kind: "network" | "tools" | "confirm_online_tools", enabled: boolean) =>
     call<boolean>("set_permission", { kind, enabled }, () => false),
 
@@ -1206,10 +1315,6 @@ export const commands = {
       sandbox: mockHealth(),
     })),
   setupTools: () => call<boolean>("setup_tools", undefined, () => false),
-  setToolEnabled: (name: string, enabled: boolean) => call<boolean>("set_tool_enabled", { name, enabled }),
-  setToolNetwork: (name: string, enabled: boolean) => call<boolean>("set_tool_network", { name, enabled }),
-  /** Turning it off for a potentially unsafe tool asks natively. False: cancelled. */
-  setToolAsk: (name: string, ask: boolean) => call<boolean>("set_tool_ask", { name, ask }, () => true),
 
   sandboxStatus: () =>
     call<SandboxStatus>("sandbox_status", undefined, () => ({
@@ -1278,6 +1383,8 @@ export const events = {
   /** A chat run will pause after its current block. */
   onRunPausing: (cb: (e: { run_id: string }) => void) => on("run:pausing", cb),
   onPausedChanged: (cb: (p: PausedInfo[]) => void) => on("paused:changed", cb),
+  /** Channels' connection state and verifications, by channel id. */
+  onChannelsChanged: (cb: (live: Record<string, ChannelLive>) => void) => on("channels:changed", cb),
   /** A question and your answer, added to a running chat run's response. */
   onRunSaid: (cb: (e: { run_id: string; role: "question" | "answer"; text: string }) => void) => on("run:said", cb),
   onChatMessage: (cb: (e: { agent_id: string; chat_id: string; message: ChatMessage }) => void) =>

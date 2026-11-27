@@ -1,22 +1,26 @@
 //! The Matrix channel: one end-to-end encrypted room per agent and allowed
-//! person, which chummyd creates and invites them to.
+//! person, which the program (chummyd or the app) creates and invites them
+//! to. The same in both programs; what differs is behind
+//! [`ChannelHost`].
 //!
-//! - chummyd logs in as the bot with the bundle's password once, then
-//!   keeps the session (access token, device) in its sealed state, and the
-//!   end-to-end keys in SQLite stores under `<state>/matrix/`, encrypted
-//!   with a passphrase derived from the state key. It sets up
-//!   cross-signing once (the password answers the homeserver's check).
-//!   Key backup is off: the keys never leave the state folder.
+//! - It logs in as the bot with its password once, then keeps the session
+//!   (access token, device) where the host keeps secrets
+//!   ([`ChannelHost::keep`]: chummyd's sealed state, the app's sealed file), and
+//!   the end-to-end keys in SQLite stores in a folder of the host's,
+//!   encrypted with a passphrase the host gives. It sets up cross-signing
+//!   once (the password answers the homeserver's check). Key backup is off:
+//!   the keys never leave that folder.
 //! - A message is acted on only when it's in one of those rooms, from that
 //!   room's person, encrypted, and sent from a session that's verified
-//!   (people verify chummyd by emoji; the operator confirms in chummyd's
-//!   terminal). Everything else is ignored: other people, edits,
-//!   reactions, redactions. Messages sent while chummyd was off for more
-//!   than [`STALE`] get a note instead of a run.
+//!   (people verify the bot by emoji; someone confirms the emoji in the
+//!   program: chummyd's terminal, the app's Channels settings). Everything
+//!   else is ignored: other people, edits, reactions, redactions. Messages
+//!   sent while the program was off for more than [`STALE`] get a note
+//!   instead of a run.
 //! - Invites to the bot are refused; a room someone else joined is
 //!   ignored (with a warning) until they leave.
-//! - If the homeserver can't be reached, chummyd keeps running and tries
-//!   again, waiting longer each time.
+//! - If the homeserver can't be reached, it keeps trying, waiting longer
+//!   each time.
 
 mod files;
 mod outbox;
@@ -24,11 +28,9 @@ mod verify;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use chummy_bundle::MatrixChannel;
 use matrix_sdk::authentication::matrix::MatrixSession;
 use matrix_sdk::config::{RequestConfig, SyncSettings};
 use matrix_sdk::deserialized_responses::{EncryptionInfo, VerificationLevel, VerificationState};
@@ -54,16 +56,38 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::watch;
 use zeroize::Zeroizing;
 
-use crate::link::{FromMatrix, RoomLink, ToMatrix};
-use crate::platform::DaemonPlatform;
-use crate::router::Input;
-use crate::saver::{MatrixKept, Saver};
+use crate::link::{FromChannel, ToChannel};
+use crate::{ChannelHost, Conv, Event, Handle, STALE, Status, make_private_dir};
 
-/// Messages older than this when they arrive were sent while chummyd was
-/// off: they get a note instead of a run.
-pub const STALE: Duration = Duration::from_secs(10 * 60);
+/// One Matrix channel: the bot's account and who may talk to which agent.
+#[derive(Clone)]
+pub struct MatrixSettings {
+    /// The channel's id (its conversations carry it).
+    pub channel: String,
+    /// The homeserver's address (checked already: https, or http only on
+    /// this computer or the local network).
+    pub homeserver: String,
+    /// The bot's Matrix ID.
+    pub user_id: String,
+    /// The bot's password: to log in the first time, and to set up its
+    /// cross-signing.
+    pub password: Zeroizing<String>,
+    /// Who may talk to each agent, by agent id (Matrix IDs).
+    pub users: BTreeMap<String, Vec<String>>,
+    /// Largest file accepted, in MB.
+    pub upload_mb: u32,
+    /// The program, as rooms are named: "<agent> (<label>)".
+    pub label: String,
+    /// The bot's session (device) name, as people see it when verifying.
+    pub device: String,
+    /// Keeps each person's chat apart from other channels' (empty: just
+    /// the person; see [`crate::channel_chat`]).
+    pub chat_scope: String,
+    /// What the people are told to verify ("chummyd", "Chummy").
+    pub name: String,
+}
 
-/// What's kept in the sealed state.
+/// What's kept between runs.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Kept {
     /// The bot the rest belongs to.
@@ -88,14 +112,10 @@ struct KeptRoom {
 
 /// What the Matrix side shares between its tasks.
 pub struct Ctx {
-    p: DaemonPlatform,
-    cfg: MatrixChannel,
-    /// To the router.
-    inbox: UnboundedSender<Input>,
+    host: Arc<dyn ChannelHost>,
+    cfg: MatrixSettings,
     /// To the outbox (notices from here go out in order too).
-    out: UnboundedSender<ToMatrix>,
-    kept: MatrixKept,
-    saver: Arc<Saver>,
+    out: UnboundedSender<ToChannel>,
     /// The rooms, by room id: (agent, person).
     rooms: Mutex<HashMap<OwnedRoomId, (String, String)>>,
     /// Question messages, by event: the question waiting.
@@ -103,7 +123,6 @@ pub struct Ctx {
     /// Rooms told to verify, or told someone else is in them.
     told: Mutex<HashSet<(OwnedRoomId, &'static str)>>,
     verifications: Mutex<BTreeMap<u32, SasVerification>>,
-    next_verification: AtomicU32,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -112,17 +131,21 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 impl Ctx {
     fn notice(&self, room: &str, text: String) {
-        let _ = self.out.send(ToMatrix::Notice {
-            room: room.into(),
+        let _ = self.out.send(ToChannel::Notice {
+            place: room.into(),
             text,
         });
     }
 
-    /// Says something in a room once (while chummyd runs).
+    /// Says something in a room once (while the program runs).
     fn tell_once(&self, room: &RoomId, what: &'static str, text: &str) {
         if lock(&self.told).insert((room.to_owned(), what)) {
             self.notice(room.as_str(), text.into());
         }
+    }
+
+    fn note(&self, text: impl Into<String>) {
+        self.host.event(Event::Note { text: text.into() });
     }
 
     fn allowed_user(&self, user: &str) -> bool {
@@ -141,7 +164,7 @@ impl Ctx {
     }
 
     fn add_verification(&self, sas: SasVerification) -> u32 {
-        let n = self.next_verification.fetch_add(1, Ordering::Relaxed) + 1;
+        let n = crate::next_number();
         lock(&self.verifications).insert(n, sas);
         n
     }
@@ -172,68 +195,66 @@ impl Ctx {
     }
 
     fn kept(&self) -> Kept {
-        lock(&self.kept)
-            .as_ref()
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        self.host
+            .kept()
+            .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default()
     }
 
-    /// Changes what's kept, and saves it now.
+    /// Changes what's kept, and keeps it now.
     fn keep(&self, f: impl FnOnce(&mut Kept)) {
         let mut k = self.kept();
         f(&mut k);
-        *lock(&self.kept) = serde_json::to_value(&k).ok();
-        self.saver.save_now();
+        if let Ok(v) = serde_json::to_value(&k) {
+            self.host.keep(v);
+        }
     }
 
     fn agent_name(&self, id: &str) -> String {
-        self.p
-            .0
-            .bundle
-            .agent(id)
-            .map(|a| a.name.clone())
-            .unwrap_or_else(|| id.into())
+        self.host.agent_name(id).unwrap_or_else(|| id.into())
+    }
+
+    fn conv(&self, agent: &str, user: &str, room: &str) -> Conv {
+        Conv {
+            channel: self.cfg.channel.clone(),
+            place: room.to_string(),
+            agent: agent.to_string(),
+            chat: crate::channel_chat(&self.cfg.chat_scope, user),
+            who: user.to_string(),
+            console: false,
+        }
     }
 }
 
-/// Starts the Matrix channel; returns where the router sends to it.
+/// Starts a Matrix channel. `store`: a private folder for its SQLite
+/// stores, opened with `passphrase`. Must be called inside a Tokio runtime.
 pub fn start(
-    p: DaemonPlatform,
-    saver: Arc<Saver>,
-    kept: MatrixKept,
+    host: Arc<dyn ChannelHost>,
+    cfg: MatrixSettings,
     store: PathBuf,
-    state_key: Zeroizing<[u8; 32]>,
-    inbox: UnboundedSender<Input>,
-) -> UnboundedSender<ToMatrix> {
-    let cfg =
-        p.0.bundle
-            .channels
-            .matrix
-            .clone()
-            .expect("a Matrix channel");
+    passphrase: Zeroizing<String>,
+) -> Handle {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let ctx = Arc::new(Ctx {
-        p,
+        host,
         cfg,
-        inbox,
         out: tx.clone(),
-        kept,
-        saver,
         rooms: Mutex::new(HashMap::new()),
         questions: Mutex::new(HashMap::new()),
         told: Mutex::new(HashSet::new()),
         verifications: Mutex::new(BTreeMap::new()),
-        next_verification: AtomicU32::new(0),
     });
     let (client_tx, client_rx) = watch::channel(None);
-    tokio::spawn(outbox::run(ctx.clone(), rx, client_rx));
-    tokio::spawn(serve(ctx, store, store_passphrase(&state_key), client_tx));
-    tx
+    let tasks = vec![
+        tokio::spawn(outbox::run(ctx.clone(), rx, client_rx)),
+        tokio::spawn(serve(ctx, store, passphrase, client_tx)),
+    ];
+    Handle { tx, tasks }
 }
 
-/// The SQLite stores' passphrase: from the state key, so the stores open
-/// only with the bundle that made them.
-fn store_passphrase(key: &[u8; 32]) -> Zeroizing<String> {
+/// A passphrase for the SQLite stores, made from a secret key (so the
+/// stores open only with it).
+pub fn store_passphrase(key: &[u8]) -> Zeroizing<String> {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
     h.update(b"chummyd matrix store");
@@ -257,6 +278,7 @@ async fn serve(
 ) {
     let mut wait = Duration::from_secs(2);
     loop {
+        ctx.host.status(Status::Connecting);
         let stop = match connect(&ctx, &store, &pass).await {
             Ok(client) => {
                 wait = Duration::from_secs(2);
@@ -269,7 +291,7 @@ async fn serve(
             Stop::LoggedOut => {
                 chummy_log::system::warn(
                     "matrix",
-                    "The homeserver ended chummyd's session: logging in again",
+                    "The homeserver ended the bot's session: logging in again",
                 );
                 ctx.keep(|k| {
                     k.session = None;
@@ -280,6 +302,7 @@ async fn serve(
                 continue;
             }
             Stop::Retry(e) => {
+                ctx.host.status(Status::Problem(e.clone()));
                 chummy_log::system::warn(
                     "matrix",
                     format!(
@@ -335,7 +358,7 @@ async fn connect(ctx: &Ctx, store: &std::path::Path, pass: &str) -> Result<Clien
             }
         });
     }
-    crate::checks::make_private_dir(store).map_err(Stop::Retry)?;
+    make_private_dir(store).map_err(Stop::Retry)?;
     let http = chummy_http::builder()
         .connect_timeout(Duration::from_secs(20))
         .build()
@@ -363,7 +386,7 @@ async fn connect(ctx: &Ctx, store: &std::path::Path, pass: &str) -> Result<Clien
             client.whoami().await.map_err(|e| stop_for_http(&e))?;
         }
         None => {
-            let device = format!("chummyd ({})", ctx.p.0.bundle.instance.name);
+            let device = ctx.cfg.device.clone();
             client
                 .matrix_auth()
                 .login_username(&cfg.user_id, &cfg.password)
@@ -444,7 +467,8 @@ async fn serve_client(
     };
     let handlers = add_handlers(ctx, &client);
     let _ = client_tx.send(Some(client.clone()));
-    let _ = ctx.inbox.send(Input::Matrix(FromMatrix::Ready { rooms }));
+    ctx.host.received(FromChannel::Ready { convs: rooms });
+    ctx.host.status(Status::Connected);
     chummy_log::system::info("matrix", "Connected to Matrix");
 
     let mut wait = Duration::from_secs(1);
@@ -454,6 +478,7 @@ async fn serve_client(
             Err(e) => match stop_for(&e) {
                 Stop::LoggedOut => break Stop::LoggedOut,
                 Stop::Retry(why) => {
+                    ctx.host.status(Status::Problem(why.clone()));
                     chummy_log::system::warn(
                         "matrix",
                         format!(
@@ -475,16 +500,15 @@ async fn serve_client(
 
 /// One room per agent and allowed person: kept ones checked (the person
 /// re-invited if they left), missing ones created. Rooms no longer in the
-/// bundle are left, and invites refused.
-async fn set_up_rooms(ctx: &Ctx, client: &Client) -> Result<Vec<RoomLink>, Stop> {
-    let bundle = &ctx.p.0.bundle;
+/// settings are left, and invites refused.
+async fn set_up_rooms(ctx: &Ctx, client: &Client) -> Result<Vec<Conv>, Stop> {
     let kept = ctx.kept().rooms;
     let mut now: Vec<KeptRoom> = vec![];
     for (agent, users) in &ctx.cfg.users {
-        if bundle.agent(agent).is_none() {
+        if ctx.host.agent_name(agent).is_none() {
             continue;
         }
-        let name = format!("{} ({})", ctx.agent_name(agent), bundle.instance.name);
+        let name = format!("{} ({})", ctx.agent_name(agent), ctx.cfg.label);
         for user in users {
             let Ok(uid) = UserId::parse(user.as_str()) else {
                 continue;
@@ -531,11 +555,11 @@ async fn set_up_rooms(ctx: &Ctx, client: &Client) -> Result<Vec<RoomLink>, Stop>
             .and_then(|id| client.get_room(&id))
             && room.state() == RoomState::Joined
         {
-            chummy_log::system::info("matrix", "Left a room that's no longer in the bundle");
+            chummy_log::system::info("matrix", "Left a room no one may use any more");
             let _ = room.leave().await;
         }
     }
-    // Invites that came while chummyd was off.
+    // Invites that came while the program was off.
     for room in client.invited_rooms() {
         let _ = room.leave().await;
     }
@@ -550,12 +574,8 @@ async fn set_up_rooms(ctx: &Ctx, client: &Client) -> Result<Vec<RoomLink>, Stop>
         })
         .collect();
     Ok(now
-        .into_iter()
-        .map(|r| RoomLink {
-            agent: r.agent,
-            user: r.user,
-            room: r.room,
-        })
+        .iter()
+        .map(|r| ctx.conv(&r.agent, &r.user, &r.room))
         .collect())
 }
 
@@ -623,7 +643,7 @@ fn add_handlers(
 ) -> Vec<matrix_sdk::event_handler::EventHandlerHandle> {
     let mut hs = vec![];
 
-    // Invites to the bot are refused: chummyd makes its own rooms.
+    // Invites to the bot are refused: it makes its own rooms.
     hs.push(client.add_event_handler(
         |ev: StrippedRoomMemberEvent, room: Room, client: Client| async move {
             if Some(ev.state_key.as_ref()) == client.user_id()
@@ -688,7 +708,7 @@ async fn message(
         ctx.tell_once(
             id,
             "crowded",
-            "Someone else is in this room, so chummyd ignores it until they leave.",
+            "Someone else is in this room, so it's ignored until they leave.",
         );
         return;
     }
@@ -705,7 +725,11 @@ async fn message(
                 }
             ),
         );
-        ctx.tell_once(id, "verify", "Verify this session to talk to chummyd.");
+        ctx.tell_once(
+            id,
+            "verify",
+            &format!("Verify this session to talk to {}.", ctx.cfg.name),
+        );
         return;
     }
     if matches!(ev.content.relates_to, Some(Relation::Replacement(_))) {
@@ -716,7 +740,10 @@ async fn message(
     if now.saturating_sub(sent) > STALE.as_millis() as u64 {
         ctx.notice(
             id.as_str(),
-            "That message came while chummyd was off, so it wasn't passed on. Send it again if you still want it.".into(),
+            format!(
+                "That message came while {} was off, so it wasn't passed on. Send it again if you still want it.",
+                ctx.cfg.name
+            ),
         );
         return;
     }
@@ -732,15 +759,11 @@ async fn message(
             } else {
                 t.body.clone()
             };
-            let _ = ctx.inbox.send(Input::Matrix(FromMatrix::Message {
-                room: RoomLink {
-                    agent,
-                    user,
-                    room: id.to_string(),
-                },
+            ctx.host.received(FromChannel::Message {
+                conv: ctx.conv(&agent, &user, id.as_str()),
                 text,
                 answers,
-            }));
+            });
         }
         m @ (MessageType::File(_)
         | MessageType::Image(_)
@@ -753,7 +776,7 @@ async fn message(
 }
 
 /// Whether a message came from a session that's verified now. A session
-/// started before the person verified chummyd stays marked as from an
+/// started before the person verified the bot stays marked as from an
 /// unverified identity (it's known to be from their cross-signed device,
 /// just not yet trusted): then the device is checked as it stands.
 async fn verified(client: &Client, sender: &UserId, info: Option<&EncryptionInfo>) -> bool {

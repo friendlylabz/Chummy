@@ -85,6 +85,8 @@ pub struct AppState {
     log_key: Mutex<Option<chummy_log::crypt::LogKey>>,
     /// The job scheduler, started once the app is up.
     pub jobs: OnceLock<Manager<AppJobs>>,
+    /// The channels (Settings → Channels), started once the app is up.
+    pub channels: OnceLock<crate::channels::Channels>,
     /// Set once the user chose to quit, so closing windows really quits.
     pub quitting: AtomicBool,
     /// Whether the tray icon could be created (some Linux desktops have none).
@@ -189,6 +191,7 @@ impl AppState {
             run_logs: dirs.logs.join("runs"),
             log_key: Mutex::new(None),
             jobs: OnceLock::new(),
+            channels: OnceLock::new(),
             quitting: AtomicBool::new(false),
             tray_ready: AtomicBool::new(false),
             _instance: instance,

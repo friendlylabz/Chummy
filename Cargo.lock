@@ -827,6 +827,7 @@ version = "0.1.5"
 dependencies = [
  "chummy-agent",
  "chummy-bundle",
+ "chummy-channel",
  "chummy-flow",
  "chummy-http",
  "chummy-llm",
@@ -894,8 +895,22 @@ dependencies = [
 name = "chummy-channel"
 version = "0.1.5"
 dependencies = [
+ "chummy-agent",
  "chummy-flow",
+ "chummy-http",
+ "chummy-log",
+ "chummy-scheduler",
  "chummy-session",
+ "futures-util",
+ "getrandom 0.4.3",
+ "jiff 1.0.3",
+ "matrix-sdk",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "zeroize",
 ]
 
 [[package]]
@@ -1106,7 +1121,6 @@ dependencies = [
  "rustix",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "tempfile",
  "tokio",
  "zeroize",

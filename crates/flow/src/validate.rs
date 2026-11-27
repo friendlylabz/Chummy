@@ -585,8 +585,8 @@ fn param_problems(k: &BlockKind) -> Vec<String> {
             if p.temperature.is_some_and(|t| !(0.0..=2.0).contains(&t)) {
                 v.push("temperature must be between 0 and 2".into());
             }
-            if p.max_tokens.is_some_and(|m| !(1..=32_768).contains(&m)) {
-                v.push("max answer length must be 1–32,768 tokens".into());
+            if p.max_tokens.is_some_and(|m| !(1..=262_144).contains(&m)) {
+                v.push("max answer length must be 1–262,144 tokens".into());
             }
             for e in p.generation.problems() {
                 // These read as sentences elsewhere; here they're a phrase.

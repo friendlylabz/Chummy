@@ -36,9 +36,6 @@ services:
       - ./bundle.chummyd:/bundle/bundle.chummyd:ro
       - jails:/jails
       - state:/state
-      # Your own certificates (a homeserver or model with a self-signed
-      # one): this computer's trusted certificates, instead of the image's.
-      # - /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt:ro
     secrets: [chummyd_password]
     # chummyd listens on nothing, so there are no ports. Never mount the
     # Docker socket: chummyd doesn't need it.

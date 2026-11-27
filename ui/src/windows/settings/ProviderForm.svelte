@@ -51,7 +51,7 @@
   });
   let maxTokens = $state(String(start?.max_tokens ?? DEFAULT_MAX_TOKENS));
   const maxValue = $derived(Math.round(Number(maxTokens.replace(/[,_\s]/g, ""))));
-  const maxBad = $derived(!Number.isFinite(maxValue) || maxValue < 16 || maxValue > 32768);
+  const maxBad = $derived(!Number.isFinite(maxValue) || maxValue < 16 || maxValue > 262144);
   const limit0 = start ? (start.daily_tokens ?? null) : DEFAULT_DAILY_TOKENS;
   let limitOn = $state(limit0 !== null);
   let limit = $state(String(limit0 ?? DEFAULT_DAILY_TOKENS));
@@ -171,6 +171,13 @@
     <input id="pf-name" class="input" bind:value={name} placeholder="What to call this connection" />
   </div>
 
+  {#if kind === "local"}
+  <div class="field">
+    <span class="label">Model</span>
+    <div class="mono small" data-selectable>{start?.local?.repo ?? model}</div>
+    <span class="hint">Runs on Chummy's built-in engine (Settings → Local engine). Downloaded models can't be swapped; add another one instead.</span>
+  </div>
+  {:else}
   <div class="field">
     <label for="pf-url">Server address</label>
     <input id="pf-url" class="input mono" bind:value={baseUrl} placeholder="http://localhost:8080/v1" spellcheck="false" />
@@ -214,6 +221,7 @@
     </datalist>
     {#if modelsError}<span class="hint">{modelsError}</span>{:else if models.length}<span class="hint">{models.length === 1 ? "1 model" : `${models.length} models`} available. Start typing to filter.</span>{/if}
   </div>
+  {/if}
 
   <GenerationFields {kind} bind:value={generation} bind:bad={generationBad} bind:temperature bind:maxTokens {maxBad} />
 
@@ -234,6 +242,8 @@
       {#if contextBad}{contextMax !== null ? `${fmt(MIN_CONTEXT)} to ${fmt(contextMax)} tokens (the most the server offers).` : `At least ${fmt(MIN_CONTEXT)} tokens.`}
       {:else if contextMax !== null}The server reports {fmt(contextMax)} tokens. Leave empty to use all of it, or set less if
         your server runs the model with a shorter context.
+      {:else if kind === "local"}Not known until the model is tested (Models → Test). Leave empty to assume
+        {fmt(DEFAULT_CONTEXT)} tokens, or set the length to run it with.
       {:else}The server doesn't say (OpenAI's own API never does; Test connection asks again). Leave empty to assume
         {fmt(DEFAULT_CONTEXT)} tokens, or set the length your server runs the model with.{/if}
     </span>

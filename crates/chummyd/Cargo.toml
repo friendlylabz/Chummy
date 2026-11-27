@@ -13,10 +13,12 @@ name = "chummyd"
 path = "src/main.rs"
 
 [features]
-default = ["matrix"]
+default = ["matrix", "telegram"]
 # The Matrix channel (matrix-sdk with end-to-end encryption and its SQLite
 # store, built in so no system SQLite is needed).
-matrix = ["dep:matrix-sdk", "dep:futures-util"]
+matrix = ["chummy-channel/matrix"]
+# The Telegram channel (the Bot API over HTTPS).
+telegram = ["chummy-channel/telegram"]
 
 [dependencies]
 serde.workspace = true
@@ -31,9 +33,6 @@ chacha20poly1305 = "0.11"
 getrandom = "0.4"
 zeroize = "1"
 rpassword = "7"
-sha2 = "0.10"
-futures-util = { workspace = true, optional = true }
-matrix-sdk = { version = "0.20", optional = true, default-features = false, features = ["e2e-encryption", "automatic-room-key-forwarding", "bundled-sqlite", "markdown"] }
 chummy-agent.workspace = true
 chummy-bundle.workspace = true
 chummy-channel.workspace = true
@@ -56,12 +55,19 @@ is_elevated = "0.1"
 [dev-dependencies]
 tempfile.workspace = true
 futures-util.workspace = true
+# The test's own Matrix client.
+matrix-sdk = { version = "0.20", default-features = false, features = ["e2e-encryption", "automatic-room-key-forwarding", "bundled-sqlite", "markdown"] }
 mime = "0.3"
 
 # Against a real Synapse (see the test).
 [[test]]
 name = "matrix"
 required-features = ["matrix"]
+
+# Against a stand-in Bot API.
+[[test]]
+name = "telegram"
+required-features = ["telegram"]
 
 [lints]
 workspace = true

@@ -31,6 +31,7 @@
     "allow-list-paused",
     "allow-list-runs",
     "allow-run-pane",
+    "allow-recent-runs",
     "allow-list-asks",
     "allow-answer-ask",
     "allow-close-activity",

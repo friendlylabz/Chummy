@@ -29,7 +29,8 @@ test("support mirrors the Rust table", () => {
   for (const p of PARAMS) {
     assert.equal(unsupported("open_ai_compatible", p.key), null);
     assert.equal(unsupported("ollama", p.key), null);
-    assert.ok(unsupported("local", p.key));
+    const penalty = p.key === "presence_penalty" || p.key === "frequency_penalty";
+    assert.equal(!!unsupported("local", p.key), penalty, p.key);
   }
   assert.ok(unsupported("open_ai", "min_p"));
   assert.equal(unsupported("open_ai", "reasoning_effort"), null);

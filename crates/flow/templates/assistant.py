@@ -1,8 +1,9 @@
-"""The Chummy assistant (the default loop): one agent loop, modelled on the
-basic behaviour of a coding agent's core loop (Claude Code's query loop),
-written as Chummy blocks.
+"""The Chummy assistant (medium), the default loop: one agent loop, modelled on
+the basic behaviour of a coding agent's core loop (Claude Code's query loop),
+written as Chummy blocks. small.py and large.py build the versions for small
+and large models from the same functions, with the settings in CHUMMY changed.
 
-Imported by make_templates.py, which writes assistant.chummy.json.
+Imported by make_templates.py, which writes assistant-medium.chummy.json.
 
 The shape (root loop):
 
@@ -145,30 +146,60 @@ TODO_LINE = r"(?m)^[ \t]*[-*+] \[[ xX]\] .*\S.*$"
 OPEN = r"(?m)^[ \t]*[-*+] \[ \]"
 HAS_TEXT = r"\S"
 ANY = r"(?s)."
+# A check that found nothing wrong starts with OK.
+OK = r"(?i)\A\W*ok\b"
 # An answer that ends with a question waits for you.
 QUESTION = r"\?[\s*_)\"'”»]*$"
-# Two nudges given already.
-SPENT = r"x{2}"
 # Failures so far, one x each: give up at this many.
 ERRORS_SPENT = r"^x{%d}" % 3
 # The first line of a text, at most 200 characters (one match only).
 FIRST_LINE = r"\A\s*[^\n]{0,200}"
-# The first 60 lines (the folder listing shown to the model).
-HEAD = r"\A(?:[^\n]*(?:\n|\z)){1,60}"
-# The first line of each shell command in a round of tool calls.
-COMMAND_LINE = r"(?m)^command: ([^\n]*)"
 
-# Everything that differs between assistants built from these functions
-# (the Terminal assistant in terminal.py is another).
+
+def head(n):
+    """The first n lines (the folder listing shown to the model)."""
+    return r"\A(?:[^\n]*(?:\n|\z)){1,%d}" % n
+
+
+def spent(n):
+    """Sent back n times already."""
+    return r"x{%d}" % n
+
+# Everything that differs between the assistants built from these functions
+# (small.py and large.py change some of it).
 CHUMMY = {
-    "name": "Chummy assistant",
+    "name": "Chummy assistant (medium)",
     "system": SYSTEM, "summarize": SUMMARIZE, "resume": RESUME, "open_nudge": OPEN_NUDGE,
     "empty_nudge": EMPTY_NUDGE, "next": NEXT, "next_fallback": NEXT_FALLBACK, "work_reminder": WORK_REMINDER,
     "report_system": REPORT_SYSTEM, "report_ask": REPORT_ASK, "compacted": COMPACTED,
-    # The Work block's tool switches (None: the agent's tools).
-    "work_tools": None,
-    # Show each shell command it runs in the run's pane.
-    "pane_commands": False,
+    # Decide what's next before every Work call (steering). Without it, Work
+    # plans and carries the job through itself.
+    "decide_next": True,
+    # Where Report what went wrong leaves its note for the next try: {{next}}
+    # (Decide what's next reads it), or a key the system message shows.
+    "step_key": "next", "step_start": "(not decided yet)",
+    # A check of the final answer before it's given (a prompt), or None.
+    "self_check": None,
+    # Times an answer is sent back to carry on, at most.
+    "nudges": 2,
+    # How much is kept: recent chat messages read, characters stored, lines
+    # of the folder listing, characters of a tool result, and the newest
+    # work Decide what's next sees.
+    "history": 20, "conversation_chars": 6000, "request_chars": 8000, "instructions_chars": 4000,
+    "folder_lines": 60, "progress_chars": 8000, "result_chars": 12000, "recent_chars": 2500,
+    # Make room at this percentage of the context (None: the model's own point).
+    "compact_percent": None,
+    # Every Work call has a small Decide what's next call before it, so twice the model calls.
+    "limits": {"max_steps": 10000, "max_llm_calls": 400, "max_tool_calls": 150},
+    "description": (
+        "For mid-sized models (about 14B to 70B), and the default. One agent loop, like a coding agent's: the "
+        "model works with tools, call after call, until it answers without one. It says what it's doing as it "
+        "goes, plans with its own to-do list when the work has several steps, decides the one next step before "
+        "each call and is told to do just that (shown in the run's pane: Sessions → the run's text button), "
+        "reads CHUMMY.md from the folder for your instructions, and summarises the conversation when it gets "
+        "long. If it stops with steps unchecked, it's sent back to finish (twice at most)."
+    ),
+    "overview": None,
 }
 
 
@@ -198,7 +229,8 @@ def keep_todos_fn():
     )
 
 
-def get_ready_fn():
+def get_ready_fn(t=None):
+    t = t or CHUMMY
     return fn(
         "get_ready", "Get ready",
         "Before the first model call: remembers the request and the conversation, reads CHUMMY.md (the user's "
@@ -208,22 +240,22 @@ def get_ready_fn():
         [("ready", "Ready", "msg", "out")],
         [
             b("msg", "forward", "Message", 0, 0),
-            b("conv", "store", "Remember the conversation", 0, 200, {"key": "conversation", "max_chars": 6000},
+            b("conv", "store", "Remember the conversation", 0, 200, {"key": "conversation", "max_chars": t["conversation_chars"]},
               "{{conversation}}: the chat before this message."),
-            b("req", "store", "Remember the request", 260, -200, {"key": "request", "max_chars": 8000},
+            b("req", "store", "Remember the request", 260, -200, {"key": "request", "max_chars": t["request_chars"]},
               "{{request}}"),
             # CHUMMY.md
             b("which", "combine", "CHUMMY.md", 260, 0, {"inputs": 1, "format": "CHUMMY.md"}),
             b("read", "read_file", "Read CHUMMY.md", 520, 0, {}, "Only inside the agent's folder."),
             b("no_file", "combine", "No CHUMMY.md", 780, 120, {
                 "inputs": 1, "format": "(none: this folder has no CHUMMY.md)"}),
-            b("instr", "store", "Remember the instructions", 1040, 0, {"key": "instructions", "max_chars": 4000},
+            b("instr", "store", "Remember the instructions", 1040, 0, {"key": "instructions", "max_chars": t["instructions_chars"]},
               "{{instructions}}"),
             # The folder
             b("top", "combine", "Top of the folder", 260, 300, {"inputs": 1, "format": "."}),
             b("ls", "list_files", "List the folder", 520, 300),
             b("lines", "join", "One per line", 780, 300, {"separator": "\n"}),
-            b("head", "regex", "First 60", 1040, 300, {"pattern": HEAD}),
+            b("head", "regex", f"First {t['folder_lines']}", 1040, 300, {"pattern": head(t["folder_lines"])}),
             b("head_text", "join", "As text", 1300, 300, {"separator": ""}),
             b("not_empty", "branch", "Anything?", 1560, 300, {"pattern": HAS_TEXT}),
             b("empty", "combine", "Empty folder", 1820, 420, {"inputs": 1, "format": "(empty)"}),
@@ -235,9 +267,12 @@ def get_ready_fn():
             b("no_todos", "combine", "No to-do list yet", 260, 600, {"inputs": 1, "format": "(none yet)"}),
             b("todos", "store", "Start the to-do list", 520, 600, {"key": "todos", "max_chars": 3000}),
             b("no_progress", "combine", "No work yet", 260, 750, {"inputs": 1, "format": "(nothing yet)"}),
-            b("progress", "store", "Start the progress", 520, 750, {"key": "progress", "max_chars": 8000}),
-            b("no_next", "combine", "Nothing decided yet", 260, 900, {"inputs": 1, "format": "(not decided yet)"}),
-            b("next", "store", "Start the next move", 520, 900, {"key": "next", "max_chars": 300}),
+            b("progress", "store", "Start the progress", 520, 750,
+              {"key": "progress", "max_chars": t["progress_chars"]}),
+            b("no_next", "combine", "Nothing decided yet" if t["decide_next"] else "Nothing failed yet", 260, 900,
+              {"inputs": 1, "format": t["step_start"]}),
+            b("next", "store", "Start the next move" if t["decide_next"] else "Start the last try", 520, 900,
+              {"key": t["step_key"], "max_chars": 300}),
         ],
         [
             l("msg", "out", "req", "in"),
@@ -275,26 +310,10 @@ def show_fn(t=None):
         l("read", "newest", "said", "value"), l("read", "newest", "said", "test"),
         l("said", "yes", "reply", "in"), l("said", "yes", "todos", "text"),
     ]
-    if t["pane_commands"]:
-        blocks += [
-            b("cmds", "capture", "The commands", 520, 300, {"pattern": COMMAND_LINE},
-              "The first line of each command it's about to run."),
-            b("cmd_lines", "join", "One per line", 780, 300, {"separator": "\n$ "}),
-            b("any_cmd", "branch", "Any command?", 1040, 300, {"pattern": HAS_TEXT}),
-            b("cmd_text", "combine", "Like a prompt", 1300, 300, {"inputs": 1, "format": "$ _INPUT1_"}),
-            b("cmd_pane", "pane", "Show in the pane", 1560, 300, {}, "You see each command as it runs."),
-        ]
-        links += [
-            l("read", "calls", "cmds", "in"), l("cmds", "group1", "cmd_lines", "in"),
-            l("cmd_lines", "out", "any_cmd", "value"), l("cmd_lines", "out", "any_cmd", "test"),
-            l("any_cmd", "yes", "cmd_text", "in1"), l("cmd_text", "out", "cmd_pane", "in"),
-        ]
     return fn(
         "show", "Show what it says",
         "When the model calls tools, whatever it wrote alongside the calls (\"I'll read the file first.\") is "
-        "shown to you, and any checklist in it becomes the to-do list."
-        + (" Each shell command it runs is shown in the run's pane." if t["pane_commands"] else "")
-        + " The exchange goes on unchanged.",
+        "shown to you, and any checklist in it becomes the to-do list. The exchange goes on unchanged.",
         [("exchange", "Tool call", "ex", "in")],
         [("exchange", "Tool call", "ex", "out")],
         blocks, links,
@@ -317,8 +336,8 @@ def decide_next_fn(t=None):
             b("ex", "forward", "Exchange", 0, 0),
             b("read", "read_exchange", "The work so far", 260, -200,
               {"role": "any", "system_in_transcript": False}),
-            b("recent", "store", "The newest part", 520, -200, {"key": "recent_work", "max_chars": 2500},
-              "Keeps the newest 2,500 characters, so the prompt stays short."),
+            b("recent", "store", "The newest part", 520, -200, {"key": "recent_work", "max_chars": t["recent_chars"]},
+              f"Keeps the newest {t['recent_chars']:,} characters, so the prompt stays short."),
             b("ask", "combine", "Ask for the next step", 780, -200, {"inputs": 1, "format": t["next"]}),
             b("decide", "llm", "Decide what's next", 1040, -200, {"temperature": 0},
               "A small extra call: one instruction."),
@@ -354,7 +373,8 @@ def report_error_fn(t=None):
         "report_error", "Report what went wrong",
         "When Work or Run tool fails, this gets the exchange with the failure as its last message. The model "
         "says in a sentence or two what went wrong and what it will do differently; that goes to the chat and "
-        "the run's pane, and becomes {{next}} so the next step takes it into account. Then the failure is "
+        "the run's pane, and becomes {{" + t["step_key"] + "}} so the next try takes it into account. Then the "
+        "failure is "
         "taken back out of the exchange (and any tool calls left waiting are answered as not run), and the "
         "exchange goes back to the start of the Agent loop to try again. After 3 failures in one run it gives "
         "up, and the run stops with the last error.",
@@ -381,8 +401,10 @@ def report_error_fn(t=None):
             b("pane", "pane", "Show in the pane", 2340, -250),
             b("note", "combine", "For the next step", 2080, -100, {
                 "inputs": 1, "format": "The last try failed: _INPUT1_ Take another way."}),
-            b("keep_note", "store", "The step now", 2340, -100, {"key": "next", "max_chars": 300},
-              "{{next}}: Decide what's next sees it."),
+            b("keep_note", "store", "The step now" if t["decide_next"] else "The last try", 2340, -100,
+              {"key": t["step_key"], "max_chars": 300},
+              "{{next}}: Decide what's next sees it." if t["decide_next"]
+              else "{{%s}}: Work's system message shows it." % t["step_key"]),
             b("drop", "drop_last", "Take the failure out", 1560, 100, {"count": 1}),
             b("not_run", "combine", "Why calls weren't run", 1820, 200, {
                 "inputs": 1, "format": "Not run: the step failed."}),
@@ -405,7 +427,7 @@ def report_error_fn(t=None):
             l("keep_err", "out", "not_run", "in1"), l("not_run", "out", "decline", "reason"),
         ],
         [note("n1", 0, 250, "Failures are reported, not hidden: you see a line in the chat and the pane, the "
-                            "model's next step knows what went wrong, and the exchange goes back without the "
+                            "model's next try knows what went wrong, and the exchange goes back without the "
                             "failure in it. Three failures in one run and it stops for real.", 420, 110)],
     )
 
@@ -424,10 +446,14 @@ def make_room_fn(t=None):
             b("ex", "forward", "Results", 0, 0),
             b("read", "read_exchange", "The work so far", 260, -200,
               {"role": "any", "system_in_transcript": False}),
-            b("save", "store", "Save the progress", 520, -200, {"key": "progress", "max_chars": 8000},
-              "{{progress}} keeps the newest 8,000 characters."),
-            b("check", "context_check", "Context full?", 260, 100, {},
-              "Estimated tokens (system message included) against the model's compaction point."),
+            b("save", "store", "Save the progress", 520, -200, {"key": "progress", "max_chars": t["progress_chars"]},
+              f"{{{{progress}}}} keeps the newest {t['progress_chars']:,} characters."),
+            b("check", "context_check", "Context full?", 260, 100,
+              {} if t["compact_percent"] is None else {"percent": t["compact_percent"]},
+              "Estimated tokens (system message included) against the model's compaction point."
+              if t["compact_percent"] is None else
+              f"Estimated tokens (system message included) against {t['compact_percent']}% of the model's "
+              "context: early, to keep the context light."),
             b("read_full", "read_exchange", "Everything so far", 560, -50,
               {"role": "any", "system_in_transcript": False}),
             b("ask", "combine", "Ask for a summary", 820, -50, {"inputs": 1, "format": t["summarize"]}),
@@ -459,109 +485,164 @@ def make_room_fn(t=None):
     )
 
 
+TIMES = {1: "once", 2: "twice"}
+
+
+def times(n):
+    return TIMES.get(n, f"{n} times")
+
+
 def done_fn(t=None):
     t = t or CHUMMY
+    n = t["nudges"]
+    check = t["self_check"]
+    blocks = [
+        b("ans", "forward", "Answer", 0, 0),
+        b("todos_fn", "function", "Keep the to-do list", 260, 0, {"function": "keep_todos"}),
+        b("nudged", "recall", "Times sent back", 520, -200, {"key": "nudged"}),
+        b("spent", "branch", f"Sent back {times(n)}?", 780, 0, {"pattern": spent(n)},
+          f"{times(n).capitalize()} already: take this answer."),
+        b("question", "branch", "Asks you?", 1040, 0, {"pattern": QUESTION},
+          "Ends with a question: the turn ends and your reply carries on."),
+        b("empty", "branch", "Any answer?", 1300, 0, {"pattern": HAS_TEXT}),
+        b("todos", "recall", "The to-do list", 1560, -200, {"key": "todos"}),
+        b("open", "branch", "Unchecked steps?", 1820, 0, {"pattern": OPEN}),
+        b("open_msg", "combine", "Carry on with the list", 2080, 150, {"inputs": 1, "format": t["open_nudge"]}),
+        b("show", "output", "Show what it said", 2080, -250, {}, "You still see what the model said."),
+        b("empty_msg", "combine", "Carry on after nothing", 1560, 300, {"inputs": 1, "format": t["empty_nudge"]}),
+        b("again", "forward", "Carry on", 2340, 250),
+        b("count", "combine", "Count it", 2600, 400, {"inputs": 1, "format": "{{nudged}}x"}),
+        b("save_count", "store", "Remember the count", 2860, 400, {"key": "nudged", "max_chars": 100}),
+        b("done", "forward", "Final answer", 2340, -100),
+    ]
+    links = [
+        l("ans", "out", "todos_fn", "text"),
+        l("todos_fn", "after", "nudged", "in"),
+        l("todos_fn", "after", "spent", "value"), l("nudged", "out", "spent", "test"),
+        l("spent", "yes", "done", "in", f"sent back {times(n)}"),
+        l("spent", "no", "question", "value"), l("spent", "no", "question", "test"),
+        l("question", "yes", "done", "in", "a question for you"),
+        l("question", "no", "empty", "value"), l("question", "no", "empty", "test"),
+        l("empty", "no", "empty_msg", "in1", "empty"), l("empty_msg", "out", "again", "in"),
+        l("empty", "yes", "todos", "in"),
+        l("empty", "yes", "open", "value"), l("todos", "out", "open", "test"),
+        l("open", "yes", "open_msg", "in1", "steps left"), l("open", "yes", "show", "in"),
+        l("open_msg", "out", "again", "in"),
+        l("again", "out", "count", "in1"), l("count", "out", "save_count", "in"),
+    ]
+    if check:
+        # A tool-less call checks the answer against the request and the work.
+        blocks += [
+            b("chk_ask", "combine", "Ask for a check", 2080, -500, {"inputs": 1, "format": check}),
+            b("chk", "llm", "Check the answer", 2340, -500, {"temperature": 0},
+              "A small extra call: does the answer do what was asked?"),
+            b("chk_first", "regex", "First line", 2600, -500, {"pattern": FIRST_LINE}),
+            b("chk_line", "join", "As text", 2860, -500, {"separator": ""}),
+            b("chk_keep", "store", "Remember the check", 3120, -500, {"key": "check", "max_chars": 300},
+              "{{check}}: what the check found."),
+            b("chk_pane", "pane", "Show in the pane", 3380, -650, {}, "The check's verdict, in the run's pane."),
+            b("chk_ok", "branch", "Looks right?", 3380, -400, {"pattern": OK},
+              "The check starts with OK: this is the final answer."),
+            b("chk_msg", "combine", "Fix what the check found", 3640, -250, {"inputs": 1, "format": t["check_nudge"]}),
+            b("chk_skip", "branch", "If the check fails", 2600, -300, {"pattern": ANY},
+              "Couldn't check: take the answer as it is."),
+        ]
+        links += [
+            l("open", "no", "chk_ask", "in1", "finished"),
+            l("chk_ask", "out", "chk", "in"), l("chk", "out", "chk_first", "in"),
+            l("chk_first", "out", "chk_line", "in"), l("chk_line", "out", "chk_keep", "in"),
+            l("chk_keep", "out", "chk_pane", "in"),
+            l("open", "no", "chk_ok", "value"), l("chk_keep", "out", "chk_ok", "test"),
+            l("chk_ok", "yes", "done", "in", "checked"),
+            l("chk_ok", "no", "chk_msg", "in1", "a problem"), l("chk_ok", "no", "show", "in"),
+            l("chk_msg", "out", "again", "in"),
+            l("open", "no", "chk_skip", "value"), l("chk", "error", "chk_skip", "test"),
+            l("chk_skip", "yes", "done", "in", "couldn't check"),
+        ]
+    else:
+        links.append(l("open", "no", "done", "in", "finished"))
     return fn(
         "done_check", "Done?",
         "When the model answers without tool calls. Keeps any checklist in the answer, then decides: an answer "
         "that ends with a question waits for you; an empty answer, or one given while the to-do list still has "
-        "unchecked steps, is sent back to carry on (twice at most per message); anything else is the final "
-        "answer.",
+        f"unchecked steps, is sent back to carry on ({times(n)} at most per message)"
+        + ("; otherwise a small call checks the answer against your request and the work, and if it finds a "
+           "problem the model is sent back to fix it; anything else is the final answer." if check
+           else "; anything else is the final answer."),
         [("answer", "Answer", "ans", "in")],
         [("done", "Final answer", "done", "out"), ("again", "Carry on", "again", "out")],
-        [
-            b("ans", "forward", "Answer", 0, 0),
-            b("todos_fn", "function", "Keep the to-do list", 260, 0, {"function": "keep_todos"}),
-            b("nudged", "recall", "Times sent back", 520, -200, {"key": "nudged"}),
-            b("spent", "branch", "Sent back twice?", 780, 0, {"pattern": SPENT},
-              "Twice already: take this answer."),
-            b("question", "branch", "Asks you?", 1040, 0, {"pattern": QUESTION},
-              "Ends with a question: the turn ends and your reply carries on."),
-            b("empty", "branch", "Any answer?", 1300, 0, {"pattern": HAS_TEXT}),
-            b("todos", "recall", "The to-do list", 1560, -200, {"key": "todos"}),
-            b("open", "branch", "Unchecked steps?", 1820, 0, {"pattern": OPEN}),
-            b("open_msg", "combine", "Carry on with the list", 2080, 150, {"inputs": 1, "format": t["open_nudge"]}),
-            b("show", "output", "Show what it said", 2080, -250, {}, "You still see what the model said."),
-            b("empty_msg", "combine", "Carry on after nothing", 1560, 300, {"inputs": 1, "format": t["empty_nudge"]}),
-            b("again", "forward", "Carry on", 2340, 250),
-            b("count", "combine", "Count it", 2600, 400, {"inputs": 1, "format": "{{nudged}}x"}),
-            b("save_count", "store", "Remember the count", 2860, 400, {"key": "nudged", "max_chars": 100}),
-            b("done", "forward", "Final answer", 2340, -100),
-        ],
-        [
-            l("ans", "out", "todos_fn", "text"),
-            l("todos_fn", "after", "nudged", "in"),
-            l("todos_fn", "after", "spent", "value"), l("nudged", "out", "spent", "test"),
-            l("spent", "yes", "done", "in", "sent back twice"),
-            l("spent", "no", "question", "value"), l("spent", "no", "question", "test"),
-            l("question", "yes", "done", "in", "a question for you"),
-            l("question", "no", "empty", "value"), l("question", "no", "empty", "test"),
-            l("empty", "no", "empty_msg", "in1", "empty"), l("empty_msg", "out", "again", "in"),
-            l("empty", "yes", "todos", "in"),
-            l("empty", "yes", "open", "value"), l("todos", "out", "open", "test"),
-            l("open", "yes", "open_msg", "in1", "steps left"), l("open", "yes", "show", "in"), l("open_msg", "out", "again", "in"),
-            l("open", "no", "done", "in", "finished"),
-            l("again", "out", "count", "in1"), l("count", "out", "save_count", "in"),
-        ],
+        blocks, links,
         [note("n1", 0, 300, "Not in the original loop, which simply stops when the model stops calling tools. "
-                            "Small models often stop half-way, so this sends them back (at most twice). Delete "
-                            "the Done? block in the Agent loop and link Answer straight out to get the original "
-                            "behaviour.", 420, 130)],
+                            f"Smaller models often stop half-way, so this sends them back (at most {times(n)}). "
+                            "Delete the Done? block in the Agent loop and link Answer straight out to get the "
+                            "original behaviour.", 420, 130)],
     )
 
 
 def agent_fn(t=None):
     t = t or CHUMMY
-    work = {"retries": 3, "on_limit": "ask", "reminder": t["work_reminder"]}
-    if t["work_tools"] is not None:
-        work["tools"] = t["work_tools"]
+    steer = t["decide_next"]
+    work = {"retries": 3, "on_limit": "ask"}
+    if t["work_reminder"]:
+        work["reminder"] = t["work_reminder"]
+    # Where each turn starts: Decide what's next, or straight to Work.
+    turn = ("next", "exchange") if steer else ("work", "in")
+    blocks = [
+        b("req", "forward", "Request", 0, 0),
+        b("start", "exchange", "Start the exchange", 260, 0, {"system": t["system"], "roles": ["user"]},
+          "The instructions (filled in fresh at every call), then your message."),
+    ]
+    if steer:
+        blocks.append(b("next", "function", "Decide what's next", 560, 0, {"function": "decide_next"},
+                        "The one next step, as {{next}}: to the pane, and to Work."))
+    blocks += [
+        b("work", "llm", "Work", 860, 0, work,
+          "Uses the tools this agent allows. The system message"
+          + (" (with {{todos}} and {{next}}) is filled in fresh at every call, and the Reminder sends the step last."
+             if steer else " (with {{todos}}) is filled in fresh at every call.")),
+        b("show", "function", "Show what it says", 1160, 250, {"function": "show"}),
+        b("run", "run_tool", "Run tool", 1460, 250, {"max_result_chars": t["result_chars"]},
+          "Errors and calls you don't allow go back to the model as the result."),
+        b("room", "function", "Make room", 1760, 250, {"function": "make_room"},
+          "Summarises a long conversation."),
+        b("check", "function", "Done?", 1160, -200, {"function": "done_check"}),
+        b("restart", "exchange", "Carry on", 1460, -350, {"system": t["system"], "roles": ["user"]}),
+        b("answer", "forward", "Final answer", 1460, -150),
+        b("oops", "function", "Report what went wrong", 1160, 500, {"function": "report_error"},
+          "Work or Run tool failed: say why, take it back out, try again (3 times at most)."),
+        b("failed", "forward", "Failed", 1460, 650),
+    ]
+    links = [
+        l("req", "out", "start", "in"), l("start", "out", *turn),
+        l("work", "tool", "show", "exchange", "tool calls"), l("show", "exchange", "run", "in"),
+        l("run", "out", "room", "exchange", "results"), l("room", "exchange", *turn, "next turn"),
+        l("work", "out", "check", "answer", "no tool calls"),
+        l("check", "done", "answer", "in"),
+        l("check", "again", "restart", "in", "not done yet"), l("restart", "out", *turn),
+        l("work", "failed_exchange", "oops", "exchange", "the model call failed"),
+        l("run", "failed_exchange", "oops", "exchange", "running tools failed"),
+        l("oops", "exchange", *turn, "try again"),
+        l("oops", "gave_up", "failed", "in", "gave up"),
+    ]
+    if steer:
+        links.insert(2, l("next", "exchange", "work", "in"))
     return fn(
         "agent", "Agent loop",
-        "The core loop: before each call, Decide what's next picks the one next step (shown in the run's pane "
-        "and sent to Work as its last message); then Work is called with the conversation so far; if it calls tools, what it said is shown, the "
-        "calls run (your approvals apply) and the results go back to it; when it answers without tool calls, "
-        "Done? decides whether that's the final answer. If Work or Run tool fails, Report what went wrong says "
-        "why and the loop tries again from the start (3 times at most).",
+        "The core loop: "
+        + ("before each call, Decide what's next picks the one next step (shown in the run's pane and sent to "
+           "Work as its last message); then " if steer else "")
+        + "Work is called with the conversation so far; if it calls tools, what it said is shown, the calls run "
+        "(your approvals apply) and the results go back to it; when it answers without tool calls, Done? decides "
+        "whether that's the final answer. If Work or Run tool fails, Report what went wrong says why and the loop "
+        "tries again from the start (3 times at most).",
         [("request", "Request", "req", "in")],
         [("answer", "Final answer", "answer", "out"), ("failed", "Failed", "failed", "out")],
-        [
-            b("req", "forward", "Request", 0, 0),
-            b("start", "exchange", "Start the exchange", 260, 0, {"system": t["system"], "roles": ["user"]},
-              "The instructions (filled in fresh at every call), then your message."),
-            b("next", "function", "Decide what's next", 560, 0, {"function": "decide_next"},
-              "The one next step, as {{next}}: to the pane, and to Work."),
-            b("work", "llm", "Work", 860, 0, work,
-              ("Uses only the shell tools (Run command, Run shell, Fetch page) of the ones this agent allows."
-               if t["work_tools"] is not None else "Uses the tools this agent allows.") + " The system message (with {{todos}} and {{next}}) is filled "
-              "in fresh at every call, and the Reminder sends the step last."),
-            b("show", "function", "Show what it says", 1160, 250, {"function": "show"}),
-            b("run", "run_tool", "Run tool", 1460, 250, {"max_result_chars": 12000},
-              "Errors and calls you don't allow go back to the model as the result."),
-            b("room", "function", "Make room", 1760, 250, {"function": "make_room"},
-              "Summarises a long conversation."),
-            b("check", "function", "Done?", 1160, -200, {"function": "done_check"}),
-            b("restart", "exchange", "Carry on", 1460, -350, {"system": t["system"], "roles": ["user"]}),
-            b("answer", "forward", "Final answer", 1460, -150),
-            b("oops", "function", "Report what went wrong", 1160, 500, {"function": "report_error"},
-              "Work or Run tool failed: say why, take it back out, try again (3 times at most)."),
-            b("failed", "forward", "Failed", 1460, 650),
-        ],
-        [
-            l("req", "out", "start", "in"), l("start", "out", "next", "exchange"),
-            l("next", "exchange", "work", "in"),
-            l("work", "tool", "show", "exchange", "tool calls"), l("show", "exchange", "run", "in"),
-            l("run", "out", "room", "exchange", "results"), l("room", "exchange", "next", "exchange", "next turn"),
-            l("work", "out", "check", "answer", "no tool calls"),
-            l("check", "done", "answer", "in"),
-            l("check", "again", "restart", "in", "not done yet"), l("restart", "out", "next", "exchange"),
-            l("work", "failed_exchange", "oops", "exchange", "the model call failed"),
-            l("run", "failed_exchange", "oops", "exchange", "running tools failed"),
-            l("oops", "exchange", "next", "exchange", "try again"),
-            l("oops", "gave_up", "failed", "in", "gave up"),
-        ],
-        [note("n1", 0, -500, "The core cycle: Decide what's next ⇄ Work ⇄ Show what it says ⇄ Run tool ⇄ Make "
-                             "room, until the model answers without tool calls. The loop's limits (model calls, tool calls) stop a "
-                             "model that never finishes.", 460, 100)],
+        blocks, links,
+        [note("n1", 0, -500, "The core cycle: "
+                             + ("Decide what's next ⇄ " if steer else "")
+                             + "Work ⇄ Show what it says ⇄ Run tool ⇄ Make room, until the model answers without "
+                             "tool calls. The loop's limits (model calls, tool calls) stop a model that never "
+                             "finishes.", 460, 100)],
     )
 
 
@@ -569,7 +650,7 @@ def assistant(t=None):
     t = t or CHUMMY
     blocks = [
         b("message", "input", "Your message", 0, 0),
-        b("history", "history", "Recent conversation", 0, 200, {"max_messages": 20}),
+        b("history", "history", "Recent conversation", 0, 200, {"max_messages": t["history"]}),
         b("ready", "function", "Get ready", 300, 100, {"function": "get_ready"},
           "Reads CHUMMY.md and the folder, starts the to-do list."),
         b("agent", "function", "Agent loop", 600, 100, {"function": "agent"},
@@ -589,23 +670,15 @@ def assistant(t=None):
     ]
     return {
         "format": "chummy.loop", "version": 3, "name": t["name"],
-        "description": t.get("description") or (
-            "The default loop. One agent loop, like a coding agent's: the model works with tools, call after call, "
-            "until it "
-            "answers without one. It says what it's doing as it goes, plans with its own to-do list when the work "
-            "has several steps, decides the one next step before each call and is told to do just that (shown "
-            "in the run's pane: Sessions → the run's text button), reads CHUMMY.md from the folder for your instructions, and summarises the "
-            "conversation when it gets long. If it stops with steps unchecked, it's sent back to finish (twice "
-            "at most)."
-        ),
-        # Every Work call has a small Decide what's next call before it, so twice the model calls.
-        "limits": {"max_steps": 10000, "max_llm_calls": 400, "max_tool_calls": 150},
+        "description": t["description"],
+        "limits": t["limits"],
         "blocks": blocks, "links": links,
-        "functions": [keep_todos_fn(), get_ready_fn(), show_fn(t), decide_next_fn(t), report_error_fn(t), make_room_fn(t),
-                      done_fn(t), agent_fn(t)],
+        "functions": [keep_todos_fn(), get_ready_fn(t), show_fn(t)]
+        + ([decide_next_fn(t)] if t["decide_next"] else [])
+        + [report_error_fn(t), make_room_fn(t), done_fn(t), agent_fn(t)],
         "notes": [
-            note("n1", 0, 450, t.get("overview") or
-                 "Chummy assistant\n\n"
+            note("n1", 0, 450, t["overview"] or
+                 f"{t['name']}\n\n"
                  "1. Get ready: your request, the conversation, CHUMMY.md (your instructions for this folder) "
                  "and the folder's top level.\n"
                  "2. Agent loop: one model does the work, one step at a time: before each call, Decide what's next "

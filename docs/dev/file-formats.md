@@ -181,14 +181,15 @@ A model block (`llm`) with tools works like this:
    `retry` (tell the model what was wrong and ask again, up to `retries`
    times, then stop), `fail` (stop), or `answer` (use the text as the answer).
 6. A tool may go online only if Internet access is on in Permissions and
-   the tool's own internet switch is on; then the block's `network` decides
-   (`inherit`, the default, uses the agent's internet switch).
+   the tool's Internet switch is on for the agent; then the block's
+   `network` decides (`inherit`, the default, follows the agent; `off`
+   keeps the block offline).
 
 #### Tool switches
 
 Two switches decide which tools a block offers: the **app-wide** one (tools
-on in Security and Privacy, and the tool on in Settings → Tools) and the
-**agent's** (its tool and internet switches). The app-wide one always applies;
+on in Security and Privacy) and the **agent's** switchboard (per tool: on,
+ask first, internet). The app-wide one always applies;
 nothing in a loop can get past it. A block follows the agent by default and
 can only **turn things off** for itself (the editor shows this as "Disable
 tools"), never on, so a loop file from someone else can't widen what an agent
@@ -396,7 +397,7 @@ A tool call needs the user's OK when:
 - its Run tool block has `confirm` on, or
 - the tool can use the internet right now and **Ask before tools go online**
   is on in Settings → Permissions (the default), or
-- the user set the tool to **Ask me before each use** in Settings → Tools.
+- the user set the tool to **Ask first** for the agent.
 
 A loop can ask for more confirmation, never less: the last two rules come
 from the app's settings, not the loop. A refused call goes back to the model
@@ -530,26 +531,20 @@ Message ──────┘                  └─ Check ─ Branch.test
                                     └────────────────────────────┘
 ```
 
-### Example: Terminal assistant
+### Example: Chummy assistant (medium, the default)
 
-[`terminal.chummy.json`](../../crates/flow/templates/terminal.chummy.json)
-(written by `make_templates.py` from `terminal.py`) is the Chummy assistant
-below with other prompts and one difference in tools: its Work block's tools
-are a per-tool map that turns everything off except the shell tools,
-
-```json
-"tools": { "all": "off", "each": { "fetch_page": "inherit", "run_command": "inherit", "run_shell": "inherit" } }
-```
-
-and *Show what it says* also sends the first line of each `command` argument
-to a Pane output block (Read exchange's Calls output → Capture groups →
-Join → Combine `$ _INPUT1_`).
-
-### Example: Chummy assistant (the default)
-
-[`assistant.chummy.json`](../../crates/flow/templates/assistant.chummy.json)
+[`assistant-medium.chummy.json`](../../crates/flow/templates/assistant-medium.chummy.json)
 (written by `make_templates.py` from `assistant.py`) is the loop Chummy
-recommends: no separate judges or planners, just one model working with
+recommends. The small and large versions
+([`assistant-small.chummy.json`](../../crates/flow/templates/assistant-small.chummy.json),
+from `small.py`, and
+[`assistant-large.chummy.json`](../../crates/flow/templates/assistant-large.chummy.json),
+from `large.py`) are built by the same functions with other settings: the
+small one adds a tool-less *Check the answer* call in *Done?* and keeps less
+(fewer messages, shorter results, room made at 60%); the large one has no
+*Decide what's next* (each turn goes straight to Work, which has no
+Reminder), is sent back once at most, keeps much more, and puts the last
+failure in Work's system message as `{{last_try}}`. The medium one has no separate judges or planners, just one model working with
 tools until it's done, the way a coding agent's core loop does (it's
 modelled on the basic behaviour of Claude Code's query loop). Every part is
 a function with comments, labels and notes, so it reads well in the editor.
@@ -631,9 +626,9 @@ tool outside the sandbox.
 
 Chummy ships with a set of built-in tools, installed when you set up tools in
 Settings → Tools. After an update, Chummy installs new built-ins and
-reinstalls changed ones when it starts (switches are kept; new tools start
-off). Every tool is off until you switch it on, and the Tools
-permission must be on too. Installing tools from files isn't offered in the
+reinstalls changed ones when it starts (agents' switches are kept; new tools
+start off). Every tool is off until you switch it on for an agent, and the
+Tools permission must be on too. Installing tools from files isn't offered in the
 app yet; the installer below is what it will use.
 
 ### The file
@@ -748,8 +743,8 @@ to the app, which makes it only if **all** of these hold:
 
 1. the tool's header says `network = true`;
 2. Internet access is on in Security and Privacy;
-3. the tool's own internet switch is on in Settings → Tools (turning it on
-   asks for confirmation);
+3. the tool's Internet switch is on for the agent (turning it on asks for
+   confirmation);
 4. the address is `http`/`https` and doesn't point to this computer or the
    local network (loopback, private, link-local, carrier-grade NAT and
    similar ranges are refused, after resolving the name, and again at every
@@ -1011,20 +1006,20 @@ by a rough estimate); the app can generate one (five groups of five from a
 disk. Version 1 (`CHUMMYD\x01`, a random salt in the header) isn't opened any
 more: export it again.
 
-The configuration (`chummyd.config` v2, strict: unknown fields are refused;
-v1, without Matrix, still opens):
+The configuration (`chummyd.config` v3, strict: unknown fields are refused;
+other versions aren't opened, so export the bundle again):
 
 | Field | |
 |---|---|
 | `instance` | `id` (random; binds the state folder), `name`, `time_zone` (IANA) |
-| `limits` | `max_runs`: job runs at once, 1–8 |
-| `permissions`, `tools` | as in the app's settings |
+| `limits` | `max_runs`: job runs at once, 1–8 (default 1); `chat_messages`: messages each chat keeps, 10–100,000 (default 2,000); `chats`: chats each agent keeps, 1–10,000 (default 50) |
+| `permissions` | as in the app's settings |
 | `providers`, `default_provider` | model connections (never the built-in engine) |
 | `secrets` | by name, `provider:<id>` for a connection's key |
-| `agents` | `id`, `name`, `loop_id`, `model`, `tools`, `network`, `loop_config`, `model_options`, `channel_approvals` |
+| `agents` | `id`, `name`, `loop_id`, `model`, `tools` (by name: `{ "ask", "network" }`), `loop_config`, `model_options`, `channel_approvals` |
 | `loops` | the loops, by id: trusted because the bundle authenticates |
 | `jobs` | `chummy.job` documents |
-| `channels` | `terminal.enabled`; `matrix` (optional, below) |
+| `channels` | `terminal.enabled`; `matrix` (optional, below); `telegram` (below; left out when empty) |
 | `logging` | `message_text` |
 | `state_key` | 32 bytes, base64: seals the state folder |
 
@@ -1033,6 +1028,12 @@ the local network), `user_id` (chummyd's account, `@name:server`),
 `password` (to log in the first time and for cross-signing's password
 check), `users` (agent id → Matrix IDs allowed to talk to it), `report_to`
 (job id → one of its agent's users), `upload_mb` (1–1024, default 100).
+
+`channels.telegram`: one bot per agent, each `agent`, `token` (from
+@BotFather, `<digits>:<20–100 of A–Z a–z 0–9 _ ->`), `api_url` (default
+`https://api.telegram.org`; https, or http only nearby), `upload_mb` (1–20,
+default 20), `stream` (default true). Errors: an agent not in the bundle,
+two bots for one agent, two agents sharing a bot, a token that isn't one.
 
 `Config::check()` gives errors (chummyd won't start; the app won't export)
 and warnings: no channel; a model connection without its key; an agent with
@@ -1056,13 +1057,17 @@ matrix/         the Matrix SDK's SQLite stores (end-to-end keys, room
 ```
 
 The state (`chummyd.state` v1, strict): `instance_id`, `saved_at`, `chats`
-(conversations: each agent's chat index and messages, at most 500 messages a
-conversation and 50 conversations an agent; a Matrix room's conversation is
+(conversations: each agent's chat index and messages, as many as the
+bundle's `limits` allow; a Matrix room's conversation is
 `m-` and 16 hex digits of SHA-256 of the person's Matrix ID), `paused` (paused runs by
 `agent/chat`, base64 of the session's `chummy.paused-run` document), `jobs`
 (job state and history), `usage` (the day's model use) and `matrix` (when
 the bundle has Matrix: the bot's `user_id`, its `session` (access token and
 device), whether it's `cross_signed` and has `synced`, and its `rooms`, one
 `{agent, user, room}` each). If the bot's ID changes, the Matrix state and
-stores are thrown away and it logs in afresh. A state file that
+stores are thrown away and it logs in afresh. `telegram` (when there are
+bots: by agent id, each bot's `bot_id`, the next update `offset`, and the
+`people` let in, `{id, name, since}`; another bot starts with nobody). A
+Telegram person's conversation is `m-` and 16 hex digits of SHA-256 of
+`telegram`, a zero byte and their Telegram id. A state file that
 doesn't open stops chummyd; it's never replaced by a fresh one.

@@ -84,12 +84,25 @@ pub fn describe(c: &Config) -> Vec<String> {
             .clone()
             .or_else(|| c.default_provider.clone())
             .unwrap_or_else(|| "the default".into());
+        // Each tool with its switches: "fetch (asks, online)".
         let tools: Vec<String> = if perm.tools {
-            a.tools.iter().cloned().collect()
+            a.tools
+                .iter()
+                .map(|(name, t)| {
+                    let online = perm.network && t.network;
+                    let asks = t.ask || (online && perm.confirm_online_tools);
+                    match (asks, online) {
+                        (true, true) => format!("{name} (asks, online)"),
+                        (true, false) => format!("{name} (asks)"),
+                        (false, true) => format!("{name} (online)"),
+                        (false, false) => name.clone(),
+                    }
+                })
+                .collect()
         } else {
             vec![]
         };
-        let internet = perm.network && a.network;
+        let internet = perm.tools && perm.network && a.tools.values().any(|t| t.network);
         out.push(format!(
             "  {} [{}]: loop “{loop_name}”, model {model}; tools: {}; internet: {}; approvals over channels: {}",
             a.name,
@@ -135,6 +148,23 @@ pub fn describe(c: &Config) -> Vec<String> {
     if let Some(m) = &c.channels.matrix {
         channels.push(format!("Matrix as {} on {}", m.user_id, m.homeserver));
     }
+    for t in &c.channels.telegram {
+        let agent = c
+            .agents
+            .iter()
+            .find(|a| a.id == t.agent)
+            .map(|a| a.name.as_str())
+            .unwrap_or(&t.agent);
+        let server = if t.api_url == chummy_bundle::TELEGRAM_API {
+            String::new()
+        } else {
+            format!(", through {}", t.api_url)
+        };
+        channels.push(format!(
+            "Telegram bot {} for {agent}{server}",
+            chummy_bundle::telegram_bot_id(&t.token).unwrap_or("?")
+        ));
+    }
     out.push(format!(
         "Channels: {}",
         if channels.is_empty() {
@@ -159,6 +189,12 @@ pub fn describe(c: &Config) -> Vec<String> {
                 }
             ));
         }
+    }
+    if !c.channels.telegram.is_empty() {
+        look.push(
+            "Telegram isn't end-to-end encrypted: Telegram can read what people and agents say there (people are let in with /pair in the terminal)"
+                .into(),
+        );
     }
     out.push(format!(
         "Logs: message text {}",
@@ -195,21 +231,37 @@ mod tests {
             name: "Helper".into(),
             loop_id: "none".into(),
             model: Some("m".into()),
-            tools: ["write_file".to_string(), "fetch".to_string()].into(),
-            network: true,
+            tools: [
+                (
+                    "write_file".to_string(),
+                    chummy_agent::AgentTool {
+                        ask: true,
+                        network: false,
+                    },
+                ),
+                (
+                    "fetch".to_string(),
+                    chummy_agent::AgentTool {
+                        ask: false,
+                        network: true,
+                    },
+                ),
+            ]
+            .into(),
             loop_config: Default::default(),
             model_options: Default::default(),
             channel_approvals: true,
         });
         c.permissions.tools = true;
         c.permissions.network = true;
+        c.permissions.confirm_online_tools = false;
         let text = describe(&c).join("\n");
         assert!(
             text.contains("Far away [m]: big at http://models.example.com/v1"),
             "{text}"
         );
         assert!(
-            text.contains("tools: fetch, write_file; internet: yes"),
+            text.contains("tools: fetch (online), write_file (asks); internet: yes"),
             "{text}"
         );
         assert!(text.contains("Look at:"), "{text}");
@@ -226,5 +278,22 @@ mod tests {
         let text = describe(&c).join("\n");
         assert!(text.contains("tools: none; internet: no"), "{text}");
         assert!(!text.contains("may use the internet"), "{text}");
+
+        // A Telegram bot: its id (never its token), and a word on privacy.
+        let token = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw";
+        c.channels.telegram.push(chummy_bundle::TelegramBot {
+            agent: "helper".into(),
+            token: token.into(),
+            api_url: chummy_bundle::TELEGRAM_API.into(),
+            upload_mb: 20,
+            stream: true,
+        });
+        let text = describe(&c).join("\n");
+        assert!(text.contains("Telegram bot 123456789 for Helper"), "{text}");
+        assert!(
+            text.contains("Telegram isn't end-to-end encrypted"),
+            "{text}"
+        );
+        assert!(!text.contains("AAHdq"), "{text}");
     }
 }

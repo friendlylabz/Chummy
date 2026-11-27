@@ -4,20 +4,18 @@
 //! - It reads one encrypted bundle (the whole configuration) when it starts
 //!   and runs that until it stops: nothing can reconfigure it while it runs.
 //! - It listens on nothing. People talk to agents through channels (the
-//!   terminal, and end-to-end encrypted Matrix rooms), which can only
+//!   terminal, end-to-end encrypted Matrix rooms, and Telegram bots), which can only
 //!   start runs of an agent's own loop or carry out commands.
 //! - Agents work only in their own folders, `<jail dir>/<agent>/`, which
 //!   are kept apart from the bundle, the password file and the state.
 //! - How runs behave comes from the same crates as the app
 //!   (`chummy-session`, `chummy-runner`, `chummy-flow`…).
 
+mod channels;
 mod checks;
 mod cli;
 mod inspect;
 mod jobs;
-mod link;
-#[cfg(feature = "matrix")]
-mod matrix;
 mod password;
 mod platform;
 mod router;
@@ -161,12 +159,17 @@ fn check(a: CheckArgs) -> Result<(), String> {
 }
 
 fn channel_names(c: &chummy_bundle::Config) -> String {
-    let mut names = vec![];
+    let mut names: Vec<String> = vec![];
     if c.channels.terminal.enabled {
-        names.push("terminal");
+        names.push("terminal".into());
     }
     if c.channels.matrix.is_some() {
-        names.push("matrix");
+        names.push("matrix".to_string());
+    }
+    match c.channels.telegram.len() {
+        0 => {}
+        1 => names.push("telegram (1 bot)".into()),
+        n => names.push(format!("telegram ({n} bots)")),
     }
     if names.is_empty() {
         "none".into()
@@ -182,6 +185,12 @@ async fn run(a: RunArgs) -> Result<(), String> {
     if config.channels.matrix.is_some() {
         return Err(
             "the bundle has a Matrix channel, but this chummyd was built without Matrix".into(),
+        );
+    }
+    #[cfg(not(feature = "telegram"))]
+    if !config.channels.telegram.is_empty() {
+        return Err(
+            "the bundle has Telegram bots, but this chummyd was built without Telegram".into(),
         );
     }
     for w in config.check().warnings {
@@ -222,7 +231,16 @@ async fn run(a: RunArgs) -> Result<(), String> {
     let tool_paths = ToolPaths::new(state.dir.join("tools"));
     #[cfg(feature = "matrix")]
     let matrix_store = state.dir.join("matrix");
-    let matrix_kept: saver::MatrixKept = Arc::new(std::sync::Mutex::new(saved.matrix.clone()));
+    let kept: saver::Kept = {
+        let mut k = std::collections::BTreeMap::new();
+        if let Some(m) = &saved.matrix {
+            k.insert(router::MATRIX.to_string(), m.clone());
+        }
+        for (agent, v) in &saved.telegram {
+            k.insert(channels::telegram_id(agent), v.clone());
+        }
+        Arc::new(std::sync::Mutex::new(k))
+    };
 
     let (inbox, mut rx) = tokio::sync::mpsc::unbounded_channel::<Input>();
     let p = DaemonPlatform(Arc::new(Inner {
@@ -230,8 +248,8 @@ async fn run(a: RunArgs) -> Result<(), String> {
         config: DaemonConfig::new(&config, &jails),
         chats: MemoryChats::from_snapshot(
             saved.chats.clone(),
-            platform::MAX_MESSAGES,
-            platform::MAX_CHATS,
+            config.limits.chat_messages as usize,
+            config.limits.chats as usize,
         ),
         paused: MemoryPaused::from_snapshot(&saved.paused),
         protected,
@@ -259,7 +277,7 @@ async fn run(a: RunArgs) -> Result<(), String> {
         config.limits.max_runs as usize,
         tz,
     );
-    let saver = Arc::new(Saver::new(p.clone(), state, store, matrix_kept.clone()));
+    let saver = Arc::new(Saver::new(p.clone(), state, store, kept.clone()));
     saver.save_now();
     let saving = saver.every();
     let scheduling = {
@@ -286,29 +304,32 @@ async fn run(a: RunArgs) -> Result<(), String> {
         });
     }
 
+    // The channels: Matrix, and a Telegram bot for each agent that has one.
+    #[allow(unused_mut)]
+    let mut handles: Vec<chummy_channel::Handle> = vec![];
+    #[allow(unused_mut)]
+    let mut senders = std::collections::BTreeMap::new();
     #[cfg(feature = "matrix")]
-    let to_matrix = config.channels.matrix.is_some().then(|| {
-        matrix::start(
-            p.clone(),
-            saver.clone(),
-            matrix_kept.clone(),
-            matrix_store,
-            matrix_key,
-            inbox.clone(),
-        )
-    });
-    #[cfg(not(feature = "matrix"))]
-    let to_matrix: Option<tokio::sync::mpsc::UnboundedSender<link::ToMatrix>> = {
-        let _ = &matrix_kept;
-        None
-    };
+    if config.channels.matrix.is_some() {
+        let h = channels::start_matrix(&p, &saver, &kept, matrix_store, matrix_key, &inbox);
+        senders.insert(router::MATRIX.to_string(), h.sender());
+        handles.push(h);
+    }
+    #[cfg(feature = "telegram")]
+    for bot in &config.channels.telegram {
+        let h = channels::start_telegram(&p, &saver, &kept, bot, &inbox)?;
+        senders.insert(channels::telegram_id(&bot.agent), h.sender());
+        handles.push(h);
+    }
+    let any_channel = !senders.is_empty();
 
     let quit = Arc::new(tokio::sync::Notify::new());
     let mut router = Router::new(
         p.clone(),
         manager.clone(),
         saver.clone(),
-        to_matrix.clone(),
+        senders,
+        kept.clone(),
         quit.clone(),
     );
     let routing = tokio::spawn(async move {
@@ -317,9 +338,9 @@ async fn run(a: RunArgs) -> Result<(), String> {
             router.handle(input).await;
         }
     });
-    // The terminal: a channel, or (with Matrix) where the operator
-    // confirms verifications.
-    if config.channels.terminal.enabled || to_matrix.is_some() {
+    // The terminal: a channel, or (with Matrix or Telegram) where the
+    // operator confirms verifications and lets people in.
+    if config.channels.terminal.enabled || any_channel {
         router::read_terminal(inbox.clone());
     }
     syslog::info(
@@ -356,13 +377,10 @@ async fn run(a: RunArgs) -> Result<(), String> {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
-    // Let the router show what the runs said last, and Matrix send it.
+    // Let the router show what the runs said last, and the channels send it.
     tokio::time::sleep(Duration::from_millis(300)).await;
-    if let Some(m) = &to_matrix {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        if m.send(link::ToMatrix::Flush(tx)).is_ok() {
-            let _ = tokio::time::timeout(Duration::from_secs(10), rx).await;
-        }
+    for h in &handles {
+        h.flush(Duration::from_secs(10)).await;
     }
     saving.abort();
     saver.save_now();

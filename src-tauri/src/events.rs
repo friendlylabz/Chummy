@@ -50,3 +50,6 @@ pub const ASKS_CHANGED: &str = "asks:changed";
 pub const SYSTEM_LOG: &str = "log:system";
 /// Sent to the main window only. Payload: `tray::Activity`.
 pub const CLOSE_REQUESTED: &str = "app:close-requested";
+/// Payload: `BTreeMap<channel id, channels::Live>` (channels' connection
+/// state and verifications waiting).
+pub const CHANNELS_CHANGED: &str = "channels:changed";

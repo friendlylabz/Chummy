@@ -1,6 +1,6 @@
-//! Emoji verification. People allowed to talk to an agent verify chummyd's
-//! session from their Matrix app; the operator confirms the emoji in
-//! chummyd's terminal (`/verify yes` or `/verify no`), so verification
+//! Emoji verification. People allowed to talk to an agent verify the bot's
+//! session from their Matrix app; someone confirms the emoji in the program
+//! (chummyd's terminal, the app's Channels settings), so verification
 //! always rests on someone comparing both screens.
 
 use futures_util::StreamExt;
@@ -11,7 +11,7 @@ use matrix_sdk::encryption::verification::{
 use matrix_sdk::ruma::UserId;
 
 use super::Ctx;
-use crate::router::note;
+use crate::Event;
 
 /// Someone asked to verify (in a room or to this device).
 pub async fn requested(ctx: std::sync::Arc<Ctx>, client: Client, user: &UserId, flow_id: &str) {
@@ -33,7 +33,7 @@ pub async fn requested(ctx: std::sync::Arc<Ctx>, client: Client, user: &UserId, 
         chummy_log::system::warn("matrix", format!("Couldn't accept a verification: {e}"));
         return;
     }
-    chummy_log::system::info("matrix", format!("{user} started verifying chummyd"));
+    chummy_log::system::info("matrix", format!("{user} started verifying the bot"));
     tokio::spawn(follow_request(ctx, req));
 }
 
@@ -47,7 +47,7 @@ async fn follow_request(ctx: std::sync::Arc<Ctx>, req: VerificationRequest) {
                     Some(sas) => follow_sas(ctx, sas).await,
                     None => {
                         let _ = req.cancel().await;
-                        note("A verification was cancelled: chummyd verifies by emoji only.");
+                        ctx.note("A verification was cancelled: only emoji verification works.");
                     }
                 }
                 return;
@@ -84,21 +84,21 @@ async fn follow_sas(ctx: std::sync::Arc<Ctx>, sas: SasVerification) {
             Some(SasState::KeysExchanged { .. }) if shown.is_none() => {
                 let Some(emoji) = sas.emoji() else {
                     let _ = sas.cancel().await;
-                    note(&format!(
-                        "The verification with {who} was cancelled: chummyd verifies by emoji only."
+                    ctx.note(format!(
+                        "The verification with {who} was cancelled: only emoji verification works."
                     ));
                     return;
                 };
                 let n = ctx.add_verification(sas.clone());
                 shown = Some(n);
-                let line: Vec<String> = emoji
-                    .iter()
-                    .map(|e| format!("{} {}", e.symbol, e.description))
-                    .collect();
-                note(&format!(
-                    "{who} wants to verify chummyd. Check that they see these emoji, in this order:\n  {}\nThen: /verify {n} yes if they match, /verify {n} no if they don't.",
-                    line.join("   ")
-                ));
+                ctx.host.event(Event::Emoji {
+                    n,
+                    who: who.clone(),
+                    emoji: emoji
+                        .iter()
+                        .map(|e| (e.symbol.to_string(), e.description.to_string()))
+                        .collect(),
+                });
                 chummy_log::system::info(
                     "matrix",
                     format!("Verification {n} with {who} waits for the operator"),
@@ -107,16 +107,18 @@ async fn follow_sas(ctx: std::sync::Arc<Ctx>, sas: SasVerification) {
             Some(SasState::Done { .. }) => {
                 if let Some(n) = shown {
                     ctx.remove_verification(n);
+                    ctx.host.event(Event::Over { n });
                 }
-                note(&format!("Verified {who}."));
+                ctx.note(format!("Verified {who}."));
                 chummy_log::system::info("matrix", format!("Verified {who}"));
                 return;
             }
             Some(SasState::Cancelled(c)) => {
                 if let Some(n) = shown {
                     ctx.remove_verification(n);
+                    ctx.host.event(Event::Over { n });
                 }
-                note(&format!(
+                ctx.note(format!(
                     "The verification with {who} was cancelled ({}).",
                     c.reason()
                 ));
@@ -129,6 +131,7 @@ async fn follow_sas(ctx: std::sync::Arc<Ctx>, sas: SasVerification) {
             None => {
                 if let Some(n) = shown {
                     ctx.remove_verification(n);
+                    ctx.host.event(Event::Over { n });
                 }
                 return;
             }
@@ -136,12 +139,12 @@ async fn follow_sas(ctx: std::sync::Arc<Ctx>, sas: SasVerification) {
     }
 }
 
-/// The operator's `/verify [n] yes|no`.
+/// The answer to a verification: whether the emoji match.
 pub async fn answer(ctx: &Ctx, n: Option<u32>, matches: bool) {
     let sas = match ctx.take_verification(n) {
         Ok(s) => s,
         Err(e) => {
-            note(&e);
+            ctx.note(e);
             return;
         }
     };
@@ -151,8 +154,8 @@ pub async fn answer(ctx: &Ctx, n: Option<u32>, matches: bool) {
         sas.mismatch().await
     };
     match r {
-        Ok(()) if matches => note("Confirmed: waiting for them to confirm too."),
-        Ok(()) => note("Cancelled: the emoji didn't match."),
-        Err(e) => note(&format!("Couldn't answer the verification: {e}")),
+        Ok(()) if matches => ctx.note("Confirmed: waiting for them to confirm too."),
+        Ok(()) => ctx.note("Cancelled: the emoji didn't match."),
+        Err(e) => ctx.note(format!("Couldn't answer the verification: {e}")),
     }
 }

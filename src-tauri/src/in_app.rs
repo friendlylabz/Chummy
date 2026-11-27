@@ -49,6 +49,10 @@ pub async fn title_chat(
     message: String,
     reply: String,
 ) {
+    // A channel's chat keeps its name (who it's with).
+    if chummy_channel::is_channel_chat(&chat_id) {
+        return;
+    }
     let state = app.state::<AppState>();
     let s = state.settings();
     let Some(agent) = s.agent(&agent_id).cloned() else {

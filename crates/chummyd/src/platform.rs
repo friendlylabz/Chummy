@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
-use chummy_agent::{Agent, AgentConfig, Permissions, ToolPref, Workspace};
+use chummy_agent::{Agent, AgentConfig, Permissions, Workspace};
 use chummy_bundle::Config;
 use chummy_flow::LoopFile;
 use chummy_llm::ProviderConfig;
@@ -26,10 +26,6 @@ use zeroize::Zeroizing;
 
 use crate::router::Input;
 
-/// Most messages kept per conversation, and conversations per agent.
-pub const MAX_MESSAGES: usize = 500;
-pub const MAX_CHATS: usize = 50;
-
 /// The configuration as agents run under it (each agent's folder is its
 /// jail).
 #[derive(Clone)]
@@ -38,7 +34,6 @@ pub struct DaemonConfig {
     pub providers: Vec<ProviderConfig>,
     pub default_provider: Option<String>,
     pub permissions: Permissions,
-    pub tools: BTreeMap<String, ToolPref>,
 }
 
 impl DaemonConfig {
@@ -58,7 +53,6 @@ impl DaemonConfig {
                     },
                     created_at: 0,
                     tools: a.tools.clone(),
-                    network: a.network,
                     loop_config: a.loop_config.clone(),
                     model_options: a.model_options.clone(),
                 })
@@ -66,7 +60,6 @@ impl DaemonConfig {
             providers: c.providers.clone(),
             default_provider: c.default_provider.clone(),
             permissions: c.permissions.clone(),
-            tools: c.tools.clone(),
         }
     }
 }
@@ -83,9 +76,6 @@ impl AgentConfig for DaemonConfig {
     }
     fn permissions(&self) -> &Permissions {
         &self.permissions
-    }
-    fn tool_prefs(&self) -> &BTreeMap<String, ToolPref> {
-        &self.tools
     }
 }
 

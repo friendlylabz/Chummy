@@ -100,8 +100,8 @@ answers. Add it in Settings → Models as "Other OpenAI-compatible server" at
   only for changes that need a migration), expose it in `SettingsView`,
   mirror it in `ipc.ts`, then the UI.
 - **Built-in loop change:** edit the generator (`assistant.py` holds the
-  shared agent loop and the Chummy assistant's prompts, `terminal.py` the
-  Terminal assistant's), regenerate with `make_templates.py`, and add the
+  shared agent loop and the medium Chummy assistant's prompts and settings,
+  `small.py` and `large.py` what the other two change), regenerate with `make_templates.py`, and add the
   old version's fingerprint to `RETIRED` in `crates/agent/src/library.rs` so
   unedited saved copies get upgraded. Every `templates/*.chummy.json` must be
   exactly what Chummy would save (the generator writes it that way; for the

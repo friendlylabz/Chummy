@@ -55,7 +55,6 @@ fn bundle() -> Config {
         loop_id: "echo".into(),
         model: None,
         tools: Default::default(),
-        network: false,
         loop_config: Default::default(),
         model_options: Default::default(),
         channel_approvals: false,

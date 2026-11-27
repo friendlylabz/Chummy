@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { DEFAULT_DAILY_TOKENS, DEFAULT_MAX_TOKENS, commands, contextWindow, errorText, type Preset, type ProbeReport, type ProviderView, type UsageView } from "$lib/ipc";
+  import { DEFAULT_DAILY_TOKENS, commands, contextWindow, errorText, type Preset, type ProbeReport, type ProviderView, type UsageView } from "$lib/ipc";
   import { kindLabel, precisionLabel } from "$lib/format";
   import { settings } from "$lib/stores/settings.svelte";
   import { local } from "$lib/stores/local.svelte";
@@ -20,11 +20,6 @@
 
   const providers = $derived(settings.current.providers);
   let usage = $state<Record<string, UsageView>>({});
-  /** The local model whose limit is being changed, and the draft. */
-  let limitFor = $state<string | null>(null);
-  let limitDraft = $state("");
-  let maxDraft = $state("");
-  let limitError = $state("");
 
   async function loadUsage() {
     const list = await commands.usageToday().catch(() => [] as UsageView[]);
@@ -39,28 +34,6 @@
   });
 
   const fmt = (n: number) => n.toLocaleString();
-
-  async function saveLimit(p: ProviderView, on: boolean) {
-    limitError = "";
-    const n = Math.round(Number(limitDraft.replace(/[,_\s]/g, "")));
-    if (on && (!Number.isFinite(n) || n < 1000)) {
-      limitError = "At least 1,000 tokens.";
-      return;
-    }
-    const max = Math.round(Number(maxDraft.replace(/[,_\s]/g, "")));
-    if (!Number.isFinite(max) || max < 16 || max > 32768) {
-      limitError = "The longest answer must be 16 to 32,768 tokens.";
-      return;
-    }
-    try {
-      const { has_key: _k, ...config } = p;
-      await commands.saveProvider({ ...config, daily_tokens: on ? n : null, max_tokens: max }, null);
-      limitFor = null;
-      loadUsage();
-    } catch (e) {
-      limitError = errorText(e);
-    }
-  }
 
   function pick(p: Preset) {
     chosen = p;
@@ -181,7 +154,7 @@
         </div>
         <div class="p-actions">
           <Button icon="play" onclick={() => test(p)} disabled={t?.running}>{t?.running ? "Testing…" : "Test"}</Button>
-          {#if p.kind !== "local"}<Button variant="ghost" icon="edit" iconOnly aria-label="Edit" onclick={() => edit(p)} />{/if}
+          <Button variant="ghost" icon="edit" iconOnly aria-label="Edit" onclick={() => edit(p)} />
           {#if !isDefault}<Button variant="ghost" icon="star" iconOnly aria-label="Make default" title="Make default" onclick={() => commands.setDefaultProvider(p.id)} />{/if}
           <Button variant="ghost" icon="trash" iconOnly aria-label="Remove" onclick={() => remove(p)} />
         </div>
@@ -198,21 +171,7 @@
         {:else}
           <span class="faint xs">Today {fmt(u?.used ?? 0)} tokens · no daily limit</span>
         {/if}
-        {#if p.kind === "local"}
-          <button type="button" class="link" onclick={() => { limitFor = limitFor === p.id ? null : p.id; limitDraft = String(cap ?? DEFAULT_DAILY_TOKENS); maxDraft = String(p.max_tokens ?? DEFAULT_MAX_TOKENS); limitError = ""; }}>Change limits</button>
-        {/if}
       </div>
-      {#if limitFor === p.id}
-        <div class="p-body limit-edit">
-          <input class="input" style="width: 150px" bind:value={limitDraft} inputmode="numeric" aria-label="Tokens per day" />
-          <span class="muted small">tokens a day ·</span>
-          <input class="input" style="width: 100px" bind:value={maxDraft} inputmode="numeric" aria-label="Longest answer in tokens" />
-          <span class="muted small">longest answer</span>
-          <Button variant="primary" onclick={() => saveLimit(p, true)}>Set limit</Button>
-          <Button variant="ghost" onclick={() => saveLimit(p, false)}>No limit</Button>
-          {#if limitError}<span class="danger-text small">{limitError}</span>{/if}
-        </div>
-      {/if}
 
       {#if dl && !dl.done && !dl.error}
         <div class="p-body muted small">Downloading…</div>
@@ -277,23 +236,6 @@
   }
   .bar span.full {
     background: var(--warn);
-  }
-  .link {
-    padding: 0;
-    border: none;
-    background: none;
-    color: var(--accent);
-    font-size: var(--text-xs);
-    cursor: pointer;
-  }
-  .limit-edit {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    flex-wrap: wrap;
-  }
-  .danger-text {
-    color: var(--danger);
   }
   .p-head {
     display: flex;

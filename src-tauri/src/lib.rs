@@ -4,6 +4,7 @@
 //! windows. All real logic lives in the `chummy-*` crates, which have no Tauri
 //! dependency and are tested on their own.
 
+mod channels;
 mod cli;
 mod commands;
 mod dialogs;
@@ -21,8 +22,8 @@ mod windows;
 use tauri::{Manager, RunEvent, WindowEvent};
 
 use commands::{
-    agent_setup, agents, asks, chat, chummyd, general, jobs, local, logs, loops, providers, review,
-    sandbox, tools,
+    agent_setup, agents, asks, channels as channel_cmds, chat, chummyd, general, jobs, local, logs,
+    loops, providers, review, sandbox, tools,
 };
 use state::AppState;
 
@@ -99,6 +100,7 @@ pub fn run() {
             }
             jobs::start(&handle)?;
             asks::start_forwarding(&handle);
+            channels::start(&handle);
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -152,6 +154,7 @@ pub fn run() {
             chat::list_paused,
             chat::list_runs,
             chat::run_pane,
+            chat::recent_runs,
             chummyd::chummyd_sources,
             chummyd::chummyd_check,
             chummyd::chummyd_check_homeserver,
@@ -179,9 +182,6 @@ pub fn run() {
             local::engine_log,
             tools::tools_status,
             tools::setup_tools,
-            tools::set_tool_enabled,
-            tools::set_tool_network,
-            tools::set_tool_ask,
             sandbox::sandbox_status,
             sandbox::check_sandbox,
             sandbox::set_sandbox_kind,
@@ -199,6 +199,13 @@ pub fn run() {
             agent_setup::import_agent_loop_config,
             agent_setup::usage_today,
             general::set_general,
+            channel_cmds::list_channels,
+            channel_cmds::save_channel,
+            channel_cmds::set_channel_enabled,
+            channel_cmds::delete_channel,
+            channel_cmds::answer_channel_pending,
+            channel_cmds::channel_pairing_code,
+            channel_cmds::remove_channel_person,
             jobs::list_jobs,
             jobs::save_job,
             jobs::delete_job,

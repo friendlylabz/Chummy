@@ -40,6 +40,9 @@
         {#if working}<span class="pulse"></span>Live{:else}Finished{/if}{chat ? ` · ${chat}` : ""}
       </div>
     </div>
+    <button class="close" type="button" aria-label="Open the run's log" title="Open its full log" onclick={() => commands.openWindow("logs", `run:${runId}`)}>
+      <Icon name="text" size={16} />
+    </button>
     <button class="close" type="button" aria-label="Close the pane" title="Close" onclick={onclose}>
       <Icon name="close" size={16} />
     </button>
@@ -52,7 +55,7 @@
       {/each}
     </ol>
   {:else}
-    <EmptyState icon="text" title="Nothing here yet" compact>
+    <EmptyState icon="thought" title="Nothing here yet" compact>
       Lines appear here when the run's loop reaches a Pane output block, newest first.
     </EmptyState>
   {/if}

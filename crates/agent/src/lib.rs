@@ -6,6 +6,6 @@ mod agent;
 mod config;
 pub mod library;
 
-pub use agent::{Agent, Permissions, ToolPref, Workspace};
+pub use agent::{Agent, AgentTool, Permissions, Workspace};
 pub use config::AgentConfig;
 pub use library::{Library, LoopSummary, valid_id};

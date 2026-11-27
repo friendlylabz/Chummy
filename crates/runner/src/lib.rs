@@ -75,10 +75,8 @@ pub struct ToolGrant {
 /// What one agent may use, on top of the app-wide switches.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentGrant {
-    /// Tools this agent may call.
+    /// Tools this agent may call (their switches are in the tool grants).
     pub tools: BTreeSet<String>,
-    /// This agent's tools may use the internet.
-    pub network: bool,
 }
 
 /// Everything one run of an agent may use.
@@ -88,6 +86,7 @@ pub struct AgentSetup {
     /// The agent's model.
     pub model: Option<ProviderConfig>,
     pub permissions: Permissions,
+    /// The agent's switches for each of its tools.
     pub tool_grants: BTreeMap<String, ToolGrant>,
     /// The agent's own switches; `None` (a test run without an agent) allows
     /// no tools.
@@ -166,10 +165,9 @@ impl<S: Services> AgentHost<S> {
         // A run without an agent (a test run) has no tools at all.
         let has_agent = setup.agent.is_some();
         let agent = setup.agent.unwrap_or_default();
-        // The app-wide level: tools on in Permissions, and the tool on in
-        // Settings → Tools. Nothing can get past this. The agent's own switch
-        // is the default each block inherits (see `agent_allows`); a block can
-        // turn one of these on or off for itself.
+        // Tools on in Security and Privacy, and the tool one of the agent's.
+        // Nothing can get past this; a block can only turn a tool off for
+        // itself (see `agent_allows`).
         let tools = if setup.permissions.tools && has_agent {
             setup
                 .installed
@@ -214,8 +212,8 @@ impl<S: Services> AgentHost<S> {
 
     /// Whether `m` may use the internet for a call from a block whose
     /// internet switch is `network`, and if not, why (for the model). The
-    /// app's switch and the tool's must be on; then the block decides, where
-    /// Inherit means the agent's switch.
+    /// app's switch and the agent's for this tool must be on; a block can
+    /// only turn it off.
     pub fn net_policy(&self, m: &ToolManifest, network: chummy_flow::Switch) -> NetPolicy {
         use chummy_flow::Switch;
         if !m.network {
@@ -224,11 +222,9 @@ impl<S: Services> AgentHost<S> {
             NetPolicy::off("Internet access is off in Chummy, so this tool can't go online.")
         } else if !self.tool_grant(&m.name).network {
             NetPolicy::off(format!(
-                "Internet access is off for “{}”, so it can't go online.",
+                "Internet access is off for “{}” for this agent, so it can't go online.",
                 m.title
             ))
-        } else if network == Switch::Inherit && !self.agent.network {
-            NetPolicy::off("Internet access is off for this agent, so this tool can't go online.")
         } else if network == Switch::Off {
             NetPolicy::off(
                 "This step of the loop isn't allowed to use the internet, so this tool can't go online.",
@@ -790,7 +786,6 @@ mod tests {
             tool_grants: BTreeMap::new(),
             agent: Some(AgentGrant {
                 tools: ["calc".to_string(), "fetch".to_string()].into(),
-                network: true,
             }),
             installed: vec![manifest("calc", false), manifest("fetch", true)],
             sandbox: None,
@@ -878,18 +873,16 @@ mod tests {
         assert!(!h.must_confirm("fetch", Off));
 
         // The agent's switches are what blocks inherit; a block can only turn
-        // things off.
+        // things off. An agent without calc, and without internet for fetch:
         let mut s = all_on();
         s.agent = Some(AgentGrant {
             tools: ["fetch".to_string()].into(),
-            network: false,
         });
+        s.tool_grants.remove("calc");
+        s.tool_grants.get_mut("fetch").unwrap().network = false;
         let h = AgentHost::new(Arc::new(NoServices), s);
         assert!(!h.agent_allows("calc") && h.agent_allows("fetch"));
-        assert!(
-            h.tool_info("calc").is_some(),
-            "on app-wide (the engine still won't offer it: the agent has it off)"
-        );
+        assert!(h.tool_info("calc").is_none(), "not one of its tools");
         let why = h.net_policy(&manifest("fetch", true), Inherit);
         assert!(!why.allowed && why.refusal.contains("this agent"));
         // No agent (a test run without one): no tools.
@@ -901,7 +894,7 @@ mod tests {
                 .is_none()
         );
 
-        // The app's and the tool's own internet switches can't be overridden.
+        // The app's and the agent's internet switches can't be overridden.
         let mut s = all_on();
         s.tool_grants.get_mut("fetch").unwrap().network = false;
         let h = AgentHost::new(Arc::new(NoServices), s);
@@ -911,7 +904,7 @@ mod tests {
         s.permissions.network = false;
         let h = AgentHost::new(Arc::new(NoServices), s);
         assert!(!h.net_policy(&manifest("fetch", true), Inherit).allowed);
-        // A tool off in Settings → Tools isn't there for any block.
+        // A tool the agent doesn't have isn't there for any block.
         let mut s = all_on();
         s.tool_grants.get_mut("calc").unwrap().enabled = false;
         assert!(

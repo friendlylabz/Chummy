@@ -16,7 +16,6 @@ class SettingsStore {
     default_provider: null,
     local: { device: "auto" },
     hf_token_set: false,
-    tools: {},
     general: { close: "ask", notifications: true, max_job_runs: 1, markdown: true, math: true },
     logging: { runs: "verbose", encrypt: true, system: "info" },
     sandbox: {

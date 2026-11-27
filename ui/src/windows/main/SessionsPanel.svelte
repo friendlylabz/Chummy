@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { commands } from "$lib/ipc";
+  import { commands, events, type RecentRun } from "$lib/ipc";
   import { runs } from "$lib/stores/runs.svelte";
   import { settings } from "$lib/stores/settings.svelte";
   import { asks } from "$lib/stores/asks.svelte";
@@ -53,6 +53,36 @@
     if (busy.join() !== busyAgents.join()) busyAgents = busy;
   }
 
+  // Runs that finished lately: three for each agent, newest first.
+  let recent = $state<RecentRun[]>([]);
+  async function loadRecent() {
+    recent = await commands.recentRuns().catch(() => recent);
+  }
+  const recentByAgent = $derived(
+    agents
+      .map((a) => ({ agent: a, runs: recent.filter((r) => r.agent_id === a.id) }))
+      .filter((g) => g.runs.length),
+  );
+  const statusText: Record<RecentRun["status"], string> = {
+    completed: "Finished",
+    failed: "Failed",
+    stopped: "Stopped",
+    limit: "Hit a limit",
+    paused: "Paused",
+    ended: "Ended",
+  };
+  const recentRow = (r: RecentRun): Row => ({
+    id: r.run_id,
+    title: `${r.source === "job" ? "Job: " : ""}${r.title}`,
+    chat: r.chat_title ?? "",
+    agent: r.agent_id,
+    chatId: r.chat_id ?? null,
+    step: "",
+    pausable: false,
+    pausing: false,
+  });
+  const openLog = (runId: string) => commands.openWindow("logs", `run:${runId}`);
+
   /** Opens a chat (and its agent). */
   async function openChat(agentId: string | null | undefined, chatId: string | null | undefined) {
     if (!agentId) return;
@@ -62,8 +92,14 @@
 
   onMount(() => {
     snapshot();
+    loadRecent();
     const t = setInterval(snapshot, 500);
-    return () => clearInterval(t);
+    // A run ends a moment after it says so.
+    const off = events.onRunFinished(() => setTimeout(loadRecent, 300));
+    return () => {
+      clearInterval(t);
+      off.then((f) => f());
+    };
   });
 
   // The panel's width: drag its left edge (or use the arrow keys on it);
@@ -203,7 +239,10 @@
             {#if r.chat}<div class="run-chat"><Icon name="chat" size={12} /><span>{r.chat}</span></div>{/if}
             <div class="run-step">{r.step}</div>
           </button>
-          <button class="icon-btn" type="button" aria-label="Show the run's pane" title="Show what it's doing (its pane)" onclick={() => (paneFor = r)}>
+          <button class="icon-btn" type="button" aria-label="Show the run's pane" title="Show what it's thinking (its pane)" onclick={() => (paneFor = r)}>
+            <Icon name="thought" size={14} />
+          </button>
+          <button class="icon-btn" type="button" aria-label="Open the run's log" title="Open its full log" onclick={() => openLog(r.id)}>
             <Icon name="text" size={14} />
           </button>
           {#if r.pausable}
@@ -231,7 +270,7 @@
 
     {#if paused.list.length}
       <div class="group">
-        <div class="group-title">Paused</div>
+        <div class="group-title">Paused runs</div>
         {#each paused.list as p (p.chat_id)}
           {@const agentName = agents.find((a) => a.id === p.agent_id)?.name ?? "Agent"}
           <div class="run paused">
@@ -265,6 +304,32 @@
               <Icon name="trash" size={14} />
             </button>
           </div>
+        {/each}
+      </div>
+    {/if}
+
+    {#if recentByAgent.length}
+      <div class="group">
+        <div class="group-title">Recent runs</div>
+        {#each recentByAgent as g (g.agent.id)}
+          <div class="recent-agent">{g.agent.name}</div>
+          {#each g.runs as r (r.run_id)}
+            {@const row = recentRow(r)}
+            <div class="run recent">
+              <span class="ended" class:bad={r.status === "failed" || r.status === "limit"}></span>
+              <button class="run-text" type="button" disabled={!r.chat_id} title={r.chat_id ? "Open this chat" : undefined} onclick={() => openChat(r.agent_id, r.chat_id)}>
+                <div class="run-title">{row.title}</div>
+                {#if row.chat}<div class="run-chat"><Icon name="chat" size={12} /><span>{row.chat}</span></div>{/if}
+                <div class="run-step">{statusText[r.status] ?? r.status} · {ago(r.finished_at)}</div>
+              </button>
+              <button class="icon-btn" type="button" aria-label="Show the run's pane" title="Show what it was thinking (its pane)" onclick={() => (paneFor = row)}>
+                <Icon name="thought" size={14} />
+              </button>
+              <button class="icon-btn" type="button" aria-label="Open the run's log" title="Open its full log" onclick={() => openLog(r.run_id)}>
+                <Icon name="text" size={14} />
+              </button>
+            </div>
+          {/each}
         {/each}
       </div>
     {/if}
@@ -443,6 +508,26 @@
   .icon-btn:disabled {
     opacity: 0.45;
     cursor: default;
+  }
+  .ended {
+    flex: none;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-faint);
+  }
+  .ended.bad {
+    background: var(--warn);
+  }
+  .recent-agent {
+    margin-top: var(--space-2);
+    padding: 0 var(--space-2);
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    font-weight: 550;
+  }
+  .run.recent {
+    margin-top: var(--space-1);
   }
   .paused-icon {
     flex: none;

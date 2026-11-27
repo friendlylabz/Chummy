@@ -20,7 +20,9 @@ same code the app uses, until it stops.
 Open **Configure chummyd** from the main menu.
 
 1. Name it, check the time zone (job schedules use it), and choose how many
-   jobs may run at once.
+   jobs may run at once, how many messages each chat keeps (2,000 by
+   default; older ones are dropped) and how many chats each agent keeps
+   (50).
 2. Include the agents it runs. Each brings its loop, model connection, tools
    and settings. An agent that uses Chummy's built-in engine can't be included:
    chummyd has no built-in engine, so give it another model (Ollama, say).
@@ -150,10 +152,7 @@ It asks:
    `<folder>/agents/<agent>`. A folder that already has files can't hold
    chummyd's own files, and anything in it not owned by chummyd's user can
    be given to it (it asks).
-4. **Your own certificates:** whether chummyd connects to anything with a
-   self-signed certificate this computer trusts (a homeserver over a VPN,
-   say). Then the container uses this computer's trusted certificates.
-5. **The bundle's password**, never shown, never in your shell's history.
+4. **The bundle's password**, never shown, never in your shell's history.
 
 Then it readies everything for chummyd's user in the container (65532), with
 sudo, since giving files to another user takes root:
@@ -277,6 +276,10 @@ allows it) goes to standard error; the conversation to standard output.
 
 ## 4. Talk to it in Matrix
 
+(The Chummy app has the same Matrix channel, in Settings → Channels, for
+talking to agents while the app runs. Give chummyd and the app different
+bot accounts. For Telegram, see section 5.)
+
 With the Matrix channel, each person you allow gets an end-to-end encrypted
 room with each agent, on your own homeserver (or any homeserver). chummyd
 makes the rooms and invites people; you just accept the invite.
@@ -366,3 +369,46 @@ If the homeserver can't be reached, chummyd keeps running (jobs too) and
 tries again, waiting longer each time. If you remove a person or an agent
 from the bundle, chummyd leaves their room the next time it starts; someone
 who left their room is invited back.
+
+## 5. Talk to it in Telegram
+
+Each agent can have a Telegram bot of its own. Telegram isn't end-to-end
+encrypted: Telegram's servers can read what's said to the bot and what the
+agent answers. Choose Matrix for anything private.
+
+### Set it up
+
+1. **Make a bot** for the agent: talk to @BotFather in Telegram, send
+   `/newbot`, and copy the token. In its **Bot Settings**, turn **Allow
+   Groups** off (chummyd's bot leaves groups anyway). Don't use a bot the
+   Chummy app (or another chummyd) uses: only one program can read a bot's
+   messages.
+2. In **Configure chummyd**, under Channels → Telegram, switch on the
+   agent's bot and paste the token. **Show answers as they're written** is
+   on by default; files people send can be up to 20 MB.
+3. Export the bundle and run chummyd **with a terminal** (with Docker:
+   `docker compose up -d`, then `docker attach` to it): that's where you let
+   people in. `chummyd check` lists the bots by their id, never their token.
+
+### Let someone in
+
+In chummyd's terminal, talking to the agent (`/agent <name>` switches):
+
+- `/pair` makes a six-digit code for that agent's bot. It works once, for
+  ten minutes.
+- The person sends `/start <code>` to the bot. chummyd shows their name and
+  Telegram id, and asks: `/pair 1 yes` lets them in, `/pair 1 no` doesn't.
+  Only say yes to the person you gave the code to.
+- `/people` lists who may talk to the bot; `/unpair <id>` stops someone.
+
+The people let in are kept in the state folder (sealed), so they stay let
+in when chummyd starts again. Anyone else who writes to the bot gets no
+answer at all.
+
+### Talk
+
+As in Matrix: a message starts a run, shown as it's written; reply to a
+question to answer it; approvals (when the bundle allows them over channels
+for the agent) come with **Allow** and **Deny** buttons; files go to the
+agent's `uploads/`. The bot's menu lists the commands. Jobs don't report to
+Telegram yet.

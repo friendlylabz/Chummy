@@ -44,12 +44,12 @@ pub(crate) fn overlapping_agents<'a>(
 /// sharing warnings ("can go online, can use Run shell command").
 fn notable_access(s: &Settings, a: &Agent, risky: &BTreeSet<String>) -> Vec<String> {
     let mut out = Vec::new();
-    if a.network && s.permissions.network {
+    if s.permissions.tools && s.permissions.network && a.tools.values().any(|t| t.network) {
         out.push("can go online".to_string());
     }
     let unsafe_tools: Vec<&str> = a
         .tools
-        .iter()
+        .keys()
         .filter(|t| risky.contains(*t))
         .map(|t| t.as_str())
         .collect();
@@ -272,13 +272,14 @@ pub fn save_agent(
         .map(|a| a.id.clone())
         .unwrap_or_else(|| format!("agent-{}", chummy_store::random_id(4)));
     let created_at = existing.as_ref().map(|a| a.created_at).unwrap_or_else(now);
-    // New agents start with no tools and no internet; existing ones keep theirs.
-    let (tools, network, loop_config, model_options) = existing
+    // New agents start with no tools; existing ones keep theirs. Tools, model
+    // settings and block changes are set with their own commands (for a
+    // template agent, right after this one), which ask where they must.
+    let (tools, loop_config, model_options) = existing
         .as_ref()
         .map(|a| {
             (
                 a.tools.clone(),
-                a.network,
                 a.loop_config.clone(),
                 a.model_options.clone(),
             )
@@ -292,7 +293,6 @@ pub fn save_agent(
         workspace,
         created_at,
         tools,
-        network,
         loop_config,
         model_options,
     };
@@ -396,16 +396,17 @@ pub async fn set_permission(
             ),
             PermissionKind::Network => (
                 "Allow internet access?",
-                "Tools you allow in Tools will be able to reach the internet (never this computer or \
-                 your local network). They could send content from an agent's workspace to websites.\n\n\
+                "Tools whose Internet switch is on for an agent (Agents) will be able to reach the \
+                 internet (never this computer or your local network). They could send content from \
+                 an agent's workspace to websites.\n\n\
                  This doesn't affect the model connections you set up in Models; those are separate.",
                 "Allow internet access",
             ),
             PermissionKind::Tools => (
                 "Allow tools?",
-                "Agents will be able to run the tools you switch on in Tools. Each tool runs in a sandbox \
-                 that can only see the agent's workspace folder, and can only go online if you also \
-                 allow that tool and turn on internet access.",
+                "Agents will be able to run the tools you switch on for them (Agents). Each tool runs \
+                 in a sandbox that can only see the agent's workspace folder, and can only go online \
+                 if its Internet switch is on for the agent and internet access is on here.",
                 "Allow tools",
             ),
         };
@@ -437,8 +438,20 @@ mod tests {
                 confirmed_at: 0,
             },
             created_at: 0,
-            tools: tools.iter().map(|t| t.to_string()).collect(),
-            network,
+            // Network is per tool: give the agent's first tool internet.
+            tools: tools
+                .iter()
+                .enumerate()
+                .map(|(i, t)| {
+                    (
+                        t.to_string(),
+                        crate::settings::AgentTool {
+                            ask: false,
+                            network: network && i == 0,
+                        },
+                    )
+                })
+                .collect(),
             loop_config: Default::default(),
             model_options: Default::default(),
         }

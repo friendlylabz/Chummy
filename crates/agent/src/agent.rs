@@ -5,7 +5,7 @@
 //! default, and a change of meaning needs a migration in the format that
 //! holds them.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -32,14 +32,11 @@ pub struct Agent {
     pub model: Option<String>,
     pub workspace: Workspace,
     pub created_at: u64,
-    /// Tools this agent may use (each also needs Tools on in Permissions and
-    /// the tool switched on in Settings → Tools).
+    /// The tools this agent may use, by name, each with its own switches.
+    /// Each also needs Tools on in Security and Privacy; a loop block can
+    /// only turn a tool off for itself.
     #[serde(default)]
-    pub tools: BTreeSet<String>,
-    /// This agent's tools may use the internet (also needs Internet access
-    /// in Permissions and the tool's own internet switch).
-    #[serde(default)]
-    pub network: bool,
+    pub tools: BTreeMap<String, AgentTool>,
     /// Changed block settings, per loop id (Agent Loop Configuration).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub loop_config: BTreeMap<String, chummy_flow::Overrides>,
@@ -81,15 +78,14 @@ impl Default for Permissions {
     }
 }
 
-/// A tool's switches. Both are off until the user turns them on, and both
-/// also need the matching permission (`tools`, `network`) to be on.
+/// How an agent may use one of its tools. Both switches are off until the
+/// user turns them on.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct ToolPref {
-    /// Agents may call this tool.
-    pub enabled: bool,
-    /// This tool may use the internet (only for tools that ask for it).
-    pub network: bool,
-    /// Ask before every call to this tool.
+pub struct AgentTool {
+    /// Ask the user before every call.
     pub ask: bool,
+    /// It may use the internet (only for tools that ask for it; also needs
+    /// Internet access in Security and Privacy).
+    pub network: bool,
 }
