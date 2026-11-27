@@ -57,7 +57,7 @@ fn validate(cfg: &ProviderConfig) -> Result<(), String> {
         return Err("Temperature must be between 0 and 2.".into());
     }
     if !(chummy_llm::MIN_ANSWER_TOKENS..=chummy_llm::MAX_ANSWER_TOKENS).contains(&cfg.max_tokens) {
-        return Err("The longest answer must be 16–32,768 tokens.".into());
+        return Err("The longest answer must be 16–262,144 tokens.".into());
     }
     if let Some(p) = cfg.generation.problems().into_iter().next() {
         return Err(p);

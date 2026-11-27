@@ -112,15 +112,6 @@ case "$(ask "1 or 2" 1)" in
   *) fail "answer 1 or 2." ;;
 esac
 
-# --- Certificates ----------------------------------------------------------
-say
-trust_host=no
-if yes_no "Does chummyd connect to anything with your own (self-signed) certificate, which this computer trusts?"; then
-  trust_host=yes
-  [ -f /etc/ssl/certs/ca-certificates.crt ] ||
-    fail "there's no /etc/ssl/certs/ca-certificates.crt: add your certificate with update-ca-certificates first."
-fi
-
 # --- The password ----------------------------------------------------------
 say
 read -r -s -p "The bundle's password: " PW
@@ -228,9 +219,6 @@ EOF
 sed -i "s|^    image: chummyd:latest\$|    image: $image|" compose.yaml.new
 if [ -n "$jails" ]; then
   sed -i "s|^      - jails:/jails\$|      - $jails:/jails|; /^  jails:\$/d" compose.yaml.new
-fi
-if [ "$trust_host" = yes ]; then
-  sed -i 's|^      # - /etc/ssl/certs/ca-certificates.crt:|      - /etc/ssl/certs/ca-certificates.crt:|' compose.yaml.new
 fi
 docker compose -f compose.yaml.new config --quiet ||
   fail "the Compose file came out wrong (compose.yaml.new): please report it."

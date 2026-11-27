@@ -69,7 +69,6 @@ fn agent(id: &str, name: &str, loop_id: &str) -> BundleAgent {
         loop_id: loop_id.into(),
         model: None,
         tools: Default::default(),
-        network: false,
         loop_config: Default::default(),
         model_options: Default::default(),
         channel_approvals: false,

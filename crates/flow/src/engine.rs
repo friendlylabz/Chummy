@@ -343,8 +343,8 @@ pub trait Host: Send + Sync {
         call: LlmCall,
         on_text: &mut (dyn FnMut(&str) + Send),
     ) -> impl Future<Output = Result<LlmAnswer, LlmFailure>> + Send;
-    /// A tool that's installed and switched on, if there is one by that name.
-    /// A tool the app allows (Permissions and Settings → Tools), or `None`.
+    /// A tool that's installed and that the app and the agent allow
+    /// (Security and Privacy and the agent's tools), or `None`.
     fn tool_info(&self, name: &str) -> Option<ToolInfo>;
     /// Every tool the app allows, for blocks that inherit.
     fn tool_names(&self) -> Vec<String> {
@@ -2218,7 +2218,7 @@ impl<'a, H: Host> Runner<'a, H> {
             let Some(info) = self.host.tool_info(&name) else {
                 if switches.each.contains_key(&name) {
                     notes.push(format!(
-                        "The tool “{name}” is off in Chummy (Security and Privacy or Settings → Tools), so the model wasn't offered it."
+                        "The tool “{name}” is off in Chummy (Security and Privacy or the agent's tools), so the model wasn't offered it."
                     ));
                 }
                 continue;

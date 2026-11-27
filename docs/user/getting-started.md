@@ -25,8 +25,9 @@ The welcome screen walks you through three steps:
    OpenAI-compatible address), or a cloud provider (OpenAI, Anthropic,
    Gemini and others). Click **Test** to check it replies, can call tools,
    and how long its context is.
-2. **Add a loop.** **Use recommended** adds the Chummy assistant, a good
-   general-purpose loop. You can change it or build your own later.
+2. **Add a loop.** **Use recommended** adds the Chummy assistant (medium),
+   a good general-purpose loop; the small and large versions, for other
+   sizes of model, are templates in the loop editor. You can change it or build your own later.
 3. **Set up an agent.** Give it a name, a loop, a model and a **workspace
    folder**. The agent can only ever see that folder, so pick (or make) one
    just for it. Don't use a folder with things you can't afford to lose.

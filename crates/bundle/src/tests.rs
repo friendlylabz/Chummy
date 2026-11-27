@@ -34,7 +34,6 @@ fn config() -> Config {
         loop_id: "echo".into(),
         model: Some("m".into()),
         tools: Default::default(),
-        network: false,
         loop_config: Default::default(),
         model_options: Default::default(),
         channel_approvals: false,
@@ -134,6 +133,21 @@ fn weak_passwords_and_bad_configurations_are_refused() {
     let r = bad.check();
     assert_eq!(r.errors.len(), 3, "{r:?}");
     assert!(matches!(seal(&bad, PASSWORD), Err(BundleError::Invalid(e)) if e.len() == 3));
+
+    // The chat limits are the bundle's to set, within bounds.
+    let mut limits = c.clone();
+    limits.limits.chat_messages = 50_000;
+    limits.limits.chats = 500;
+    assert!(limits.check().ok());
+    limits.limits.chat_messages = 5;
+    limits.limits.chats = 0;
+    let r = limits.check();
+    assert_eq!(r.errors.len(), 2, "{r:?}");
+    assert!(
+        r.errors
+            .iter()
+            .any(|e| e.contains("Messages kept per chat"))
+    );
 }
 
 #[test]
@@ -141,15 +155,13 @@ fn warnings_say_what_wont_work() {
     let mut c = config();
     c.channels.terminal.enabled = false;
     c.permissions.tools = true;
-    c.tools.insert(
+    c.agents[0].tools.insert(
         "calculator".into(),
-        chummy_agent::ToolPref {
-            enabled: true,
-            network: false,
+        chummy_agent::AgentTool {
             ask: true,
+            network: false,
         },
     );
-    c.agents[0].tools.insert("calculator".into());
     let r = c.check();
     assert!(r.ok());
     assert_eq!(r.warnings.len(), 2, "{r:?}");
@@ -215,12 +227,11 @@ fn the_matrix_channel_is_checked() {
 }
 
 #[test]
-fn version_1_configurations_still_open() {
+fn only_this_configuration_version_opens() {
     let mut c = config();
-    c.version = 1;
     assert!(c.check().ok());
-    let sealed = seal(&c, PASSWORD).unwrap();
-    assert_eq!(open(&sealed, &key(&c)).unwrap().version, 1);
-    c.version = 3;
-    assert!(!c.check().ok());
+    for other in [2, CONFIG_VERSION + 1] {
+        c.version = other;
+        assert!(!c.check().ok(), "version {other}");
+    }
 }

@@ -84,12 +84,25 @@ pub fn describe(c: &Config) -> Vec<String> {
             .clone()
             .or_else(|| c.default_provider.clone())
             .unwrap_or_else(|| "the default".into());
+        // Each tool with its switches: "fetch (asks, online)".
         let tools: Vec<String> = if perm.tools {
-            a.tools.iter().cloned().collect()
+            a.tools
+                .iter()
+                .map(|(name, t)| {
+                    let online = perm.network && t.network;
+                    let asks = t.ask || (online && perm.confirm_online_tools);
+                    match (asks, online) {
+                        (true, true) => format!("{name} (asks, online)"),
+                        (true, false) => format!("{name} (asks)"),
+                        (false, true) => format!("{name} (online)"),
+                        (false, false) => name.clone(),
+                    }
+                })
+                .collect()
         } else {
             vec![]
         };
-        let internet = perm.network && a.network;
+        let internet = perm.tools && perm.network && a.tools.values().any(|t| t.network);
         out.push(format!(
             "  {} [{}]: loop “{loop_name}”, model {model}; tools: {}; internet: {}; approvals over channels: {}",
             a.name,
@@ -195,21 +208,37 @@ mod tests {
             name: "Helper".into(),
             loop_id: "none".into(),
             model: Some("m".into()),
-            tools: ["write_file".to_string(), "fetch".to_string()].into(),
-            network: true,
+            tools: [
+                (
+                    "write_file".to_string(),
+                    chummy_agent::AgentTool {
+                        ask: true,
+                        network: false,
+                    },
+                ),
+                (
+                    "fetch".to_string(),
+                    chummy_agent::AgentTool {
+                        ask: false,
+                        network: true,
+                    },
+                ),
+            ]
+            .into(),
             loop_config: Default::default(),
             model_options: Default::default(),
             channel_approvals: true,
         });
         c.permissions.tools = true;
         c.permissions.network = true;
+        c.permissions.confirm_online_tools = false;
         let text = describe(&c).join("\n");
         assert!(
             text.contains("Far away [m]: big at http://models.example.com/v1"),
             "{text}"
         );
         assert!(
-            text.contains("tools: fetch, write_file; internet: yes"),
+            text.contains("tools: fetch (online), write_file (asks); internet: yes"),
             "{text}"
         );
         assert!(text.contains("Look at:"), "{text}");

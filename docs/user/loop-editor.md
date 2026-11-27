@@ -85,15 +85,21 @@ an agent's loop.
 - **Comments** on blocks, **labels** on links and **notes** on the canvas
   are saved with the loop, so it explains itself.
 - Loops are saved in the library and can be exported and imported as JSON
-  files. Start from a template: *Chummy assistant*, *Terminal assistant*,
-  *Blank* or *Simple chat*.
+  files. Start from a template: *Chummy assistant* (small, medium or
+  large), *Blank* or *Simple chat*.
 
 To change a block's settings for **one agent** without touching the loop,
 use Settings → Agents → your agent → **Agent Loop Configuration**.
 
 ## The Chummy assistant
 
-The recommended loop. One model works with tools, call after call, until it
+The recommended loop, in three sizes for the size of model you run. All
+three are the same loop with more or less help; pick the one that fits, or
+try the next size up or down if the model wanders off or is held back.
+
+### Medium (the default)
+
+For mid-sized models (about 14B to 70B). One model works with tools, call after call, until it
 answers without one, like a coding agent. It says what it's doing, keeps
 its own to-do list for bigger jobs, reads `CHUMMY.md` from the folder,
 summarises the conversation when the context gets full, and is sent back
@@ -107,20 +113,27 @@ per step; delete the *Decide what's next* block in the Agent loop, and
 clear Work's Reminder, if you'd rather not.) Open it in the editor to
 see how it's built; every part has comments.
 
-## The Terminal assistant
+### Small
 
-The same loop, working only through the terminal, for models that are at
-home in a shell. Its Work block has every tool switched off except **Run
-command** (Chummy's own small shell, inside the sandbox), **Run shell**
-(a real `sh`, only with the Container or OpenShell sandbox) and **Fetch
-page**; your agent's own tool and internet switches still apply, so turn
-on Run command for the agent. Its prompts list the shell's commands and
-show how to do everyday jobs with them: read part of a file with
-`sed -n`, search with `grep -rn`, write a file with a heredoc, edit with
-`sed -i`, add things up with `awk`, run `python`. Each command it runs is
-shown in the run's pane under the step it decided on. Run command has no
-variables, loops or `$(…)`; the model is told to use pipes, `xargs`, `awk`
-or a short Python script instead (`help` in the shell lists everything).
+For small models (about 1B to 14B), with more help:
+
+- *Decide what's next* also picks **checking the last change** when it
+  wasn't checked, and **asking you** (one short question) when the request
+  is unclear or the same thing failed twice.
+- Before an answer is final, a small call **checks it** against your
+  request and the work. If it finds a problem (you see it in the run's
+  pane), the model is sent back to fix it, within the usual two times.
+- A **light context**: fewer earlier messages, shorter tool results,
+  stored texts and summaries, and room is made at 60% of the context.
+
+### Large
+
+For large and frontier models, with less: no *Decide what's next*, so the
+model plans the job itself and tries to do it in one go (half the model
+calls). It's sent back at most once, keeps much more in its context (the
+conversation, the folder, tool results) so it remembers the details, and
+its summaries keep everything needed to carry on. When a try fails, what
+went wrong goes in its instructions for the next try.
 
 ## Building loops that work
 

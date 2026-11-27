@@ -107,6 +107,18 @@ class SplitterTests(unittest.TestCase):
             joined[k] += v
         self.assertEqual(joined, {"reasoning": "plan", "text": "Answer"})
 
+    def test_sampling_options_are_read_and_checked(self):
+        opts = ce.sampling_options({
+            "top_p": 0.9, "top_k": 40, "min_p": 0.05, "repeat_penalty": 1.1,
+            "seed": 7, "stop": "END", "reasoning_effort": "low", "presence_penalty": 1,
+        })
+        self.assertEqual(opts, {"top_p": 0.9, "top_k": 40, "min_p": 0.05, "repetition_penalty": 1.1,
+                                "seed": 7, "stop": ["END"], "reasoning_effort": "low"})
+        self.assertEqual(ce.sampling_options({"top_k": 0}), {})
+        for bad in ({"top_p": 2}, {"reasoning_effort": "huge"}, {"stop": [1]}, {"repetition_penalty": 0}):
+            with self.assertRaises(ValueError):
+                ce.sampling_options(bad)
+
     def test_fake_backend_stops_when_asked(self):
         import threading
         stop = threading.Event()
@@ -216,7 +228,8 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(e.exception.code, 401)
 
     def test_rejects_bad_requests(self):
-        for body, code in [([1, 2], 400), ({"messages": [], "max_tokens": "lots"}, 400)]:
+        for body, code in [([1, 2], 400), ({"messages": [], "max_tokens": "lots"}, 400),
+                           ({"messages": [], "top_p": 5}, 400)]:
             with self.assertRaises(urllib.error.HTTPError) as e:
                 self.req("/v1/chat/completions", body)
             self.assertEqual(e.exception.code, code)

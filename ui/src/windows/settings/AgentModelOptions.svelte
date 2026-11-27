@@ -5,6 +5,9 @@
    * model's (the default), set the agent's own, or don't send it at all.
    * Applies to every model call the agent makes; a model block's own
    * setting in the loop still wins.
+   *
+   * For a template agent (one being created) nothing is saved here: the
+   * changes are kept in `value` and saved when the agent is created.
    */
   import { commands, errorText, type Agent, type ProviderView } from "$lib/ipc";
   import { settings } from "$lib/stores/settings.svelte";
@@ -14,7 +17,11 @@
   import Icon from "$lib/components/Icon.svelte";
   import OverrideRows from "$lib/components/OverrideRows.svelte";
 
-  let { agent }: { agent: Agent } = $props();
+  let {
+    agent,
+    template = false,
+    value = $bindable({}),
+  }: { agent: Agent; template?: boolean; value?: ModelOverrides } = $props();
 
   const model = $derived<ProviderView | undefined>(
     settings.current.providers.find((p) => p.id === (agent.model ?? settings.current.default_provider)),
@@ -32,13 +39,17 @@
   $effect.pre(() => {
     if (agent.id !== shownFor) {
       shownFor = agent.id;
-      options = { ...(agent.model_options ?? {}) };
+      options = { ...((template ? value : agent.model_options) ?? {}) };
       saved = canon(options);
       notice = "";
       error = "";
     }
   });
-  const dirty = $derived(canon(options) !== saved);
+  const dirty = $derived(!template && canon(options) !== saved);
+  function edit(o: ModelOverrides) {
+    options = o;
+    if (template) value = o;
+  }
   const changed = $derived(Object.keys(options).length);
 
   async function save() {
@@ -58,20 +69,20 @@
 </script>
 
 <div class="card card-pad">
-  <div class="section-title"><Icon name="cpu" size={16} /> Model settings for {agent.name}</div>
+  <div class="section-title"><Icon name="cpu" size={16} /> Model settings for {agent.name.trim() || "this agent"}</div>
   <p class="explain">
     {#if model}
       Every setting starts from {model.name} ({kindLabel[model.kind]}, Settings → Models). Change any for this agent only, or
       choose <b>Don't send</b> to leave it to the server. A model block's own setting in the loop still wins.
     {:else}
-      This agent has no model connection yet; pick one above.
+      There's no model connection yet. Add one in Settings → Models, then pick it above.
     {/if}
   </p>
 
   {#key shownFor}
     <OverrideRows
       value={options}
-      onchange={(o) => (options = o)}
+      onchange={edit}
       bind:bad
       kind={model?.kind}
       inherited={(k) => modelValue(model, k)}
@@ -86,8 +97,12 @@
   <div class="actions">
     <span class="muted small">{changed ? `${changed} changed for this agent` : "All inherited from the model"}</span>
     <span class="spacer"></span>
-    <Button variant="ghost" onclick={() => (options = {})} disabled={busy || !changed}>Inherit all</Button>
-    <Button variant="primary" onclick={save} disabled={busy || bad || !dirty}>Save</Button>
+    <Button variant="ghost" onclick={() => edit({})} disabled={busy || !changed}>Inherit all</Button>
+    {#if template}
+      <span class="faint xs">Saved when you create the agent.</span>
+    {:else}
+      <Button variant="primary" onclick={save} disabled={busy || bad || !dirty}>Save</Button>
+    {/if}
   </div>
 </div>
 

@@ -52,7 +52,9 @@ pub use format::{
     Position, VERSION,
 };
 pub use log::{LoggedValue, ModelLog, PortLog, StepLog, StepStatus};
-pub use templates::{ASSISTANT, TERMINAL, Template, builtin_prints, fingerprint, templates};
+pub use templates::{
+    ASSISTANT, ASSISTANT_LARGE, ASSISTANT_SMALL, Template, builtin_prints, fingerprint, templates,
+};
 pub use validate::{Analysis, BlockPorts, FunctionPorts, Issue, Severity, analyze};
 
 #[derive(Debug, thiserror::Error)]

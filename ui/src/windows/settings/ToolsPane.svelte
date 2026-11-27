@@ -5,10 +5,9 @@
   import { tools } from "$lib/stores/tools.svelte";
   import Button from "$lib/components/Button.svelte";
   import Icon from "$lib/components/Icon.svelte";
-  import Toggle from "$lib/components/Toggle.svelte";
   import ProgressBar from "$lib/components/ProgressBar.svelte";
 
-  let { gotoSecurity }: { gotoSecurity: () => void } = $props();
+  let { gotoSecurity, gotoAgents }: { gotoSecurity: () => void; gotoAgents: () => void } = $props();
 
   let error = $state("");
   let open = $state<string | null>(null);
@@ -27,33 +26,6 @@
     error = "";
     try {
       await commands.setupTools();
-    } catch (e) {
-      error = errorText(e);
-    }
-  }
-
-  async function toggle(t: ToolView, on: boolean) {
-    error = "";
-    try {
-      await commands.setToolEnabled(t.name, on);
-    } catch (e) {
-      error = errorText(e);
-    }
-  }
-
-  async function ask(t: ToolView, on: boolean) {
-    error = "";
-    try {
-      await commands.setToolAsk(t.name, on);
-    } catch (e) {
-      error = errorText(e);
-    }
-  }
-
-  async function net(t: ToolView, on: boolean) {
-    error = "";
-    try {
-      await commands.setToolNetwork(t.name, on);
     } catch (e) {
       error = errorText(e);
     }
@@ -128,10 +100,14 @@
     </div>
   {/if}
 
-  <p class="muted small" style="margin-bottom: var(--space-3)">
-    Switching a tool on here makes it available. An agent uses it only once you also allow it for that agent (Agents)
-    and tick it in the loop block that calls it.
-  </p>
+  <div class="notice how" style="margin-bottom: var(--space-4)">
+    <Icon name="wrench" size={16} />
+    <span>
+      Tools are switched on for each agent, along with whether it asks you first and whether it may go online. A loop
+      block can switch a tool off for itself.
+    </span>
+    <Button variant="ghost" onclick={gotoAgents}>Agents</Button>
+  </div>
   <div class="section-label">Installed</div>
   <div class="card rows">
     {#each s.tools as t (t.name)}
@@ -148,36 +124,10 @@
             <div class="row-sub">{t.description}</div>
             {#if t.unusable}<div class="why"><Icon name="alert" size={12} /> {t.unusable}</div>{/if}
           </button>
-          <Toggle
-            checked={t.enabled}
-            disabled={!!t.unusable && !t.enabled}
-            label="Use {t.title}"
-            onchange={(v) => toggle(t, v)}
-          />
+          <span class="used" class:none={!t.agents.length} title={t.agents.length ? `On for ${t.agents.join(", ")}` : "No agent has it switched on"}>
+            {t.agents.length ? (t.agents.length === 1 ? t.agents[0] : `${t.agents.length} agents`) : "No agents"}
+          </span>
         </div>
-        {#if t.network && t.enabled}
-          <div class="row sub-row">
-            <div>
-              <div class="small">Internet access for this tool</div>
-              <div class="faint xs">
-                {#if !perms.network}Also needs Internet access in Security and Privacy.{:else}Can't reach this computer or your local network.{/if}
-                Each agent and block must allow the internet too.
-              </div>
-            </div>
-            <Toggle checked={t.network_allowed} label="Internet for {t.title}" onchange={(v) => net(t, v)} />
-          </div>
-        {/if}
-        {#if t.enabled}
-          <div class="row sub-row">
-            <div>
-              <div class="small">Ask me before each use</div>
-              <div class="faint xs">
-                {#if t.network && t.network_allowed && perms.confirm_online_tools}Already asks, because it can go online.{:else}Each call waits until you allow it in chat.{/if}
-              </div>
-            </div>
-            <Toggle checked={t.ask} label="Ask before using {t.title}" onchange={(v) => ask(t, v)} />
-          </div>
-        {/if}
         {#if open === t.name}
           <div class="details faint xs">
             <div><span class="k">Arguments</span> <span class="mono">{params(t) || "none"}</span></div>
@@ -194,7 +144,7 @@
   <p class="faint xs" style="margin-top: var(--space-3)">
     Tools are read and checked with Python {s.runtime.version} for WebAssembly, whichever sandbox runs them. A tool can
     read and write only the agent's own workspace, and only tools that ask for it can go online, through Chummy, if
-    you allow it here and in Security and Privacy.
+    you allow it for the agent and in Security and Privacy.
   </p>
 {/if}
 
@@ -250,9 +200,24 @@
     font-size: var(--text-xs);
     font-weight: 500;
   }
-  .sub-row {
-    padding-top: 0 !important;
-    padding-left: var(--space-6) !important;
+  .used {
+    flex: none;
+    max-width: 12em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 1px 8px;
+    border-radius: var(--radius-full);
+    background: color-mix(in srgb, var(--ok) 15%, transparent);
+    color: var(--ok);
+    font-size: var(--text-xs);
+  }
+  .used.none {
+    background: var(--surface-2);
+    color: var(--text-faint);
+  }
+  .notice.how {
+    background: var(--surface-2);
   }
   .details {
     display: grid;

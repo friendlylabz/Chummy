@@ -7,9 +7,16 @@ first and says what it means.
 ## Agents
 
 An agent is a **loop**, a **model** and a **workspace folder** (the only
-folder it can see). Per agent you can also set:
+folder it can see). Everything below can be set while you create it, before
+**Create agent**, or changed later. Per agent you can also set:
 
-- **Tools and internet** for this agent (they must also be on app-wide).
+- **Tools**: the agent's switchboard. For each installed tool: **On**,
+  **Ask first** (every use waits for your OK in chat; *potentially unsafe*
+  tools start with it on) and **Internet** (for tools that use it). Tools
+  also need **Tools** on in Security and Privacy, and going online needs
+  **Internet access** there. A loop block can switch a tool or the internet
+  off for itself, never on. Until tools are set up, the section is greyed
+  out with a **Set up tools** link.
 - **Model settings**: every generation setting of the model (temperature,
   longest answer, reasoning effort and the rest below) starts as
   **Inherit**. Choose **Set** to give this agent its own value, or **Don't
@@ -64,10 +71,10 @@ llama.cpp.
 
 **Set up tools** unpacks the tools' Python (it ships with Chummy) and
 installs the built-in tools (two of them fetch one package each from
-PyPI); then switch each tool on or off. Each tool shows
-whether it can go online and whether it's *Potentially unsafe* (those ask
-before each use). Tools the current sandbox can't run are greyed out with
-the reason.
+PyPI). The list shows each tool, whether it can go online, whether it's
+*Potentially unsafe*, and which agents have it on; switch tools on for each
+agent in **Agents**. Tools the current sandbox can't run are greyed out
+with the reason.
 
 ## Security and Privacy
 

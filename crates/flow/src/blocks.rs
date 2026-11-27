@@ -375,7 +375,7 @@ impl<'de> Deserialize<'de> for Switch {
 /// Which tools a block turns off: a switch for all of them, and switches for
 /// single tools. A tool is offered when its switch is inherit and the agent
 /// may use it; off means never in this block. The app-wide switches (Security
-/// and Privacy, Settings → Tools) always apply.
+/// and Privacy) and the agent's tool switchboard always apply.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ToolSwitches {
     pub all: Switch,
@@ -1047,7 +1047,7 @@ pub fn catalog() -> Vec<BlockInfo> {
                         "tools",
                         "Disable tools",
                         K::Tools,
-                        "The block offers the tools the agent allows. Disable all or some of them for this block; a block can't turn on a tool the agent has off. A tool off app-wide (Security and Privacy or Settings → Tools) is never offered. Fewer tools means a shorter prompt and fewer mistakes.",
+                        "The block offers the tools the agent allows. Disable all or some of them for this block; a block can't turn on a tool the agent has off (the agent's Tools, in Settings → Agents). With tools off in Security and Privacy, none is offered. Fewer tools means a shorter prompt and fewer mistakes.",
                     )
                 },
                 p(
@@ -1086,7 +1086,7 @@ pub fn catalog() -> Vec<BlockInfo> {
                     "network",
                     "Tools may use the internet",
                     switch_choice("Same as the agent"),
-                    "Same as the agent uses the agent's Internet switch; Off turns the internet off for this block. A block can't turn it on. Internet access in Settings → Security and Privacy and the tool's own internet switch must always allow it too.",
+                    "Same as the agent follows each tool's Internet switch for the agent; Off turns the internet off for this block. A block can't turn it on. Internet access in Settings → Security and Privacy must always allow it too.",
                 ),
                 p(
                     "on_limit",
@@ -1127,7 +1127,7 @@ pub fn catalog() -> Vec<BlockInfo> {
                     "confirm",
                     "Ask me before each call",
                     K::Bool,
-                    "Each call waits until you allow it in chat. Chummy always asks for tools that use the internet unless you turned that off in Settings → Tools.",
+                    "Each call waits until you allow it in chat. Chummy also asks for every tool the agent has set to Ask first, and for tools that go online unless you turned that off in Security and Privacy.",
                 ),
             ],
             json!({ "max_result_chars": 50000, "on_error": "tell_model", "confirm": false }),
@@ -1189,7 +1189,7 @@ pub fn catalog() -> Vec<BlockInfo> {
                     "network",
                     "Tools may use the internet",
                     switch_choice("Same as the agent"),
-                    "Same as the agent uses the agent's Internet switch; Off turns the internet off for this block. A block can't turn it on. Internet access in Settings → Security and Privacy and the tool's own internet switch must always allow it too.",
+                    "Same as the agent follows each tool's Internet switch for the agent; Off turns the internet off for this block. A block can't turn it on. Internet access in Settings → Security and Privacy must always allow it too.",
                 ),
             ],
             json!({}),

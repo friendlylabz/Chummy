@@ -230,8 +230,8 @@ async fn run(a: RunArgs) -> Result<(), String> {
         config: DaemonConfig::new(&config, &jails),
         chats: MemoryChats::from_snapshot(
             saved.chats.clone(),
-            platform::MAX_MESSAGES,
-            platform::MAX_CHATS,
+            config.limits.chat_messages as usize,
+            config.limits.chats as usize,
         ),
         paused: MemoryPaused::from_snapshot(&saved.paused),
         protected,

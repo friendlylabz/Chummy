@@ -18,6 +18,8 @@
     name: "",
     time_zone: "UTC",
     max_runs: 1,
+    chat_messages: 2000,
+    chats: 50,
     agents: [],
     approvals: [],
     jobs: [],
@@ -229,6 +231,20 @@
         <select class="input narrow" bind:value={draft.max_runs} aria-label="Job runs at once">
           {#each [1, 2, 3, 4, 5, 6, 7, 8] as n (n)}<option value={n}>{n}</option>{/each}
         </select>
+      </div>
+      <div class="row">
+        <div>
+          <div class="row-title">Messages kept per chat</div>
+          <div class="row-sub">Older messages are dropped. 10 to 100,000.</div>
+        </div>
+        <input class="input narrow" type="number" min="10" max="100000" step="100" bind:value={draft.chat_messages} aria-label="Messages kept per chat" />
+      </div>
+      <div class="row">
+        <div>
+          <div class="row-title">Chats kept per agent</div>
+          <div class="row-sub">When there are more, the least recently used is deleted. 1 to 10,000.</div>
+        </div>
+        <input class="input narrow" type="number" min="1" max="10000" bind:value={draft.chats} aria-label="Chats kept per agent" />
       </div>
     </div>
 

@@ -116,7 +116,10 @@ pub fn support(kind: ProviderKind, param: Param) -> Result<(), &'static str> {
     match (kind, param) {
         // Sent as-is; servers ignore what they don't know.
         (OpenAiCompatible | Ollama, _) => Ok(()),
-        (Local, _) => Err("The built-in engine doesn't use this yet."),
+        (Local, PresencePenalty | FrequencyPenalty) => {
+            Err("The built-in engine doesn't use this; try the repeat penalty.")
+        }
+        (Local, _) => Ok(()),
         (OpenAi, TopK | MinP | RepeatPenalty) => Err("OpenAI doesn't accept this."),
         (OpenAi, _) => Ok(()),
         (Anthropic, ReasoningEffort) => Err(
@@ -388,7 +391,9 @@ mod tests {
         let claude = g.for_kind(ProviderKind::Anthropic);
         assert_eq!(claude.reasoning_effort, None);
         assert_eq!(claude.top_k, Some(40));
-        assert_eq!(g.for_kind(ProviderKind::Local), Generation::default());
+        let local = g.for_kind(ProviderKind::Local);
+        assert_eq!((local.top_k, local.top_p), (Some(40), Some(0.9)));
+        assert_eq!(local.presence_penalty, None);
         assert_eq!(g.for_kind(ProviderKind::OpenAiCompatible), g);
         for p in Param::ALL {
             assert!(support(ProviderKind::Ollama, p).is_ok());

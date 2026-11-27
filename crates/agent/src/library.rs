@@ -54,6 +54,17 @@ const RETIRED: &[&str] = &[
     "a03f89b17ffaf0f46dca168801246b3eeb7c83a36c567f50d3b9f94b4ef0211c",
     // With "Decide what's next" (53729e7), before error reports and Final answer.
     "c30129b768a18af72fbdf1a8aa8f0cb126c6443774d564ad9876003d1a6d5e9a",
+    // As shipped in v0.1.5, before it became the Chummy assistant (medium).
+    "b82d8bb610c9b820d5e4ff1b14602c59ef2707d41936caf54ad3a387fc2cda44",
+    // The Terminal assistant as shipped in v0.1.5 (removed in v0.1.6).
+    "1c60afd1570dd6e25586325dd2b6fb21ed04a97165ef060053b729caae9c529d",
+];
+
+/// Built-in loops that were renamed or folded into another: the old name,
+/// and the built-in that replaces an unedited copy of it.
+const RENAMED: &[(&str, &str)] = &[
+    ("Chummy assistant", "Chummy assistant (medium)"),
+    ("Terminal assistant", "Chummy assistant (medium)"),
 ];
 
 pub use chummy_flow::fingerprint;
@@ -89,6 +100,10 @@ impl Library {
                 continue;
             };
             let name = json.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let name = RENAMED
+                .iter()
+                .find(|(old, _)| *old == name)
+                .map_or(name, |(_, new)| *new);
             let Some(t) = builtins.iter().find(|t| t.file.name == name) else {
                 continue;
             };
@@ -305,6 +320,16 @@ mod tests {
             );
             assert_eq!(lib.load("old").unwrap(), current);
             assert_eq!(lib.load("edited").unwrap(), edited, "edits are kept");
+            // A copy saved under a built-in's old name becomes the new one.
+            let mut renamed = current.clone();
+            renamed.name = "Terminal assistant".into();
+            std::fs::write(tmp.path().join("renamed.json"), renamed.to_json()).unwrap();
+            let print = fingerprint(&renamed);
+            assert_eq!(
+                lib.upgrade_builtins_with(&[print.as_str()]),
+                std::slice::from_ref(&current.name)
+            );
+            assert_eq!(lib.load("renamed").unwrap(), current);
             // The real list holds proper fingerprints.
             assert!(
                 RETIRED

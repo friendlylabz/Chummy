@@ -20,7 +20,9 @@ same code the app uses, until it stops.
 Open **Configure chummyd** from the main menu.
 
 1. Name it, check the time zone (job schedules use it), and choose how many
-   jobs may run at once.
+   jobs may run at once, how many messages each chat keeps (2,000 by
+   default; older ones are dropped) and how many chats each agent keeps
+   (50).
 2. Include the agents it runs. Each brings its loop, model connection, tools
    and settings. An agent that uses Chummy's built-in engine can't be included:
    chummyd has no built-in engine, so give it another model (Ollama, say).
@@ -150,10 +152,7 @@ It asks:
    `<folder>/agents/<agent>`. A folder that already has files can't hold
    chummyd's own files, and anything in it not owned by chummyd's user can
    be given to it (it asks).
-4. **Your own certificates:** whether chummyd connects to anything with a
-   self-signed certificate this computer trusts (a homeserver over a VPN,
-   say). Then the container uses this computer's trusted certificates.
-5. **The bundle's password**, never shown, never in your shell's history.
+4. **The bundle's password**, never shown, never in your shell's history.
 
 Then it readies everything for chummyd's user in the container (65532), with
 sudo, since giving files to another user takes root:

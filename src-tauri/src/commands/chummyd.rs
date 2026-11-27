@@ -39,6 +39,7 @@ pub struct AgentSource {
     /// Its model is Chummy's built-in engine, which chummyd doesn't have.
     pub builtin_engine: bool,
     pub tools: Vec<String>,
+    /// Some tool may go online for it.
     pub network: bool,
 }
 
@@ -55,6 +56,11 @@ pub struct Draft {
     pub name: String,
     pub time_zone: String,
     pub max_runs: u32,
+    /// Messages each chat keeps, and chats each agent keeps.
+    #[serde(default = "default_chat_messages")]
+    pub chat_messages: u32,
+    #[serde(default = "default_chats")]
+    pub chats: u32,
     /// Agent ids included.
     pub agents: Vec<String>,
     /// Agent ids whose tool approvals may be answered over channels.
@@ -69,6 +75,13 @@ pub struct Draft {
     /// An opened bundle this one replaces (its token).
     #[serde(default)]
     pub base: Option<String>,
+}
+
+fn default_chat_messages() -> u32 {
+    chummy_bundle::Limits::default().chat_messages
+}
+fn default_chats() -> u32 {
+    chummy_bundle::Limits::default().chats
 }
 
 /// The Matrix channel as the window edits it.
@@ -144,8 +157,8 @@ pub fn chummyd_sources(state: State<'_, AppState>) -> Sources {
                     model: model.map(|m| m.name.clone()),
                     builtin_engine: model
                         .is_some_and(|m| m.kind == chummy_llm::ProviderKind::Local),
-                    tools: a.tools.iter().cloned().collect(),
-                    network: a.network,
+                    tools: a.tools.keys().cloned().collect(),
+                    network: a.tools.values().any(|t| t.network),
                 }
             })
             .collect(),
@@ -189,8 +202,9 @@ fn build(state: &AppState, d: &Draft) -> Result<Config, String> {
         None => Default::default(),
     };
     c.limits.max_runs = d.max_runs;
+    c.limits.chat_messages = d.chat_messages;
+    c.limits.chats = d.chats;
     c.permissions = s.permissions.clone();
-    c.tools = s.tools.clone();
     c.channels.terminal.enabled = d.terminal;
     c.logging.message_text = d.message_text;
     if let Some(m) = &d.matrix {
@@ -256,7 +270,6 @@ fn build(state: &AppState, d: &Draft) -> Result<Config, String> {
             loop_id: a.loop_id.clone(),
             model: a.model.clone(),
             tools: a.tools.clone(),
-            network: a.network,
             loop_config: a.loop_config.clone(),
             model_options: a.model_options.clone(),
             channel_approvals: d.approvals.contains(id),
@@ -454,6 +467,8 @@ pub async fn chummyd_open_bundle(
         name: config.instance.name.clone(),
         time_zone: config.instance.time_zone.clone(),
         max_runs: config.limits.max_runs,
+        chat_messages: config.limits.chat_messages,
+        chats: config.limits.chats,
         approvals: config
             .agents
             .iter()

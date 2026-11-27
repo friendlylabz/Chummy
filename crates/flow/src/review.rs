@@ -1882,7 +1882,7 @@ fn capabilities(g: &Graph, a: &Analysis) -> Vec<Capability> {
         title: "Runs tools".into(),
         detail: if runs {
             format!(
-                "Its blocks can call {}. Tools only run if they're on in Settings → Tools and for the agent; risky ones ask first if you set them to.",
+                "Its blocks can call {}. Tools only run if they're switched on for the agent; risky ones ask first unless you turn that off.",
                 join_words(which.iter().map(String::as_str).collect())
             )
         } else {

@@ -80,7 +80,7 @@
     <div class="field">
       <label for="gen-max">{MAX_TOKENS.label}</label>
       <input id="gen-max" class="input" bind:value={maxTokens} inputmode="numeric" aria-invalid={maxBad} />
-      <span class="hint" class:err={maxBad}>{maxBad ? "16 to 32,768 tokens." : `${MAX_TOKENS.help} Always sent.`}</span>
+      <span class="hint" class:err={maxBad}>{maxBad ? "16 to 262,144 tokens." : `${MAX_TOKENS.help} Always sent.`}</span>
     </div>
     {#each results as { p, r } (p.key)}
       {@const why = unsupported(kind, p.key)}

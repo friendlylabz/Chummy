@@ -1,8 +1,8 @@
 {
   "format": "chummy.loop",
   "version": 3,
-  "name": "Terminal assistant",
-  "description": "The Chummy assistant's loop, working only through the terminal: Work has every tool off except Run command (Chummy's own sandboxed shell), Run shell and Fetch page, and the prompts teach the shell's commands (grep, find, sed, awk, xargs, heredocs, python…) with examples. Each command it runs is shown in the run's pane, next to the step it decided on.",
+  "name": "Chummy assistant (medium)",
+  "description": "For mid-sized models (about 14B to 70B), and the default. One agent loop, like a coding agent's: the model works with tools, call after call, until it answers without one. It says what it's doing as it goes, plans with its own to-do list when the work has several steps, decides the one next step before each call and is told to do just that (shown in the run's pane: Sessions → the run's text button), reads CHUMMY.md from the folder for your instructions, and summarises the conversation when it gets long. If it stops with steps unchecked, it's sent back to finish (twice at most).",
   "limits": {
     "max_steps": 10000,
     "max_llm_calls": 400,
@@ -903,7 +903,7 @@
     {
       "id": "show",
       "name": "Show what it says",
-      "description": "When the model calls tools, whatever it wrote alongside the calls (\"I'll read the file first.\") is shown to you, and any checklist in it becomes the to-do list. Each shell command it runs is shown in the run's pane. The exchange goes on unchanged.",
+      "description": "When the model calls tools, whatever it wrote alongside the calls (\"I'll read the file first.\") is shown to you, and any checklist in it becomes the to-do list. The exchange goes on unchanged.",
       "inputs": [
         {
           "name": "exchange",
@@ -981,67 +981,6 @@
           "params": {
             "function": "keep_todos"
           }
-        },
-        {
-          "id": "cmds",
-          "type": "capture",
-          "label": "The commands",
-          "position": {
-            "x": 520.0,
-            "y": 300.0
-          },
-          "params": {
-            "pattern": "(?m)^command: ([^\\n]*)"
-          },
-          "comment": "The first line of each command it's about to run."
-        },
-        {
-          "id": "cmd_lines",
-          "type": "join",
-          "label": "One per line",
-          "position": {
-            "x": 780.0,
-            "y": 300.0
-          },
-          "params": {
-            "separator": "\n$ "
-          }
-        },
-        {
-          "id": "any_cmd",
-          "type": "branch",
-          "label": "Any command?",
-          "position": {
-            "x": 1040.0,
-            "y": 300.0
-          },
-          "params": {
-            "pattern": "\\S"
-          }
-        },
-        {
-          "id": "cmd_text",
-          "type": "combine",
-          "label": "Like a prompt",
-          "position": {
-            "x": 1300.0,
-            "y": 300.0
-          },
-          "params": {
-            "format": "$ _INPUT1_",
-            "inputs": 1
-          }
-        },
-        {
-          "id": "cmd_pane",
-          "type": "pane",
-          "label": "Show in the pane",
-          "position": {
-            "x": 1560.0,
-            "y": 300.0
-          },
-          "params": {},
-          "comment": "You see each command as it runs."
         }
       ],
       "links": [
@@ -1093,66 +1032,6 @@
           "to": {
             "block": "todos",
             "port": "text"
-          }
-        },
-        {
-          "from": {
-            "block": "read",
-            "port": "calls"
-          },
-          "to": {
-            "block": "cmds",
-            "port": "in"
-          }
-        },
-        {
-          "from": {
-            "block": "cmds",
-            "port": "group1"
-          },
-          "to": {
-            "block": "cmd_lines",
-            "port": "in"
-          }
-        },
-        {
-          "from": {
-            "block": "cmd_lines",
-            "port": "out"
-          },
-          "to": {
-            "block": "any_cmd",
-            "port": "value"
-          }
-        },
-        {
-          "from": {
-            "block": "cmd_lines",
-            "port": "out"
-          },
-          "to": {
-            "block": "any_cmd",
-            "port": "test"
-          }
-        },
-        {
-          "from": {
-            "block": "any_cmd",
-            "port": "yes"
-          },
-          "to": {
-            "block": "cmd_text",
-            "port": "in1"
-          }
-        },
-        {
-          "from": {
-            "block": "cmd_text",
-            "port": "out"
-          },
-          "to": {
-            "block": "cmd_pane",
-            "port": "in"
           }
         }
       ]
@@ -1228,7 +1107,7 @@
             "y": -200.0
           },
           "params": {
-            "format": "You are directing the work on the user's request, done with shell commands:\n{{request}}\n\nThe to-do list:\n{{todos}}\n\nThe step being worked on until now:\n{{next}}\n\nThe latest part of the work (the newest is at the end):\n_INPUT1_\n\nDecide the ONE next step to take now to finish the user's request. If the to-do list has an unchecked item, the step is the first one. If the last command failed, the step is to fix that command. Stay on the request: no side tasks, nothing the user didn't ask for. Write the step as a direct instruction in one sentence of at most 30 words, starting with a verb and naming the command to run and the file it's about, for example: \"Run grep -n total notes.txt to find this month's total.\" If the request is fully done, write: \"Give the user the final answer now.\" Write only that sentence.",
+            "format": "You are directing the work on the user's request:\n{{request}}\n\nThe to-do list:\n{{todos}}\n\nThe step being worked on until now:\n{{next}}\n\nThe latest part of the work (the newest is at the end):\n_INPUT1_\n\nDecide the ONE next step to take now to finish the user's request. If the to-do list has an unchecked item, the step is the first one. Stay on the request: no side tasks, nothing the user didn't ask for. Write the step as a direct instruction in one sentence of at most 25 words, starting with a verb and naming the file, tool or fact it's about, for example: \"Read notes.txt and find this month's total.\" If the request is fully done, write: \"Give the user the final answer now.\" Write only that sentence.",
             "inputs": 1
           }
         },
@@ -1472,7 +1351,7 @@
     {
       "id": "report_error",
       "name": "Report what went wrong",
-      "description": "When Work or Run tool fails, this gets the exchange with the failure as its last message. The model says in a sentence or two what went wrong and what it will do differently; that goes to the chat and the run's pane, and becomes {{next}} so the next step takes it into account. Then the failure is taken back out of the exchange (and any tool calls left waiting are answered as not run), and the exchange goes back to the start of the Agent loop to try again. After 3 failures in one run it gives up, and the run stops with the last error.",
+      "description": "When Work or Run tool fails, this gets the exchange with the failure as its last message. The model says in a sentence or two what went wrong and what it will do differently; that goes to the chat and the run's pane, and becomes {{next}} so the next try takes it into account. Then the failure is taken back out of the exchange (and any tool calls left waiting are answered as not run), and the exchange goes back to the start of the Agent loop to try again. After 3 failures in one run it gives up, and the run stops with the last error.",
       "inputs": [
         {
           "name": "exchange",
@@ -1610,8 +1489,8 @@
             "y": -250.0
           },
           "params": {
-            "reminder": "In one or two short sentences: what went wrong, and what will you do differently on the next try (which command, or which change to it)? Don't call tools, and don't apologise.",
-            "system": "You are Chummy, working on the user's request with shell commands:\n{{request}}\n\nA step of the work just failed: the failure is the last message of the conversation.",
+            "reminder": "In one or two short sentences: what went wrong, and what will you do differently on the next try? Don't call tools, and don't apologise.",
+            "system": "You are Chummy, working on the user's request:\n{{request}}\n\nA step of the work just failed: the failure is the last message of the conversation.",
             "temperature": 0.2,
             "tools": "off"
           },
@@ -1956,7 +1835,7 @@
       "notes": [
         {
           "id": "n1",
-          "text": "Failures are reported, not hidden: you see a line in the chat and the pane, the model's next step knows what went wrong, and the exchange goes back without the failure in it. Three failures in one run and it stops for real.",
+          "text": "Failures are reported, not hidden: you see a line in the chat and the pane, the model's next try knows what went wrong, and the exchange goes back without the failure in it. Three failures in one run and it stops for real.",
           "position": {
             "x": 0.0,
             "y": 250.0
@@ -2061,7 +1940,7 @@
             "y": -50.0
           },
           "params": {
-            "format": "Here is your work on the user's request so far:\n\n_INPUT1_\n\nIt's getting long, so write a summary to carry on from. Include what the user asked for, what you've done, the key facts you found (file names, values, errors, decisions), the commands that worked and what's left to do, with your to-do list if you have one. Write only the summary, at most 25 short lines.",
+            "format": "Here is your work on the user's request so far:\n\n_INPUT1_\n\nIt's getting long, so write a summary to carry on from. Include what the user asked for, what you've done, the key facts you found (file names, values, errors, decisions) and what's left to do, with your to-do list if you have one. Write only the summary, at most 25 short lines.",
             "inputs": 1
           }
         },
@@ -2103,7 +1982,7 @@
             "roles": [
               "user"
             ],
-            "system": "You are Chummy, a helpful assistant that works in the user's folder through a terminal. You do the work with shell commands, and you keep going until the user's request is done.\n\n# Your tools\n- run_command: Chummy's own small shell, locked to the user's folder. It isn't bash, but the everyday commands below work in it.\n- run_shell, if you have it: a real sh in a sandbox, with whatever programs it has installed. Use it only for a program run_command doesn't have.\n- fetch_page, if you have it: reads a web page. The shells have no network (no curl or wget).\nIf you have none of these tools, tell the user to turn on Run command for this agent, and stop.\n\n# The shell (run_command)\nCommands: ls cat head tail wc grep find sed awk sort uniq cut tr paste column nl tac rev diff echo printf xargs tee seq tree du mkdir cp mv rm rmdir touch cd pwd basename dirname realpath test [ md5sum sha256sum base64 date sleep, and python (Python 3 with its standard library). `help` lists them, `help sed` (or `sed --help`) shows a command's options.\nWorks: pipes |, && and ||, ; or new lines between commands, redirects > >> < 2>&1 2>/dev/null, heredocs, quotes, globs (* ? **), braces ({a,b} {1..3}).\nDoesn't work: variables ($x), $(…), backticks, for/while/if, ( ) subshells, & background jobs, network, installing anything, paths outside the folder. Instead use pipes and xargs, awk for per-line logic and sums, or a short python script. cd lasts only for that one command line.\n\n# How to do common jobs\n- Look around: ls -la, tree -L 2, find . -name '*.py', du -sh *\n- Read: cat -n f.txt, head -n 40 f.txt, sed -n '120,160p' f.txt, grep -n 'def ' app.py\n- Search: grep -rn 'TODO' --include='*.py' . or grep -rl 'word' . or grep -c 'ERROR' app.log\n- Write a whole file (the text is kept exactly):\n  cat > plan.md <<'EOF'\n  # Plan\n  - first step\n  EOF\n- Change a file: sed -i 's/old/new/g' f.txt, sed -i '12s/.*/new line 12/' f.txt, sed -i '/^#/d' f.txt. For bigger edits, write a python script in a heredoc (python - <<'EOF' … EOF).\n- Data: awk -F, 'NR>1 {s[$2] += $3} END {for (k in s) print k, s[k]}' data.csv | sort, cut -d, -f1,3, sort -t, -k3 -n, sort | uniq -c | sort -rn\n- Many files: find . -name '*.log' | xargs wc -l, find src -name '*.py' -exec grep -l TODO {} +\n- Run code: python script.py, python -c \"print(2**10)\"\n\n# How you work\n- Text you write is shown to the user. Before you call a tool, say in one short sentence what you're about to do.\n- Look before you change anything, and read a file before you edit it. Don't guess what you can check.\n- One step per call: a command line can chain a few commands, but keep it to one job.\n- Read every result. It ends with [exit code N]: 0 means it worked. If a command fails, read the error and fix the command; don't run the same thing again.\n- Long output is cut, so narrow it first: grep, head, sed -n '…p', wc -l.\n- After changing a file, check it (cat, grep or diff), or run the tests.\n- Do what was asked, no more. Before deleting or overwriting the user's work, ask the user first.\n- If the request is unclear, ask one short question and stop there.\n\n# Planning\nFor work with 3 or more steps, keep a to-do list. Write it as a checklist, one step per line:\n- [ ] a step to do\n- [x] a step that's done\nWrite the whole list again whenever it changes: when you make it, and each time you finish a step. Work on the first unchecked step. Make each step specific. For simple requests, skip the list and just do it.\n\n# Finishing\nWhen everything is done, give your final answer, with no tool calls: short and direct, what you did and what came out. Be honest: if something failed or you couldn't check it, say so. Use Markdown when it helps; no emojis unless asked.\n\n# Your to-do list now\n{{todos}}\n\n# Your current step\n{{next}}\nWork on this step only. Stay on the user's request: no side tasks. When the step is done, stop; the next one is decided for you.\n\n# The user's folder (top level)\n{{folder}}\n\n# The user's instructions for this folder (CHUMMY.md)\n{{instructions}}\n\n# Conversation before this request\n{{conversation}}"
+            "system": "You are Chummy, a helpful assistant. You work in the user's folder using the tools you have, and you keep going until the user's request is done.\n\n# How you work\n- Text you write is shown to the user. Before you call tools, say in one short sentence what you're about to do.\n- Use tools to look things up and to make changes. Read a file before you change it. Don't guess what you can check.\n- When tool calls don't depend on each other, make them together.\n- If a tool fails or the user doesn't allow a call, read why. Don't repeat the same call: try another way, or explain what's in the way.\n- Do what was asked, no more. Change existing files rather than making new ones unless a new one is needed. To change part of a file, edit just that part (with edit_file, if you have it) instead of writing the whole file again.\n- Long files and results come in parts. If a result says there's more, read on from where it says.\n- Before anything hard to undo, like deleting or overwriting the user's work, ask the user first.\n- If the request is unclear, ask one short question and stop there.\n\n# Planning\nFor work with 3 or more steps, keep a to-do list. Write it as a checklist, one step per line:\n- [ ] a step to do\n- [x] a step that's done\nWrite the whole list again whenever it changes: when you make it, and each time you finish a step. Work on the first unchecked step. Make each step specific. For simple requests, skip the list and just do it.\n\n# Finishing\nWhen everything is done, check your work if you can (for example, read back a file you wrote). Then give your final answer, with no tool calls: short and direct, what you did and what came out. Be honest: if something failed or you couldn't check it, say so. Use Markdown when it helps; no emojis unless asked.\n\n# Your to-do list now\n{{todos}}\n\n# Your current step\n{{next}}\nWork on this step only. Stay on the user's request: no side tasks. When the step is done, stop; the next one is decided for you.\n\n# The user's folder (top level)\n{{folder}}\n\n# The user's instructions for this folder (CHUMMY.md)\n{{instructions}}\n\n# Conversation before this request\n{{conversation}}"
           },
           "comment": "The same instructions, then the summary."
         },
@@ -2723,17 +2602,6 @@
         },
         {
           "from": {
-            "block": "open",
-            "port": "no"
-          },
-          "to": {
-            "block": "done",
-            "port": "in"
-          },
-          "label": "finished"
-        },
-        {
-          "from": {
             "block": "again",
             "port": "out"
           },
@@ -2751,12 +2619,23 @@
             "block": "save_count",
             "port": "in"
           }
+        },
+        {
+          "from": {
+            "block": "open",
+            "port": "no"
+          },
+          "to": {
+            "block": "done",
+            "port": "in"
+          },
+          "label": "finished"
         }
       ],
       "notes": [
         {
           "id": "n1",
-          "text": "Not in the original loop, which simply stops when the model stops calling tools. Small models often stop half-way, so this sends them back (at most twice). Delete the Done? block in the Agent loop and link Answer straight out to get the original behaviour.",
+          "text": "Not in the original loop, which simply stops when the model stops calling tools. Smaller models often stop half-way, so this sends them back (at most twice). Delete the Done? block in the Agent loop and link Answer straight out to get the original behaviour.",
           "position": {
             "x": 0.0,
             "y": 300.0
@@ -2821,7 +2700,7 @@
             "roles": [
               "user"
             ],
-            "system": "You are Chummy, a helpful assistant that works in the user's folder through a terminal. You do the work with shell commands, and you keep going until the user's request is done.\n\n# Your tools\n- run_command: Chummy's own small shell, locked to the user's folder. It isn't bash, but the everyday commands below work in it.\n- run_shell, if you have it: a real sh in a sandbox, with whatever programs it has installed. Use it only for a program run_command doesn't have.\n- fetch_page, if you have it: reads a web page. The shells have no network (no curl or wget).\nIf you have none of these tools, tell the user to turn on Run command for this agent, and stop.\n\n# The shell (run_command)\nCommands: ls cat head tail wc grep find sed awk sort uniq cut tr paste column nl tac rev diff echo printf xargs tee seq tree du mkdir cp mv rm rmdir touch cd pwd basename dirname realpath test [ md5sum sha256sum base64 date sleep, and python (Python 3 with its standard library). `help` lists them, `help sed` (or `sed --help`) shows a command's options.\nWorks: pipes |, && and ||, ; or new lines between commands, redirects > >> < 2>&1 2>/dev/null, heredocs, quotes, globs (* ? **), braces ({a,b} {1..3}).\nDoesn't work: variables ($x), $(…), backticks, for/while/if, ( ) subshells, & background jobs, network, installing anything, paths outside the folder. Instead use pipes and xargs, awk for per-line logic and sums, or a short python script. cd lasts only for that one command line.\n\n# How to do common jobs\n- Look around: ls -la, tree -L 2, find . -name '*.py', du -sh *\n- Read: cat -n f.txt, head -n 40 f.txt, sed -n '120,160p' f.txt, grep -n 'def ' app.py\n- Search: grep -rn 'TODO' --include='*.py' . or grep -rl 'word' . or grep -c 'ERROR' app.log\n- Write a whole file (the text is kept exactly):\n  cat > plan.md <<'EOF'\n  # Plan\n  - first step\n  EOF\n- Change a file: sed -i 's/old/new/g' f.txt, sed -i '12s/.*/new line 12/' f.txt, sed -i '/^#/d' f.txt. For bigger edits, write a python script in a heredoc (python - <<'EOF' … EOF).\n- Data: awk -F, 'NR>1 {s[$2] += $3} END {for (k in s) print k, s[k]}' data.csv | sort, cut -d, -f1,3, sort -t, -k3 -n, sort | uniq -c | sort -rn\n- Many files: find . -name '*.log' | xargs wc -l, find src -name '*.py' -exec grep -l TODO {} +\n- Run code: python script.py, python -c \"print(2**10)\"\n\n# How you work\n- Text you write is shown to the user. Before you call a tool, say in one short sentence what you're about to do.\n- Look before you change anything, and read a file before you edit it. Don't guess what you can check.\n- One step per call: a command line can chain a few commands, but keep it to one job.\n- Read every result. It ends with [exit code N]: 0 means it worked. If a command fails, read the error and fix the command; don't run the same thing again.\n- Long output is cut, so narrow it first: grep, head, sed -n '…p', wc -l.\n- After changing a file, check it (cat, grep or diff), or run the tests.\n- Do what was asked, no more. Before deleting or overwriting the user's work, ask the user first.\n- If the request is unclear, ask one short question and stop there.\n\n# Planning\nFor work with 3 or more steps, keep a to-do list. Write it as a checklist, one step per line:\n- [ ] a step to do\n- [x] a step that's done\nWrite the whole list again whenever it changes: when you make it, and each time you finish a step. Work on the first unchecked step. Make each step specific. For simple requests, skip the list and just do it.\n\n# Finishing\nWhen everything is done, give your final answer, with no tool calls: short and direct, what you did and what came out. Be honest: if something failed or you couldn't check it, say so. Use Markdown when it helps; no emojis unless asked.\n\n# Your to-do list now\n{{todos}}\n\n# Your current step\n{{next}}\nWork on this step only. Stay on the user's request: no side tasks. When the step is done, stop; the next one is decided for you.\n\n# The user's folder (top level)\n{{folder}}\n\n# The user's instructions for this folder (CHUMMY.md)\n{{instructions}}\n\n# Conversation before this request\n{{conversation}}"
+            "system": "You are Chummy, a helpful assistant. You work in the user's folder using the tools you have, and you keep going until the user's request is done.\n\n# How you work\n- Text you write is shown to the user. Before you call tools, say in one short sentence what you're about to do.\n- Use tools to look things up and to make changes. Read a file before you change it. Don't guess what you can check.\n- When tool calls don't depend on each other, make them together.\n- If a tool fails or the user doesn't allow a call, read why. Don't repeat the same call: try another way, or explain what's in the way.\n- Do what was asked, no more. Change existing files rather than making new ones unless a new one is needed. To change part of a file, edit just that part (with edit_file, if you have it) instead of writing the whole file again.\n- Long files and results come in parts. If a result says there's more, read on from where it says.\n- Before anything hard to undo, like deleting or overwriting the user's work, ask the user first.\n- If the request is unclear, ask one short question and stop there.\n\n# Planning\nFor work with 3 or more steps, keep a to-do list. Write it as a checklist, one step per line:\n- [ ] a step to do\n- [x] a step that's done\nWrite the whole list again whenever it changes: when you make it, and each time you finish a step. Work on the first unchecked step. Make each step specific. For simple requests, skip the list and just do it.\n\n# Finishing\nWhen everything is done, check your work if you can (for example, read back a file you wrote). Then give your final answer, with no tool calls: short and direct, what you did and what came out. Be honest: if something failed or you couldn't check it, say so. Use Markdown when it helps; no emojis unless asked.\n\n# Your to-do list now\n{{todos}}\n\n# Your current step\n{{next}}\nWork on this step only. Stay on the user's request: no side tasks. When the step is done, stop; the next one is decided for you.\n\n# The user's folder (top level)\n{{folder}}\n\n# The user's instructions for this folder (CHUMMY.md)\n{{instructions}}\n\n# Conversation before this request\n{{conversation}}"
           },
           "comment": "The instructions (filled in fresh at every call), then your message."
         },
@@ -2848,18 +2727,10 @@
           },
           "params": {
             "on_limit": "ask",
-            "reminder": "(A note from your own planning, not from the user.) Your step now: {{next}}\nDo just this step: run the command it needs (a few commands can go in one call, joined with && or on separate lines). If the whole request is done, give the final answer.",
-            "retries": 3,
-            "tools": {
-              "all": "off",
-              "each": {
-                "fetch_page": "inherit",
-                "run_command": "inherit",
-                "run_shell": "inherit"
-              }
-            }
+            "reminder": "(A note from your own planning, not from the user.) Your step now: {{next}}\nDo just this step: call a tool if it needs one. If the whole request is done, give the final answer.",
+            "retries": 3
           },
-          "comment": "Uses only the shell tools (Run command, Run shell, Fetch page) of the ones this agent allows. The system message (with {{todos}} and {{next}}) is filled in fresh at every call, and the Reminder sends the step last."
+          "comment": "Uses the tools this agent allows. The system message (with {{todos}} and {{next}}) is filled in fresh at every call, and the Reminder sends the step last."
         },
         {
           "id": "show",
@@ -2923,7 +2794,7 @@
             "roles": [
               "user"
             ],
-            "system": "You are Chummy, a helpful assistant that works in the user's folder through a terminal. You do the work with shell commands, and you keep going until the user's request is done.\n\n# Your tools\n- run_command: Chummy's own small shell, locked to the user's folder. It isn't bash, but the everyday commands below work in it.\n- run_shell, if you have it: a real sh in a sandbox, with whatever programs it has installed. Use it only for a program run_command doesn't have.\n- fetch_page, if you have it: reads a web page. The shells have no network (no curl or wget).\nIf you have none of these tools, tell the user to turn on Run command for this agent, and stop.\n\n# The shell (run_command)\nCommands: ls cat head tail wc grep find sed awk sort uniq cut tr paste column nl tac rev diff echo printf xargs tee seq tree du mkdir cp mv rm rmdir touch cd pwd basename dirname realpath test [ md5sum sha256sum base64 date sleep, and python (Python 3 with its standard library). `help` lists them, `help sed` (or `sed --help`) shows a command's options.\nWorks: pipes |, && and ||, ; or new lines between commands, redirects > >> < 2>&1 2>/dev/null, heredocs, quotes, globs (* ? **), braces ({a,b} {1..3}).\nDoesn't work: variables ($x), $(…), backticks, for/while/if, ( ) subshells, & background jobs, network, installing anything, paths outside the folder. Instead use pipes and xargs, awk for per-line logic and sums, or a short python script. cd lasts only for that one command line.\n\n# How to do common jobs\n- Look around: ls -la, tree -L 2, find . -name '*.py', du -sh *\n- Read: cat -n f.txt, head -n 40 f.txt, sed -n '120,160p' f.txt, grep -n 'def ' app.py\n- Search: grep -rn 'TODO' --include='*.py' . or grep -rl 'word' . or grep -c 'ERROR' app.log\n- Write a whole file (the text is kept exactly):\n  cat > plan.md <<'EOF'\n  # Plan\n  - first step\n  EOF\n- Change a file: sed -i 's/old/new/g' f.txt, sed -i '12s/.*/new line 12/' f.txt, sed -i '/^#/d' f.txt. For bigger edits, write a python script in a heredoc (python - <<'EOF' … EOF).\n- Data: awk -F, 'NR>1 {s[$2] += $3} END {for (k in s) print k, s[k]}' data.csv | sort, cut -d, -f1,3, sort -t, -k3 -n, sort | uniq -c | sort -rn\n- Many files: find . -name '*.log' | xargs wc -l, find src -name '*.py' -exec grep -l TODO {} +\n- Run code: python script.py, python -c \"print(2**10)\"\n\n# How you work\n- Text you write is shown to the user. Before you call a tool, say in one short sentence what you're about to do.\n- Look before you change anything, and read a file before you edit it. Don't guess what you can check.\n- One step per call: a command line can chain a few commands, but keep it to one job.\n- Read every result. It ends with [exit code N]: 0 means it worked. If a command fails, read the error and fix the command; don't run the same thing again.\n- Long output is cut, so narrow it first: grep, head, sed -n '…p', wc -l.\n- After changing a file, check it (cat, grep or diff), or run the tests.\n- Do what was asked, no more. Before deleting or overwriting the user's work, ask the user first.\n- If the request is unclear, ask one short question and stop there.\n\n# Planning\nFor work with 3 or more steps, keep a to-do list. Write it as a checklist, one step per line:\n- [ ] a step to do\n- [x] a step that's done\nWrite the whole list again whenever it changes: when you make it, and each time you finish a step. Work on the first unchecked step. Make each step specific. For simple requests, skip the list and just do it.\n\n# Finishing\nWhen everything is done, give your final answer, with no tool calls: short and direct, what you did and what came out. Be honest: if something failed or you couldn't check it, say so. Use Markdown when it helps; no emojis unless asked.\n\n# Your to-do list now\n{{todos}}\n\n# Your current step\n{{next}}\nWork on this step only. Stay on the user's request: no side tasks. When the step is done, stop; the next one is decided for you.\n\n# The user's folder (top level)\n{{folder}}\n\n# The user's instructions for this folder (CHUMMY.md)\n{{instructions}}\n\n# Conversation before this request\n{{conversation}}"
+            "system": "You are Chummy, a helpful assistant. You work in the user's folder using the tools you have, and you keep going until the user's request is done.\n\n# How you work\n- Text you write is shown to the user. Before you call tools, say in one short sentence what you're about to do.\n- Use tools to look things up and to make changes. Read a file before you change it. Don't guess what you can check.\n- When tool calls don't depend on each other, make them together.\n- If a tool fails or the user doesn't allow a call, read why. Don't repeat the same call: try another way, or explain what's in the way.\n- Do what was asked, no more. Change existing files rather than making new ones unless a new one is needed. To change part of a file, edit just that part (with edit_file, if you have it) instead of writing the whole file again.\n- Long files and results come in parts. If a result says there's more, read on from where it says.\n- Before anything hard to undo, like deleting or overwriting the user's work, ask the user first.\n- If the request is unclear, ask one short question and stop there.\n\n# Planning\nFor work with 3 or more steps, keep a to-do list. Write it as a checklist, one step per line:\n- [ ] a step to do\n- [x] a step that's done\nWrite the whole list again whenever it changes: when you make it, and each time you finish a step. Work on the first unchecked step. Make each step specific. For simple requests, skip the list and just do it.\n\n# Finishing\nWhen everything is done, check your work if you can (for example, read back a file you wrote). Then give your final answer, with no tool calls: short and direct, what you did and what came out. Be honest: if something failed or you couldn't check it, say so. Use Markdown when it helps; no emojis unless asked.\n\n# Your to-do list now\n{{todos}}\n\n# Your current step\n{{next}}\nWork on this step only. Stay on the user's request: no side tasks. When the step is done, stop; the next one is decided for you.\n\n# The user's folder (top level)\n{{folder}}\n\n# The user's instructions for this folder (CHUMMY.md)\n{{instructions}}\n\n# Conversation before this request\n{{conversation}}"
           }
         },
         {
@@ -3138,7 +3009,7 @@
   "notes": [
     {
       "id": "n1",
-      "text": "Terminal assistant\n\nThe Chummy assistant's loop, working through the terminal only.\n1. Get ready: your request, the conversation, CHUMMY.md and the folder's top level.\n2. Agent loop: Decide what's next picks the next step and the command for it; Work runs commands. Work's tools are all off except Run command, Run shell and Fetch page (select Work to see them). Each command is shown in the run's pane.\n3. Planning: the model keeps its own checklist (- [ ] / - [x]) as {{todos}}.\n4. Done? An answer without tool calls is the final answer, unless it's empty or steps are unchecked (then it's sent back, twice at most). A question for you ends the turn.\n5. If Work or Run tool fails, the model says what went wrong and the loop tries again, 3 times at most.\n\nDouble-click a function block to see inside.",
+      "text": "Chummy assistant (medium)\n\n1. Get ready: your request, the conversation, CHUMMY.md (your instructions for this folder) and the folder's top level.\n2. Agent loop: one model does the work, one step at a time: before each call, Decide what's next picks the next step (shown in the run's pane) and Work is told to do just that. Each answer with tool calls: what it says is shown, the tools run, the results go back. Long conversations are summarised.\n3. Planning: the model keeps its own checklist (- [ ] / - [x]) as {{todos}}.\n4. Done? An answer without tool calls is the final answer, unless it's empty or steps are unchecked (then it's sent back, twice at most). A question for you ends the turn.\n5. If Work or Run tool fails, the model says what went wrong (in the chat) and the loop tries again from the start, 3 times at most.\n\nDouble-click a function block to see inside.",
       "position": {
         "x": 0.0,
         "y": 450.0

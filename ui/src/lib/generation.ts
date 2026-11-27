@@ -87,7 +87,7 @@ export const MAX_TOKENS: SettingInfo = {
   label: "Longest answer (tokens)",
   type: "int",
   min: 16,
-  max: 32768,
+  max: 262144,
   placeholder: "e.g. 2048",
   help: "Small models often ramble: a lower limit keeps answers short.",
   required: true,
@@ -132,7 +132,9 @@ export function unsupported(kind: ProviderKind, key: Param | SettingKey): string
     case "ollama":
       return null;
     case "local":
-      return "The built-in engine doesn't use this yet.";
+      return key === "presence_penalty" || key === "frequency_penalty"
+        ? "The built-in engine doesn't use this; try the repeat penalty."
+        : null;
     case "open_ai":
       return key === "top_k" || key === "min_p" || key === "repeat_penalty" ? "OpenAI doesn't accept this." : null;
     case "anthropic":

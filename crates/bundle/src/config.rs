@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
-use chummy_agent::{Permissions, ToolPref};
+use chummy_agent::{AgentTool, Permissions};
 use chummy_flow::{LoopFile, Severity, analyze};
 use chummy_llm::{ProviderConfig, ProviderKind};
 use chummy_scheduler::Job;
@@ -14,9 +14,13 @@ use serde::{Deserialize, Serialize};
 pub const CONFIG_FORMAT: &str = "chummyd.config";
 /// The version new bundles are written as. Version 1 (before the Matrix
 /// channel) still opens.
-pub const CONFIG_VERSION: u32 = 2;
+pub const CONFIG_VERSION: u32 = 3;
 /// Most job runs going at once.
 pub const MAX_RUNS: u32 = 8;
+/// The most messages a chat can keep (`limits.chat_messages`).
+pub const MAX_CHAT_MESSAGES: u32 = 100_000;
+/// The most chats an agent can keep (`limits.chats`).
+pub const MAX_CHATS: u32 = 10_000;
 
 /// chummyd's configuration. It can't change while chummyd runs: changing it
 /// means making a new bundle and starting again.
@@ -31,9 +35,6 @@ pub struct Config {
     /// The switches every agent's tools also need (as in the app).
     #[serde(default)]
     pub permissions: Permissions,
-    /// Per-tool switches, by tool name.
-    #[serde(default)]
-    pub tools: BTreeMap<String, ToolPref>,
     #[serde(default)]
     pub providers: Vec<ProviderConfig>,
     #[serde(default)]
@@ -72,11 +73,21 @@ pub struct Instance {
 pub struct Limits {
     /// Most job runs going at once (1 to [`MAX_RUNS`]).
     pub max_runs: u32,
+    /// Messages each chat keeps; older ones are dropped (10 to
+    /// [`MAX_CHAT_MESSAGES`]). The app keeps 2,000.
+    pub chat_messages: u32,
+    /// Chats each agent keeps; the least recently used go first (1 to
+    /// [`MAX_CHATS`]).
+    pub chats: u32,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { max_runs: 1 }
+        Self {
+            max_runs: 1,
+            chat_messages: 2000,
+            chats: 50,
+        }
     }
 }
 
@@ -90,10 +101,9 @@ pub struct BundleAgent {
     pub loop_id: String,
     #[serde(default)]
     pub model: Option<String>,
+    /// Its tools, each with its own switches (as in the app).
     #[serde(default)]
-    pub tools: BTreeSet<String>,
-    #[serde(default)]
-    pub network: bool,
+    pub tools: BTreeMap<String, AgentTool>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub loop_config: BTreeMap<String, chummy_flow::Overrides>,
     #[serde(default, skip_serializing_if = "chummy_llm::ModelOverrides::is_empty")]
@@ -216,7 +226,6 @@ impl Config {
             },
             limits: Limits::default(),
             permissions: Permissions::default(),
-            tools: BTreeMap::new(),
             providers: vec![],
             default_provider: None,
             secrets: BTreeMap::new(),
@@ -245,7 +254,7 @@ impl Config {
     pub fn check(&self) -> Report {
         let mut r = Report::default();
         let mut err = |s: String| r.errors.push(s);
-        if self.format != CONFIG_FORMAT || !(1..=CONFIG_VERSION).contains(&self.version) {
+        if self.format != CONFIG_FORMAT || self.version != CONFIG_VERSION {
             err("This configuration is from a newer or different version of Chummy.".into());
         }
         if !valid_id(&self.instance.id) {
@@ -264,6 +273,16 @@ impl Config {
         if !(1..=MAX_RUNS).contains(&self.limits.max_runs) {
             err(format!(
                 "Job runs at once must be between 1 and {MAX_RUNS}."
+            ));
+        }
+        if !(10..=MAX_CHAT_MESSAGES).contains(&self.limits.chat_messages) {
+            err(format!(
+                "Messages kept per chat must be between 10 and {MAX_CHAT_MESSAGES}."
+            ));
+        }
+        if !(1..=MAX_CHATS).contains(&self.limits.chats) {
+            err(format!(
+                "Chats kept per agent must be between 1 and {MAX_CHATS}."
             ));
         }
         if self.state_key_bytes().is_none() {
@@ -449,14 +468,11 @@ impl Config {
             if a.channel_approvals || !self.permissions.tools || a.tools.is_empty() {
                 continue;
             }
-            let asks = a.tools.iter().any(|t| {
-                let pref = self.tools.get(t).copied().unwrap_or_default();
-                pref.enabled
-                    && (pref.ask
-                        || (self.permissions.confirm_online_tools
-                            && a.network
-                            && self.permissions.network
-                            && pref.network))
+            let asks = a.tools.values().any(|t| {
+                t.ask
+                    || (self.permissions.confirm_online_tools
+                        && self.permissions.network
+                        && t.network)
             });
             if asks {
                 warn.push(format!(

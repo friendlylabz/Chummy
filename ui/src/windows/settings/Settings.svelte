@@ -106,9 +106,9 @@
       {:else if active === "engine"}
         <LocalEnginePane addModel={() => go("models", "local")} />
       {:else if active === "agents"}
-        <AgentsPane gotoModels={() => go("models", "pick")} gotoTools={() => go("tools")} />
+        <AgentsPane gotoModels={() => go("models", "pick")} gotoTools={() => go("tools")} gotoSecurity={() => go("security")} />
       {:else if active === "tools"}
-        <ToolsPane gotoSecurity={() => go("security")} />
+        <ToolsPane gotoSecurity={() => go("security")} gotoAgents={() => go("agents")} />
       {:else if active === "security"}
         <SecurityPane gotoTools={() => go("tools")} />
       {:else if active === "general"}
@@ -141,7 +141,7 @@
           <div class="row">
             <div>
               <div class="row-title">Scheduled runs at once</div>
-              <div class="row-sub">An agent still does one thing at a time. Keep this at 1 with a local model.</div>
+              <div class="row-sub">Keep this at 1 with a local model.</div>
             </div>
             <select
               value={String(general.max_job_runs)}

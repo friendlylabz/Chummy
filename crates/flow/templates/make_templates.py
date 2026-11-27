@@ -3,10 +3,13 @@ written by hand in templates.rs. Run it after changing them:
 
     python3 crates/flow/templates/make_templates.py
 
-- assistant.chummy.json: the Chummy assistant (the default loop), from
-  assistant.py.
-- terminal.chummy.json: the Terminal assistant (the same loop, working only
-  through the terminal), from terminal.py.
+- assistant-medium.chummy.json: the Chummy assistant (medium), the default
+  loop, from assistant.py.
+- assistant-small.chummy.json: the Chummy assistant (small), from small.py.
+- assistant-large.chummy.json: the Chummy assistant (large), from large.py.
+
+After changing one, add the old file's fingerprint (its SHA-256) to RETIRED
+in crates/agent/src/library.rs, so unedited copies are upgraded.
 
 Shared helpers (blocks, links, notes, functions, tidy) are in loopkit.py.
 """
@@ -18,8 +21,9 @@ import sys
 sys.dont_write_bytecode = True  # no __pycache__ next to the templates
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from loopkit import tidy  # noqa: E402
-from assistant import assistant  # noqa: E402
-from terminal import terminal  # noqa: E402
+from assistant import CHUMMY, assistant  # noqa: E402
+from small import SMALL  # noqa: E402
+from large import LARGE  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -45,7 +49,7 @@ def canonical(v, sort=False):
     return v
 
 
-for name, make in (("assistant", assistant), ("terminal", terminal)):
-    with open(os.path.join(HERE, f"{name}.chummy.json"), "w", encoding="utf-8") as f:
-        f.write(json.dumps(canonical(tidy(make())), indent=2, ensure_ascii=False) + "\n")
-print("wrote the Chummy assistant and the Terminal assistant")
+for name, t in (("small", SMALL), ("medium", CHUMMY), ("large", LARGE)):
+    with open(os.path.join(HERE, f"assistant-{name}.chummy.json"), "w", encoding="utf-8") as f:
+        f.write(json.dumps(canonical(tidy(assistant(t))), indent=2, ensure_ascii=False) + "\n")
+print("wrote the Chummy assistants (small, medium and large)")

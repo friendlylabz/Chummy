@@ -3,6 +3,9 @@
    * Agent Loop Configuration: change any block's settings for one agent
    * without changing the loop file. Saved per agent and per loop; the loop's
    * own settings apply to everything not changed here.
+   *
+   * For a template agent (one being created) nothing is saved here: the
+   * changes are kept in `value` and saved when the agent is created.
    */
   import { onDestroy, untrack } from "svelte";
   import { commands, errorText, type Agent, type AgentLoopConfig, type Block, type Overrides } from "$lib/ipc";
@@ -11,7 +14,11 @@
   import Icon from "$lib/components/Icon.svelte";
   import ParamFields from "$lib/components/ParamFields.svelte";
 
-  let { agent }: { agent: Agent } = $props();
+  let {
+    agent,
+    template = false,
+    value = $bindable({}),
+  }: { agent: Agent; template?: boolean; value?: Overrides } = $props();
 
   let config = $state<AgentLoopConfig | null>(null);
   let overrides = $state<Overrides>({});
@@ -23,7 +30,12 @@
   async function reload() {
     error = "";
     try {
-      config = await commands.agentLoopConfig(agent.id);
+      if (template) {
+        const file = await commands.loadLoop(agent.loop_id);
+        config = { loop_id: agent.loop_id, file, overrides: value, missing: [] };
+      } else {
+        config = await commands.agentLoopConfig(agent.id);
+      }
       overrides = config.overrides;
     } catch (e) {
       config = null;
@@ -33,11 +45,16 @@
 
   // Reload only when the agent or its loop changes, not on every settings save.
   const which = $derived(`${agent.id}\u0000${agent.loop_id}`);
+  let lastLoop = "";
   $effect(() => {
     void which;
     untrack(() => {
+      // A template agent's changes are for one loop; another loop starts clean.
+      if (template && lastLoop && lastLoop !== agent.loop_id) value = {};
+      lastLoop = agent.loop_id;
       loops.init();
-      reload();
+      if (agent.loop_id) reload();
+      else config = null;
     });
   });
 
@@ -94,6 +111,10 @@
     if (Object.keys(o).length) next[key] = o;
     else delete next[key];
     overrides = next;
+    if (template) {
+      value = next;
+      return;
+    }
     clearTimeout(timers.get(key));
     timers.set(
       key,
@@ -109,6 +130,11 @@
   }
 
   async function resetAll() {
+    if (template) {
+      value = {};
+      overrides = {};
+      return;
+    }
     for (const key of Object.keys(overrides)) {
       clearTimeout(timers.get(key));
       try {
@@ -162,11 +188,13 @@
   <div class="head">
     <div class="section-title"><Icon name="sliders" size={16} /> Agent Loop Configuration</div>
     <span class="spacer"></span>
-    <Button variant="ghost" icon="import" onclick={importConfig}>Import</Button>
-    <Button variant="ghost" icon="export" onclick={exportConfig}>Export</Button>
+    {#if !template}
+      <Button variant="ghost" icon="import" onclick={importConfig}>Import</Button>
+      <Button variant="ghost" icon="export" onclick={exportConfig}>Export</Button>
+    {/if}
   </div>
   <p class="explain">
-    Change any block's settings for {agent.name} alone. The loop file keeps its own settings for every other agent;
+    Change any block's settings for {agent.name.trim() || "this agent"} alone. The loop file keeps its own settings for every other agent;
     anything you don't change here follows the loop. Export saves these changes as a file you can load into another agent
     that uses the same loop.
   </p>
@@ -208,7 +236,7 @@
                   {info}
                   params={merged(it)}
                   {changed}
-                  agentTools={agent.tools ?? []}
+                  agentTools={Object.keys(agent.tools ?? {})}
                   idPrefix="alc-{it.key}"
                   onset={(k, v) => set(it, k, v)}
                   onreset={(k) => reset(it, k)}

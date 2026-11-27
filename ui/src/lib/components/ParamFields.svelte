@@ -72,9 +72,8 @@
     if (!isNaN(n)) onset(p.key, p.kind === "integer" ? Math.round(n) : n);
   }
   /** Whether this block offers the tool, and why (or why not). */
-  function verdict(t: { enabled: boolean; name: string }): { on: boolean; text: string } {
+  function verdict(t: { name: string }): { on: boolean; text: string } {
     if (!settings.current.permissions.tools) return { on: false, text: "tools off in Security and Privacy" };
-    if (!t.enabled) return { on: false, text: "off in Settings → Tools" };
     if (isDisabled(toolSwitches(), t.name)) return { on: false, text: "disabled in this block" };
     if (!agentTools) return { on: true, text: "if the agent allows" };
     return agentTools.includes(t.name) ? { on: true, text: "on for the agent" } : { on: false, text: "off for the agent" };

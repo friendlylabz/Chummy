@@ -49,12 +49,14 @@ until you say so.
   and comments, link labels and notes are saved with the loop so it
   explains itself. Test runs light up each block as it works. Loops are
   plain, versioned JSON you can export and share.
-- **Ready-made loops you can take apart.** The **Chummy assistant** (the
-  default) is a full agent loop like a coding agent's: its own to-do list,
-  `CHUMMY.md` instructions, context compaction, a decided next step before
-  every call, and failures reported and retried. The **Terminal assistant**
-  is the same loop working only through a sandboxed shell. Both are built
-  from ordinary blocks you can change.
+- **Ready-made loops you can take apart.** The **Chummy assistant** is a
+  full agent loop like a coding agent's: its own to-do list, `CHUMMY.md`
+  instructions, context compaction, a decided next step before every call,
+  and failures reported and retried. It comes in three sizes: **small**
+  (more steering, a check of each answer, asking when unsure, a light
+  context), **medium** (the default) and **large** (no steering: it plans
+  and does the job in one go, and uses its context to remember). All are
+  built from ordinary blocks you can change.
 - **Built for small models.** Every model block can switch tools off,
   steer the model with a reminder sent last, fall back to tool calls
   described in the prompt when a server can't call tools, and explain bad
@@ -83,11 +85,11 @@ until you say so.
   (CPython for WebAssembly, the default, nothing to install), **Container**
   (a fresh, locked-down Docker or Podman container per call) or **NVIDIA
   OpenShell**. There is no unsandboxed mode.
-- **Tools are off until you turn them on**, and so is internet access. A
-  tool runs only if it's on app-wide, for the agent and in the block; going
-  online also needs the tool's and the agent's internet switch. Turning
-  things on asks through a native confirmation, and *potentially unsafe*
-  tools (like the command line) ask before each use.
+- **Tools are off until you turn them on**, and so is internet access. Each
+  agent has its own tool switchboard (on, ask first, internet, per tool),
+  under the app-wide switches; a loop block can only switch tools off.
+  Turning things on asks through a native confirmation, and *potentially
+  unsafe* tools (like the command line) ask before each use.
 - **One simple tool format.** A tool is one Python file with a standard
   header. It sees only the agent's folder, has no network of its own (web
   access goes through Chummy, only when allowed), and its dependencies are

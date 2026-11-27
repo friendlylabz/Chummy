@@ -2,13 +2,13 @@
 //! paused runs, loops that need no model. What's checked here holds for
 //! every program that runs agents through `chummy-session`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use chummy_agent::{Agent, AgentConfig, Permissions, ToolPref, Workspace};
+use chummy_agent::{Agent, AgentConfig, Permissions, Workspace};
 use chummy_flow::{Answer, Block, Link, LoopFile, Position};
 use chummy_llm::ProviderConfig;
 use chummy_log::runs::LogOptions;
@@ -46,7 +46,6 @@ struct Config {
     agents: Vec<Agent>,
     providers: Vec<ProviderConfig>,
     permissions: Permissions,
-    tools: BTreeMap<String, ToolPref>,
 }
 
 impl AgentConfig for Config {
@@ -61,9 +60,6 @@ impl AgentConfig for Config {
     }
     fn permissions(&self) -> &Permissions {
         &self.permissions
-    }
-    fn tool_prefs(&self) -> &BTreeMap<String, ToolPref> {
-        &self.tools
     }
 }
 
@@ -222,7 +218,6 @@ fn platform(loop_file: LoopFile) -> TestPlatform {
         },
         created_at: 1,
         tools: Default::default(),
-        network: false,
         loop_config: Default::default(),
         model_options: Default::default(),
     };
@@ -232,7 +227,6 @@ fn platform(loop_file: LoopFile) -> TestPlatform {
             agents: vec![agent],
             providers: vec![provider],
             permissions: Permissions::default(),
-            tools: BTreeMap::new(),
         },
         chats: FileChats::new(dir.path().join("chats")),
         paused: MemoryPaused::default(),

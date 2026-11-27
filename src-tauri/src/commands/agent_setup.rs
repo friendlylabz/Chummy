@@ -1,11 +1,12 @@
 //! Per-agent switches and Agent Loop Configuration.
 //!
-//! Tools and internet access are switched on at three levels, and all three
-//! must be on: the app (Settings → Permissions and Tools), the agent (here),
-//! and the block in the loop. Agent Loop Configuration changes block
-//! settings for one agent without changing the loop file.
+//! Each agent has its own tool switchboard: which tools it may use, and for
+//! each, whether every use asks first and whether it may go online. The app
+//! keeps only the master switches (Security and Privacy), and a loop's block
+//! can only switch a tool off for itself. Agent Loop Configuration changes
+//! block settings for one agent without changing the loop file.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 use chummy_flow::{BlockKind, LoopConfig, LoopFile, Overrides, analyze, find_block};
 use serde::Serialize;
@@ -13,98 +14,120 @@ use tauri::{AppHandle, State, WebviewWindow};
 
 use super::{CmdResult, err, review};
 use crate::dialogs;
+use crate::settings::AgentTool;
 use crate::state::AppState;
 
 /// Largest configuration file imported.
 const MAX_IMPORT_BYTES: u64 = 1024 * 1024;
 
-/// What [`set_agent_access`] saved (less than asked if a warning was declined).
-#[derive(Debug, Clone, Serialize)]
-pub struct AgentAccess {
-    pub tools: Vec<String>,
-    pub network: bool,
-}
-
-/// Sets which tools an agent may use and whether they may go online.
-/// Turning internet access on asks first, and so does giving a potentially
-/// unsafe tool to an agent that shares its folder. Returns what was saved.
+/// Sets an agent's tool switchboard: the tools it may use, each with "ask
+/// first" and "internet". Returns what was saved, which is less than asked
+/// where the user declined a confirmation:
+/// - switching on a potentially unsafe tool asks, says so if the folder is
+///   shared with other agents, and switches "ask first" on for it;
+/// - letting a tool go online asks;
+/// - no longer asking before a potentially unsafe tool asks.
+///
+/// Tools that aren't installed are dropped, and so is internet for tools
+/// that don't use it.
 #[tauri::command]
 pub async fn set_agent_access(
     app: AppHandle,
     window: WebviewWindow,
     state: State<'_, AppState>,
     agent_id: String,
-    tools: Vec<String>,
-    network: bool,
-) -> CmdResult<AgentAccess> {
+    tools: BTreeMap<String, AgentTool>,
+) -> CmdResult<BTreeMap<String, AgentTool>> {
     let s = state.settings();
     let agent = s.agent(&agent_id).ok_or("That agent no longer exists.")?;
-    let installed: BTreeSet<String> = chummy_tools::installed(&state.tool_paths)
-        .into_iter()
-        .map(|m| m.name)
-        .collect();
-    let mut tools: BTreeSet<String> = tools
-        .into_iter()
-        .filter(|t| installed.contains(t))
-        .collect();
-    // A potentially unsafe tool for an agent that shares its folder: the
-    // other agents' files (and whatever they leave there) reach it too.
+    let installed: BTreeMap<String, chummy_tools::ToolManifest> =
+        chummy_tools::installed(&state.tool_paths)
+            .into_iter()
+            .map(|m| (m.name.clone(), m))
+            .collect();
     let others = super::agents::overlapping_agents(&s, &agent.workspace.path, Some(&agent.id));
-    let risky = super::agents::risky_tools(&state);
-    let new_risky: Vec<String> = tools
-        .iter()
-        .filter(|t| risky.contains(*t) && !agent.tools.contains(*t))
-        .cloned()
-        .collect();
-    if !others.is_empty() && !new_risky.is_empty() {
-        let names: Vec<String> = others.iter().map(|a| format!("“{}”", a.name)).collect();
-        let msg = format!(
-            "“{}” shares its folder with {}. A file another agent leaves there (for example from a \
-             web page it read) can carry instructions this agent follows with {}.\n\nThe tool still \
-             runs in the sandbox and can't see outside the folder.",
-            agent.name,
-            names.join(", "),
-            new_risky.join(", ")
-        );
-        let title = format!("Give “{}” {}?", agent.name, new_risky.join(", "));
-        if !dialogs::confirm(&app, window.label(), &title, &msg, "Allow", true).await {
-            tools.retain(|t| !new_risky.contains(t));
+    let shared_with = (!others.is_empty()).then(|| {
+        others
+            .iter()
+            .map(|a| format!("“{}”", a.name))
+            .collect::<Vec<_>>()
+            .join(", ")
+    });
+
+    let mut saved = BTreeMap::new();
+    for (name, mut want) in tools {
+        let Some(m) = installed.get(&name) else {
+            continue;
+        };
+        let had = agent.tools.get(&name).copied();
+        if !m.network {
+            want.network = false;
         }
+        if m.risky && had.is_none() {
+            let mut msg = format!(
+                "“{}” is potentially unsafe.\n\n{}\n\nIt still runs in the sandbox, so it can't see anything \
+                 outside the agent's workspace, but inside the workspace one command can change or delete many \
+                 files at once. Keep a copy of anything important in that folder.\n\nChummy will ask you \
+                 before each use; you can turn that off in the agent's tools.",
+                m.title, m.description
+            );
+            if let Some(names) = &shared_with {
+                msg.push_str(&format!(
+                    "\n\n“{}” shares its folder with {names}. A file another agent leaves there (for \
+                     example from a web page it read) can carry instructions this agent follows with it.",
+                    agent.name
+                ));
+            }
+            let title = format!("Give “{}” {}?", agent.name, m.title);
+            if !dialogs::confirm(&app, window.label(), &title, &msg, "Turn on", true).await {
+                continue;
+            }
+            want.ask = true;
+        }
+        if want.network && !had.is_some_and(|t| t.network) {
+            let mut msg = format!(
+                "“{}” will be able to make web requests for “{}”: {}\n\nIt can't reach this computer or \
+                 your local network, and it still can't see anything outside the agent's workspace. A web \
+                 page can contain instructions meant to trick the model. Internet access also has to be on \
+                 in Security and Privacy.",
+                m.title, agent.name, m.description
+            );
+            if let Some(names) = &shared_with {
+                msg.push_str(&format!(
+                    "\n\nThis agent shares its folder with {names}. Their files will be within reach of \
+                     what this tool sends online, and anything it brings back from the web, the others \
+                     can read and act on."
+                ));
+            }
+            let title = format!("Let “{}” use the internet for “{}”?", m.title, agent.name);
+            if !dialogs::confirm(&app, window.label(), &title, &msg, "Allow", true).await {
+                want.network = false;
+            }
+        }
+        if !want.ask && m.risky && had.is_some_and(|t| t.ask) {
+            let msg = format!(
+                "“{}” is potentially unsafe: inside the agent's workspace one call can change or delete \
+                 many files at once.\n\nWithout asking, “{}” will use it whenever the model decides to, \
+                 including in scheduled jobs while you're away, and a file or web page the model reads \
+                 could talk it into a harmful command.",
+                m.title, agent.name
+            );
+            let title = format!("Stop asking before each use of “{}”?", m.title);
+            if !dialogs::confirm(&app, window.label(), &title, &msg, "Stop asking", true).await {
+                want.ask = true;
+            }
+        }
+        saved.insert(name, want);
     }
-    let mut network = network;
-    if network && !agent.network {
-        let mut msg = format!(
-            "Tools that “{}” uses will be able to reach the internet, if internet access is also on \
-             in Security and Privacy, for that tool, and in the loop's block.\n\nA web page can contain \
-             instructions meant to trick the model. Tools that go online ask you first unless you \
-             turned that off.",
-            agent.name
-        );
-        if !others.is_empty() {
-            let names: Vec<String> = others.iter().map(|a| format!("“{}”", a.name)).collect();
-            msg.push_str(&format!(
-                "\n\nThis agent shares its folder with {}. Their files will be within reach of \
-                 what this agent sends online, and anything it brings back from the web, the others \
-                 can read and act on.",
-                names.join(", ")
-            ));
-        }
-        let title = format!("Let “{}” use the internet?", agent.name);
-        if !dialogs::confirm(&app, window.label(), &title, &msg, "Allow", true).await {
-            network = false;
-        }
-    }
-    let saved = AgentAccess {
-        tools: tools.iter().cloned().collect(),
-        network,
-    };
+    let out = saved.clone();
     state.update(&app, |s| {
         if let Some(a) = s.agents.iter_mut().find(|a| a.id == agent_id) {
-            a.tools = tools;
-            a.network = network;
+            a.tools = saved;
         }
     })?;
-    Ok(saved)
+    // Settings → Tools shows which agents have each tool on.
+    super::tools::changed(&app, &state);
+    Ok(out)
 }
 
 #[derive(Debug, Clone, Serialize)]

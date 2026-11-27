@@ -4,12 +4,10 @@
 //! it through [`AgentConfig`], so the rules (which model an agent uses, and
 //! how the switches combine into a run's permissions) are the same in both.
 
-use std::collections::BTreeMap;
-
 use chummy_llm::ProviderConfig;
 use chummy_runner::{AgentGrant, AgentSetup, ToolGrant};
 
-use crate::{Agent, Permissions, ToolPref};
+use crate::{Agent, Permissions};
 
 pub trait AgentConfig {
     fn agents(&self) -> &[Agent];
@@ -17,8 +15,6 @@ pub trait AgentConfig {
     /// The model connection used unless an agent or block says otherwise.
     fn default_provider(&self) -> Option<&str>;
     fn permissions(&self) -> &Permissions;
-    /// Per-tool switches, by tool name.
-    fn tool_prefs(&self) -> &BTreeMap<String, ToolPref>;
 
     fn agent(&self, id: &str) -> Option<&Agent> {
         self.agents().iter().find(|a| a.id == id)
@@ -44,10 +40,6 @@ pub trait AgentConfig {
             .or_else(|| self.default_model())
     }
 
-    fn tool(&self, name: &str) -> ToolPref {
-        self.tool_prefs().get(name).copied().unwrap_or_default()
-    }
-
     /// What a run of `agent` (or of no agent: an editor test run) may use,
     /// with `model` as its model. The agent's own model settings apply to
     /// every connection it may call. Only the configuration is filled in:
@@ -70,23 +62,26 @@ pub trait AgentConfig {
                 network: p.network,
                 confirm_online_tools: p.confirm_online_tools,
             },
-            tool_grants: self
-                .tool_prefs()
-                .iter()
-                .map(|(name, p)| {
-                    (
-                        name.clone(),
-                        ToolGrant {
-                            enabled: p.enabled,
-                            network: p.network,
-                            ask: p.ask,
-                        },
-                    )
+            // The agent's own tools, with its switches for each.
+            tool_grants: agent
+                .map(|a| {
+                    a.tools
+                        .iter()
+                        .map(|(name, t)| {
+                            (
+                                name.clone(),
+                                ToolGrant {
+                                    enabled: true,
+                                    network: t.network,
+                                    ask: t.ask,
+                                },
+                            )
+                        })
+                        .collect()
                 })
-                .collect(),
+                .unwrap_or_default(),
             agent: agent.map(|a| AgentGrant {
-                tools: a.tools.clone(),
-                network: a.network,
+                tools: a.tools.keys().cloned().collect(),
             }),
             installed: vec![],
             sandbox: None,
@@ -109,7 +104,6 @@ mod tests {
         providers: Vec<ProviderConfig>,
         default: Option<String>,
         permissions: Permissions,
-        tools: BTreeMap<String, ToolPref>,
     }
 
     impl AgentConfig for Config {
@@ -124,9 +118,6 @@ mod tests {
         }
         fn permissions(&self) -> &Permissions {
             &self.permissions
-        }
-        fn tool_prefs(&self) -> &BTreeMap<String, ToolPref> {
-            &self.tools
         }
     }
 
@@ -149,9 +140,15 @@ mod tests {
                 confirmed_at: 1,
             },
             created_at: 1,
-            tools: ["calculator".to_string()].into(),
-            network: true,
-            loop_config: BTreeMap::new(),
+            tools: [(
+                "calculator".to_string(),
+                crate::AgentTool {
+                    ask: true,
+                    network: false,
+                },
+            )]
+            .into(),
+            loop_config: Default::default(),
             model_options: Default::default(),
         }
     }
@@ -179,14 +176,6 @@ mod tests {
             ..Default::default()
         };
         c.permissions.tools = true;
-        c.tools.insert(
-            "calculator".into(),
-            ToolPref {
-                enabled: true,
-                network: false,
-                ask: true,
-            },
-        );
         let a = agent(None);
         let s = c.setup(Some(&a), c.agent_model(&a).cloned());
         assert!(s.permissions.tools && !s.permissions.network);
@@ -200,11 +189,12 @@ mod tests {
             }
         );
         let grant = s.agent.unwrap();
-        assert!(grant.network && grant.tools.contains("calculator"));
+        assert!(grant.tools.contains("calculator"));
         // The run's surroundings are the caller's to add.
         assert!(s.jail.is_none() && s.asks.is_none() && s.usage.is_none());
         assert!(s.installed.is_empty() && s.sandbox.is_none());
         // Without an agent (an editor test run), no tools at all.
-        assert!(c.setup(None, None).agent.is_none());
+        let none = c.setup(None, None);
+        assert!(none.agent.is_none() && none.tool_grants.is_empty());
     }
 }

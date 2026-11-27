@@ -13,7 +13,6 @@
     { native: "Native (WebAssembly)", container: "Container", openshell: "OpenShell" }[settings.current.sandbox.kind],
   );
   const perms = $derived(settings.current.permissions);
-  const toolsOn = $derived(Object.values(settings.current.tools).filter((t) => t.enabled).length);
   let adding = $state(false);
   let error = $state("");
 
@@ -52,8 +51,9 @@
       <div class="text">
         <h2>Add a loop</h2>
         <p>
-          How an agent thinks. The recommended <b>Chummy assistant</b> works with tools until the job is done, tells
-          you what it's doing and keeps its own to-do list. Or build your own in the loop editor.
+          How an agent thinks. The recommended <b>Chummy assistant (medium)</b> works with tools until the job is done,
+          tells you what it's doing and keeps its own to-do list. There are small and large versions for other sizes
+          of model, or build your own in the loop editor.
         </p>
         {#if error}<p class="err">{error}</p>{/if}
       </div>
@@ -99,8 +99,8 @@
       <div class="text">
         <h2>Tools</h2>
         <p>
-          Set up the tools agents can call: reading and editing files, searching, commands, the web.
-          <span class="now">Now: {toolsOn ? `${toolsOn} switched on` : "none switched on"}.</span>
+          Set up the tools agents can call: reading and editing files, searching, commands, the web. Then switch on
+          the ones each agent needs, in its settings.
         </p>
       </div>
       <Button variant="ghost" onclick={() => commands.openWindow("settings", "tools")}>Open</Button>
