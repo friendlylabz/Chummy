@@ -270,7 +270,7 @@
 
     {#if paused.list.length}
       <div class="group">
-        <div class="group-title">Paused</div>
+        <div class="group-title">Paused runs</div>
         {#each paused.list as p (p.chat_id)}
           {@const agentName = agents.find((a) => a.id === p.agent_id)?.name ?? "Agent"}
           <div class="run paused">

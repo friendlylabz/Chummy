@@ -59,7 +59,9 @@ release will say.
   end-to-end encrypted, and the app says so where you set it up.
 - Sessions panel: each run has a link to its full log, the pane button has
   a thought-bubble icon, and **Recent runs** keeps each agent's three
-  latest runs with their pane and log.
+  latest runs with their pane and log. Paused runs are under **Paused
+  runs** (resume or discard them there), not among the recent ones, so a
+  resumed run shows once, as running.
 
 ## v0.1.5
 

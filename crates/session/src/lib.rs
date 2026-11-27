@@ -140,10 +140,16 @@ impl Session {
         lock(&self.recent).iter().cloned().collect()
     }
 
-    /// A run ended: it's kept among the recent ones.
+    /// A run ended: it's kept among the recent ones. A paused run isn't
+    /// (it's among the paused runs until it's resumed, as the same run, or
+    /// discarded); a resumed run that ends replaces what was kept of it.
     fn ended(&self, info: RunInfo, status: String) {
+        if status == "paused" {
+            return;
+        }
         let pane = lock(&info.pane).iter().cloned().collect();
         let mut recent = lock(&self.recent);
+        recent.retain(|r| r.info.run_id != info.run_id);
         recent.push_front(RecentRun {
             finished_at: now(),
             status,

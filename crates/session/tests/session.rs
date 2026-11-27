@@ -325,6 +325,9 @@ async fn a_paused_run_carries_on_as_one_response() {
     chummy_session::pause_run(&p, &run).unwrap();
     until("the pause", || finished(&p, &run) == 1).await;
     assert!(p.session().is_paused("a1", &c));
+    // Paused runs aren't among the recent ones: they're paused runs.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(!p.session().recent().iter().any(|r| r.info.run_id == run));
     assert!(p.session().asks.pending().is_empty(), "withdrawn");
     let msgs = p.chats().load("a1", &c).unwrap();
     assert_eq!(msgs.last().unwrap().role, "notice");
@@ -344,6 +347,14 @@ async fn a_paused_run_carries_on_as_one_response() {
     let q = p.session().asks.pending()[0].id.clone();
     chummy_session::answer(&p, &q, Answer::Text("the second".into())).unwrap();
     until("the run to finish", || finished(&p, &run) == 2).await;
+    // Finished: among the recent runs once.
+    until("the run among the recent ones", || {
+        p.session().recent().iter().any(|r| r.info.run_id == run)
+    })
+    .await;
+    let recent = p.session().recent();
+    assert_eq!(recent.iter().filter(|r| r.info.run_id == run).count(), 1);
+    assert_eq!(recent[0].status, "completed");
 
     let msgs = p.chats().load("a1", &c).unwrap();
     let roles: Vec<&str> = msgs.iter().map(|m| m.role.as_str()).collect();
