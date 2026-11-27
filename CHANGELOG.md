@@ -42,6 +42,16 @@ release will say.
   need it.
 - Settings → Tools: the internet and "ask first" switches no longer sit out
   of line (they moved to each agent).
+- **Channels in the app** (Settings → Channels): talk to an agent from
+  Matrix while Chummy runs, with the same channel and commands as chummyd
+  (now shared code, so both behave the same). Each channel has a type
+  (Matrix for now), an agent, a bot account and the people allowed. People
+  verify the bot by emoji, which you confirm in the channel's card. The
+  password stays in the keychain and the login is sealed, so channels
+  connect again by themselves. Their runs show in the sessions panel.
+- Sessions panel: each run has a link to its full log, the pane button has
+  a thought-bubble icon, and **Recent runs** keeps each agent's three
+  latest runs with their pane and log.
 
 ## v0.1.5
 

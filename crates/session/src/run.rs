@@ -4,8 +4,8 @@
 //! pauses), and a resumed run carries on that same response.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use chummy_agent::{Agent, AgentConfig};
 use chummy_flow::{
@@ -512,6 +512,7 @@ fn track<P: Platform>(p: &P, info: RunInfo, meta: RunMeta) -> RunGuard<P> {
         started_at,
         title: info.title.clone(),
         agent_id: info.agent_id.clone(),
+        status: Mutex::new(None),
     };
     p.emit(Update::RunStarted(info));
     guard
@@ -638,10 +639,14 @@ fn start<P: Platform>(p: &P, launch: Launch<P::Services>) {
         .await;
         let end = guard.finish(&outcome);
 
-        let said = lock(&p.session().runs)
-            .remove(&id)
+        let info = lock(&p.session().runs).remove(&id);
+        let said = info
+            .as_ref()
             .map(|r| lock(&r.said).clone())
             .unwrap_or_default();
+        if let Some(info) = info {
+            p.session().ended(info, end.status.clone());
+        }
         if let (Some(agent), Some(chat)) = (&agent, &chat_id) {
             let replied = !outcome.replies.is_empty();
             // The whole run's time, across pauses.
@@ -865,6 +870,8 @@ struct RunGuard<P: Platform> {
     started_at: u64,
     title: String,
     agent_id: Option<String>,
+    /// How it ended, once it has.
+    status: Mutex<Option<String>>,
 }
 
 impl<P: Platform> RunGuard<P> {
@@ -872,6 +879,7 @@ impl<P: Platform> RunGuard<P> {
     /// returns that record (with today's use of the model).
     fn finish(&self, o: &RunOutcome) -> RunEnd {
         let mut end = RunEnd::from_outcome(o);
+        *lock(&self.status) = Some(end.status.clone());
         let c = self.p.config();
         // The model the turn ended on: the block's, else the agent's, else the default.
         let model = o
@@ -935,8 +943,12 @@ impl<P: Platform> RunGuard<P> {
 impl<P: Platform> Drop for RunGuard<P> {
     fn drop(&mut self) {
         let session = self.p.session();
-        lock(&session.runs).remove(&self.run_id);
+        let info = lock(&session.runs).remove(&self.run_id);
         session.asks.withdraw_run(&self.run_id);
+        if let Some(info) = info {
+            let status = lock(&self.status).take().unwrap_or_else(|| "ended".into());
+            session.ended(info, status);
+        }
     }
 }
 

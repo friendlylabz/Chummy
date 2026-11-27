@@ -34,10 +34,31 @@ pub use run::{
 pub use runs::{PANE_LINES, RunInfo, Said};
 pub use store::{ChatStore, PausedOpenError, PausedStore};
 
+/// How many finished runs are kept for each agent (see [`Session::recent`]).
+pub const RECENT_PER_AGENT: usize = 3;
+
+/// A run that finished lately.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RecentRun {
+    #[serde(flatten)]
+    pub info: RunInfo,
+    /// Unix seconds.
+    pub finished_at: u64,
+    /// "completed", "failed", "stopped", "limit" or "paused" ("ended" when
+    /// it ended before it could say).
+    pub status: String,
+    /// What its Pane output blocks showed, oldest first.
+    #[serde(skip)]
+    pub pane: Vec<String>,
+}
+
 /// What a program's conversations share: the runs going on, the paused
 /// runs, the questions waiting, and the day's model use.
 pub struct Session {
     runs: Mutex<HashMap<String, RunInfo>>,
+    /// Runs that finished lately, newest first: [`RECENT_PER_AGENT`] per
+    /// agent.
+    recent: Mutex<std::collections::VecDeque<RecentRun>>,
     paused: Mutex<paused::Paused>,
     /// Questions and tool approvals waiting for the user, from every run.
     pub asks: AskBroker,
@@ -52,6 +73,7 @@ impl Session {
     pub fn new(usage: Arc<UsageLedger>) -> Self {
         Self {
             runs: Mutex::new(HashMap::new()),
+            recent: Mutex::new(Default::default()),
             paused: Mutex::new(HashMap::new()),
             asks: AskBroker::new(),
             usage,
@@ -97,12 +119,43 @@ impl Session {
         lock(&self.runs).len()
     }
 
-    /// What a running run's Pane output blocks have shown so far, newest
-    /// first (empty for a run that has finished or never used one).
+    /// What a run's Pane output blocks have shown, newest first: a running
+    /// run's so far, or a recent one's (empty for one that never used one,
+    /// or finished too long ago).
     pub fn pane(&self, run_id: &str) -> Vec<String> {
         let pane = lock(&self.runs).get(run_id).map(|r| r.pane.clone());
-        pane.map(|p| lock(&p).iter().rev().cloned().collect())
-            .unwrap_or_default()
+        match pane {
+            Some(p) => lock(&p).iter().rev().cloned().collect(),
+            None => lock(&self.recent)
+                .iter()
+                .find(|r| r.info.run_id == run_id)
+                .map(|r| r.pane.iter().rev().cloned().collect())
+                .unwrap_or_default(),
+        }
+    }
+
+    /// Runs that finished lately, newest first: [`RECENT_PER_AGENT`] for
+    /// each agent (and as many test runs without one).
+    pub fn recent(&self) -> Vec<RecentRun> {
+        lock(&self.recent).iter().cloned().collect()
+    }
+
+    /// A run ended: it's kept among the recent ones.
+    fn ended(&self, info: RunInfo, status: String) {
+        let pane = lock(&info.pane).iter().cloned().collect();
+        let mut recent = lock(&self.recent);
+        recent.push_front(RecentRun {
+            finished_at: now(),
+            status,
+            pane,
+            info,
+        });
+        let mut seen: HashMap<Option<String>, usize> = HashMap::new();
+        recent.retain(|r| {
+            let n = seen.entry(r.info.agent_id.clone()).or_default();
+            *n += 1;
+            *n <= RECENT_PER_AGENT
+        });
     }
 
     /// Stops a run (after its current block), and withdraws its questions.

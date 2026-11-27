@@ -99,6 +99,9 @@ impl Platform for AppPlatform {
 
     fn emit(&self, update: Update) {
         let app = &self.app;
+        if let Some(ch) = self.state().channels.get() {
+            ch.update(&update);
+        }
         let _ = match update {
             Update::RunStarted(info) => app.emit(events::RUN_STARTED, info),
             Update::RunEvent(e) => app.emit(events::RUN_EVENT, e),

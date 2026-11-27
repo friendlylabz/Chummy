@@ -409,6 +409,44 @@ pub fn restore_message(
     Ok((save_index(root, agent, ix)?, pos))
 }
 
+/// Makes sure an agent has the chat `chat` (a channel's conversation, with
+/// an id the channel chooses), making it with `title` if not. It isn't
+/// opened. Returns the index and whether the chat was made.
+pub fn ensure(
+    root: &Path,
+    agent: &str,
+    chat: &str,
+    title: &str,
+) -> Result<(ChatIndex, bool), String> {
+    valid(chat)?;
+    let _g = lock();
+    let mut ix = index_locked(root, agent)?;
+    if ix.chats.iter().any(|c| c.id == chat) {
+        return Ok((ix, false));
+    }
+    let mut meta = blank(chat.to_string());
+    meta.title = title.to_string();
+    ix.chats.push(meta);
+    Ok((save_index(root, agent, ix)?, true))
+}
+
+/// Empties a chat, keeping its title. Returns the updated index.
+pub fn clear(root: &Path, agent: &str, chat: &str) -> Result<ChatIndex, String> {
+    let _g = lock();
+    let mut ix = index_locked(root, agent)?;
+    let Some(meta) = ix.chats.iter_mut().find(|c| c.id == chat) else {
+        return Err("That chat no longer exists.".into());
+    };
+    let doc = chat_doc(root, agent, chat)?;
+    let mut log = doc.load(|v| v).map_err(|e| e.to_string())?.value;
+    log.version = 2;
+    log.messages.clear();
+    doc.save(&log).map_err(|e| e.to_string())?;
+    meta.messages = 0;
+    meta.updated_at = now();
+    save_index(root, agent, ix)
+}
+
 /// Renames a chat. Returns the updated index.
 pub fn rename(root: &Path, agent: &str, chat: &str, title: &str) -> Result<ChatIndex, String> {
     let _g = lock();
@@ -470,6 +508,15 @@ impl crate::ChatStore for FileChats {
 
     fn append(&self, agent: &str, chat: &str, message: &ChatMessage) -> Result<ChatIndex, String> {
         append(&self.root, agent, chat, message)
+    }
+
+    fn ensure(&self, agent: &str, chat: &str, title: &str) -> Result<Option<ChatIndex>, String> {
+        let (ix, made) = ensure(&self.root, agent, chat, title)?;
+        Ok(made.then_some(ix))
+    }
+
+    fn clear(&self, agent: &str, chat: &str) -> Result<ChatIndex, String> {
+        clear(&self.root, agent, chat)
     }
 
     fn delete_message(
@@ -539,9 +586,7 @@ impl MemoryChats {
         self.agents.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Makes sure an agent has the chat `chat` (making it, with `title`, if
-    /// not). Returns whether it was made.
-    pub fn ensure(&self, agent: &str, chat: &str, title: &str) -> Result<bool, String> {
+    fn ensure_chat(&self, agent: &str, chat: &str, title: &str) -> Result<bool, String> {
         valid(agent)?;
         valid(chat)?;
         let mut all = self.lock();
@@ -558,8 +603,7 @@ impl MemoryChats {
         Ok(true)
     }
 
-    /// Empties a chat (a fresh conversation in the same place).
-    pub fn clear(&self, agent: &str, chat: &str) -> Result<(), String> {
+    fn clear_chat(&self, agent: &str, chat: &str) -> Result<(), String> {
         let mut all = self.lock();
         let a = all.get_mut(agent).ok_or("That chat no longer exists.")?;
         let meta = a
@@ -569,7 +613,6 @@ impl MemoryChats {
             .find(|c| c.id == chat)
             .ok_or("That chat no longer exists.")?;
         meta.messages = 0;
-        meta.title = NEW_CHAT.into();
         meta.updated_at = now();
         a.chats.insert(chat.to_string(), vec![]);
         Ok(())
@@ -626,6 +669,17 @@ impl crate::ChatStore for MemoryChats {
 
     fn load(&self, agent: &str, chat: &str) -> Result<Vec<ChatMessage>, String> {
         Ok(self.with_chat(agent, chat, |_, m| m.clone())?.0)
+    }
+
+    fn ensure(&self, agent: &str, chat: &str, title: &str) -> Result<Option<ChatIndex>, String> {
+        self.ensure_chat(agent, chat, title)?
+            .then(|| self.index(agent))
+            .transpose()
+    }
+
+    fn clear(&self, agent: &str, chat: &str) -> Result<ChatIndex, String> {
+        self.clear_chat(agent, chat)?;
+        self.index(agent)
     }
 
     fn append(&self, agent: &str, chat: &str, message: &ChatMessage) -> Result<ChatIndex, String> {
@@ -830,8 +884,11 @@ mod tests {
             c.append("a1", "c-1", &msg("user", "x")).is_err(),
             "no such chat"
         );
-        assert!(c.ensure("a1", "c-1", NEW_CHAT).unwrap());
-        assert!(!c.ensure("a1", "c-1", NEW_CHAT).unwrap(), "only once");
+        assert!(c.ensure("a1", "c-1", NEW_CHAT).unwrap().is_some());
+        assert!(
+            c.ensure("a1", "c-1", NEW_CHAT).unwrap().is_none(),
+            "only once"
+        );
         assert!(c.ensure("../a", "c-1", NEW_CHAT).is_err());
         for t in ["one", "two", "three", "four"] {
             c.append("a1", "c-1", &msg("user", t)).unwrap();
@@ -866,6 +923,24 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn channel_chats_are_made_once_and_cleared_in_place() {
+        let root = tmp();
+        let (ix, made) = ensure(&root, "a1", "m-1", "Matrix: @a:hs").unwrap();
+        assert!(made);
+        assert!(ix.chats.iter().any(|c| c.id == "m-1"));
+        let (_, made) = ensure(&root, "a1", "m-1", "other").unwrap();
+        assert!(!made, "only once");
+        assert!(ensure(&root, "a1", "../x", "t").is_err());
+        append(&root, "a1", "m-1", &msg("user", "hello")).unwrap();
+        let ix = clear(&root, "a1", "m-1").unwrap();
+        let c = ix.chats.iter().find(|c| c.id == "m-1").unwrap();
+        assert_eq!((c.messages, c.title.as_str()), (0, "Matrix: @a:hs"));
+        assert!(load(&root, "a1", "m-1").unwrap().is_empty());
+        assert!(clear(&root, "a1", "gone").is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

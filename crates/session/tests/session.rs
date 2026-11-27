@@ -294,6 +294,26 @@ async fn a_message_gets_one_response() {
 }
 
 #[tokio::test]
+async fn finished_runs_are_kept_three_to_an_agent() {
+    let p = platform(echo(false));
+    let c = chat(&p);
+    let mut ids = vec![];
+    for i in 0..4 {
+        let run = chummy_session::send_message(&p, "a1", &c, &format!("m{i}")).unwrap();
+        until("the run to end", || {
+            p.session().recent().iter().any(|r| r.info.run_id == run)
+        })
+        .await;
+        ids.push(run);
+    }
+    let recent = p.session().recent();
+    let got: Vec<&str> = recent.iter().map(|r| r.info.run_id.as_str()).collect();
+    assert_eq!(got, [ids[3].as_str(), ids[2].as_str(), ids[1].as_str()]);
+    assert!(recent.iter().all(|r| r.status == "completed"));
+    assert_eq!(recent[0].info.agent_id.as_deref(), Some("a1"));
+}
+
+#[tokio::test]
 async fn a_paused_run_carries_on_as_one_response() {
     let p = platform(echo(true));
     let c = chat(&p);

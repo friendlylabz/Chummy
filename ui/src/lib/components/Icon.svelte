@@ -1,6 +1,10 @@
 <script lang="ts" module>
   // Simple 24×24 stroke icons. Add new ones here; keep them geometric and quiet.
   const paths = {
+    // Two arcs either side of a dot: something broadcast and heard.
+    channel: "M12 11.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM8.3 9.3a5.2 5.2 0 0 0 0 7.4M15.7 9.3a5.2 5.2 0 0 1 0 7.4M5.6 6.6a9 9 0 0 0 0 12.8M18.4 6.6a9 9 0 0 1 0 12.8",
+    // A thought bubble: what a run is thinking (its pane).
+    thought: "M7.5 14.5a3.5 3.5 0 0 1-.4-7 4.8 4.8 0 0 1 9.2-.7 3.9 3.9 0 0 1 .7 7.7zM7.3 17.6a1.3 1.3 0 1 0 2.6 0 1.3 1.3 0 1 0-2.6 0M4.4 20.6a.8.8 0 1 0 1.6 0 .8.8 0 1 0-1.6 0",
     wrench: "M14.5 5.5a4 4 0 0 0 4.9 4.9L20 11l-9.5 9.5a2.1 2.1 0 0 1-3-3L17 8l.6.6M14.5 5.5 15 4a4 4 0 0 1 5 5",
     layers: "M12 4 3.5 8.5 12 13l8.5-4.5zM3.5 12.5 12 17l8.5-4.5M3.5 16.5 12 21l8.5-4.5",
     menu: "M4 7h16M4 12h16M4 17h10",

@@ -68,7 +68,13 @@ until you say so.
 - **See everything that happened.** Under each reply, *Agent logs* shows
   the model's reasoning, tool calls and every block's inputs and outputs,
   live while it runs. A run's pane shows what the loop reports as it goes,
-  and the Logs window searches every run.
+  the sessions panel keeps each agent's three latest runs with their pane
+  and log, and the Logs window searches every run.
+- **Talk to agents from your phone.** Settings → Channels connects an agent
+  to end-to-end encrypted Matrix rooms (with a bot account you choose), the
+  same channel chummyd has and the same code. People you allow verify the
+  bot by emoji first; their messages start runs that show in the sessions
+  panel like any other.
 - **Any model.** Ollama, LM Studio, llama.cpp, vLLM, any OpenAI-compatible
   server, OpenAI, Anthropic, Gemini, OpenRouter and more, plus a basic
   built-in engine for Hugging Face models. Daily token limits per model.

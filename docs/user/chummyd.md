@@ -276,6 +276,10 @@ allows it) goes to standard error; the conversation to standard output.
 
 ## 4. Talk to it in Matrix
 
+(The Chummy app has the same Matrix channel, in Settings → Channels, for
+talking to agents while the app runs. Give chummyd and the app different
+bot accounts.)
+
 With the Matrix channel, each person you allow gets an end-to-end encrypted
 room with each agent, on your own homeserver (or any homeserver). chummyd
 makes the rooms and invites people; you just accept the invite.

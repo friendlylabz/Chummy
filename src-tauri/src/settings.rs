@@ -163,6 +163,61 @@ pub struct Settings {
     pub logging: Logging,
     /// Where tool calls run (Security and Privacy → Sandbox).
     pub sandbox: chummy_tools::SandboxSettings,
+    /// Outside channels agents can be talked to through (Settings →
+    /// Channels). Their passwords and logins are in the keychain.
+    pub channels: Vec<ChannelConfig>,
+}
+
+/// A channel: a way to talk to one agent from outside Chummy.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChannelConfig {
+    pub id: String,
+    pub name: String,
+    /// Off: not connected, but kept as it is.
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    /// The agent people talk to through it.
+    pub agent: String,
+    /// Approvals from the agent's runs may be answered in the channel (off:
+    /// only in Chummy's window).
+    #[serde(default)]
+    pub approvals: bool,
+    #[serde(flatten)]
+    pub kind: ChannelKind,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// What carries the messages. One implementation of each, shared with
+/// chummyd (`chummy-channel`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ChannelKind {
+    /// End-to-end encrypted Matrix rooms, one per allowed person, with the
+    /// bot's account.
+    Matrix(MatrixChannel),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MatrixChannel {
+    /// The homeserver's address (https, or http only on this computer or
+    /// the local network).
+    pub homeserver: String,
+    /// The bot's Matrix ID (`@name:server`). Its password is in the
+    /// keychain.
+    pub user_id: String,
+    /// Who may talk to the agent (Matrix IDs).
+    #[serde(default)]
+    pub users: Vec<String>,
+    /// Largest file accepted, in MB.
+    #[serde(default = "upload_mb")]
+    pub upload_mb: u32,
+}
+
+fn upload_mb() -> u32 {
+    100
 }
 
 impl Default for Settings {
@@ -179,6 +234,7 @@ impl Default for Settings {
             general: General::default(),
             logging: Logging::default(),
             sandbox: chummy_tools::SandboxSettings::default(),
+            channels: Vec::new(),
         }
     }
 }

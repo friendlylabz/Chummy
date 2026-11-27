@@ -825,6 +825,24 @@ de-duplicated names, under a size cap. *Known limits:* the bot password sits
 in the bundle (needed for cross-signing's password check); restoring an old
 state folder rolls the Matrix keys back (people may need to verify again).
 
+**Channels in the app** (v0.1.6, Settings → Channels): the same Matrix
+implementation and conversation rules as chummyd (`chummy-channel`), so
+everything above about rooms, verification and what's acted on holds. What
+differs: each channel is one agent and the people allowed to it; the bot's
+password is in the keychain (never in settings); its session (an access
+token) is sealed in `channels/<id>/login.sealed` with XChaCha20-Poly1305 and
+a key kept only in the keychain (`channel:<id>:key`), which also gives the
+passphrase of its SQLite stores (`channels/<id>/matrix/`), all inside the
+Chummy folder that agents can't reach. Emoji are confirmed in the channel's
+card (a notification says when one waits). Adding a channel, turning one on,
+adding people, changing the agent or homeserver, and moving approvals to
+Matrix each ask natively first; approvals stay in Chummy's window by default
+(the room is told), and `/allow` works only when the channel allows it.
+Plain http to a homeserver off the local network is refused, and two
+channels can't share a bot. Deleting a channel deletes its password, key,
+login and stores. A channel's chats (`m-…`) aren't renamed by the in-app
+model, and its runs are ordinary chat runs (logs, sessions panel, pane).
+
 chummyd, the background service being built, raises the stakes
 (unattended hosts, answers from messaging apps). Its design keeps it
 narrow: no listening API (only outgoing channel connections), a

@@ -1,6 +1,6 @@
 [package]
 name = "chummy-channel"
-description = "What every chummyd channel shares: commands, and showing a run as a message."
+description = "Channels (chummyd's terminal, Matrix): conversations with agents from outside Chummy, the same in the app and chummyd."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,8 +8,25 @@ rust-version.workspace = true
 authors.workspace = true
 publish = false
 
+[features]
+# The Matrix channel (matrix-sdk with end-to-end encryption and its SQLite
+# store, built in so no system SQLite is needed).
+matrix = ["dep:matrix-sdk", "dep:futures-util", "dep:chummy-http"]
+
 [dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true }
+jiff = "1"
+sha2 = "0.10"
+zeroize = "1"
+futures-util = { workspace = true, optional = true }
+matrix-sdk = { version = "0.20", optional = true, default-features = false, features = ["e2e-encryption", "automatic-room-key-forwarding", "bundled-sqlite", "markdown"] }
+chummy-agent.workspace = true
 chummy-flow.workspace = true
+chummy-http = { workspace = true, optional = true }
+chummy-log.workspace = true
+chummy-scheduler.workspace = true
 chummy-session.workspace = true
 
 [lints]

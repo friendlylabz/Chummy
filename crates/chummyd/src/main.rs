@@ -15,7 +15,6 @@ mod checks;
 mod cli;
 mod inspect;
 mod jobs;
-mod link;
 #[cfg(feature = "matrix")]
 mod matrix;
 mod password;
@@ -287,7 +286,7 @@ async fn run(a: RunArgs) -> Result<(), String> {
     }
 
     #[cfg(feature = "matrix")]
-    let to_matrix = config.channels.matrix.is_some().then(|| {
+    let matrix = config.channels.matrix.is_some().then(|| {
         matrix::start(
             p.clone(),
             saver.clone(),
@@ -297,8 +296,10 @@ async fn run(a: RunArgs) -> Result<(), String> {
             inbox.clone(),
         )
     });
+    #[cfg(feature = "matrix")]
+    let to_matrix = matrix.as_ref().map(|m| m.sender());
     #[cfg(not(feature = "matrix"))]
-    let to_matrix: Option<tokio::sync::mpsc::UnboundedSender<link::ToMatrix>> = {
+    let to_matrix: Option<tokio::sync::mpsc::UnboundedSender<chummy_channel::ToMatrix>> = {
         let _ = &matrix_kept;
         None
     };
@@ -358,11 +359,9 @@ async fn run(a: RunArgs) -> Result<(), String> {
     }
     // Let the router show what the runs said last, and Matrix send it.
     tokio::time::sleep(Duration::from_millis(300)).await;
-    if let Some(m) = &to_matrix {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        if m.send(link::ToMatrix::Flush(tx)).is_ok() {
-            let _ = tokio::time::timeout(Duration::from_secs(10), rx).await;
-        }
+    #[cfg(feature = "matrix")]
+    if let Some(m) = &matrix {
+        m.flush(Duration::from_secs(10)).await;
     }
     saving.abort();
     saver.save_now();

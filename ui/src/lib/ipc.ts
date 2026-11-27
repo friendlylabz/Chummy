@@ -571,6 +571,45 @@ export interface RunInfo {
   resumed_ms?: number;
 }
 
+/** A run that finished lately (three are kept for each agent). */
+export interface RecentRun extends RunInfo {
+  /** Unix seconds. */
+  finished_at: number;
+  status: "completed" | "failed" | "stopped" | "limit" | "paused" | "ended";
+}
+
+// ---- channels
+
+/** Where the messages go: one implementation of each kind, shared with chummyd. */
+export interface MatrixChannelKind {
+  type: "matrix";
+  homeserver: string;
+  /** The bot's Matrix ID. Its password is in the keychain. */
+  user_id: string;
+  /** Who may talk to the agent (Matrix IDs). */
+  users: string[];
+  upload_mb: number;
+}
+
+/** A channel: a way to talk to one agent from outside Chummy. */
+export type ChannelConfig = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  agent: string;
+  /** Tool approvals may be answered in the channel. */
+  approvals: boolean;
+} & MatrixChannelKind;
+
+export interface ChannelLive {
+  state: "" | "off" | "connecting" | "connected" | "problem";
+  message: string | null;
+  verifications: { n: number; who: string; emoji: [string, string][] }[];
+  note: string | null;
+}
+
+export type ChannelView = ChannelConfig & { has_password: boolean; live: ChannelLive };
+
 /** A paused chat run, kept until its chat resumes or discards it. */
 export interface PausedInfo {
   agent_id: string;
@@ -1176,6 +1215,18 @@ export const commands = {
   listRuns: () => call<RunInfo[]>("list_runs", undefined, () => []),
   /** What a running run's Pane output blocks have shown, newest first. */
   runPane: (runId: string) => call<string[]>("run_pane", { runId }, () => []),
+  recentRuns: () => call<RecentRun[]>("recent_runs", undefined, () => []),
+
+  listChannels: () => call<ChannelView[]>("list_channels", undefined, () => []),
+  /** Adds or changes a channel; `password` empty keeps the saved one. Returns its id, or null if declined. */
+  saveChannel: (channel: ChannelConfig, password: string | null) =>
+    call<string | null>("save_channel", { channel, password }),
+  /** Turning one on asks natively. Returns whether it's on. */
+  setChannelEnabled: (id: string, enabled: boolean) => call<boolean>("set_channel_enabled", { id, enabled }),
+  /** Asks natively first. False: cancelled. */
+  deleteChannel: (id: string) => call<boolean>("delete_channel", { id }),
+  answerChannelVerification: (channel: string, n: number, matches: boolean) =>
+    call<void>("answer_channel_verification", { channel, n, matches }),
   setPermission: (kind: "network" | "tools" | "confirm_online_tools", enabled: boolean) =>
     call<boolean>("set_permission", { kind, enabled }, () => false),
 
@@ -1281,6 +1332,8 @@ export const events = {
   /** A chat run will pause after its current block. */
   onRunPausing: (cb: (e: { run_id: string }) => void) => on("run:pausing", cb),
   onPausedChanged: (cb: (p: PausedInfo[]) => void) => on("paused:changed", cb),
+  /** Channels' connection state and verifications, by channel id. */
+  onChannelsChanged: (cb: (live: Record<string, ChannelLive>) => void) => on("channels:changed", cb),
   /** A question and your answer, added to a running chat run's response. */
   onRunSaid: (cb: (e: { run_id: string; role: "question" | "answer"; text: string }) => void) => on("run:said", cb),
   onChatMessage: (cb: (e: { agent_id: string; chat_id: string; message: ChatMessage }) => void) =>

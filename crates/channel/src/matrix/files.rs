@@ -1,7 +1,7 @@
 //! Files people send: decrypted, then saved in the agent's folder under
-//! `uploads/`, through its jail. Sending a file doesn't start a run.
+//! `uploads/`, through its jail (by the host: [`super::MatrixHost`]).
+//! Sending a file doesn't start a run.
 
-use chummy_session::Platform;
 use matrix_sdk::Client;
 use matrix_sdk::ruma::events::room::message::MessageType;
 
@@ -73,6 +73,32 @@ pub fn unique(name: &str, taken: impl Fn(&str) -> bool) -> Option<String> {
         .find(|n| !taken(n))
 }
 
+/// Saves `data` as `uploads/<name>` in an agent's folder, through its jail,
+/// with a name that isn't taken yet. Returns the name it got. For
+/// [`super::MatrixHost::save_upload`].
+pub fn save_to_folder<P: chummy_session::Platform>(
+    p: &P,
+    agent: &str,
+    name: &str,
+    data: &[u8],
+) -> Result<String, String> {
+    use chummy_agent::AgentConfig;
+    let path = p
+        .config()
+        .agent(agent)
+        .map(|a| a.workspace.path.clone())
+        .ok_or("That agent no longer exists.")?;
+    let jail = p.open_jail(&path)?;
+    jail.create_dir(UPLOADS).map_err(|e| e.to_string())?;
+    let free = unique(name, |n| {
+        jail.exists(&format!("{UPLOADS}/{n}")).unwrap_or(true)
+    })
+    .ok_or("too many files by that name")?;
+    jail.write(&format!("{UPLOADS}/{free}"), data)
+        .map_err(|e| e.to_string())?;
+    Ok(free)
+}
+
 /// Saves a file someone sent to `agent`'s folder, and says how it went.
 pub async fn save(ctx: &Ctx, client: &Client, room: &str, agent: &str, msg: &MessageType) {
     let (name, size) = match msg {
@@ -126,32 +152,12 @@ pub async fn save(ctx: &Ctx, client: &Client, room: &str, agent: &str, msg: &Mes
         ctx.notice(room, too_large());
         return;
     }
-    let Some(path) = ctx
-        .p
-        .0
-        .config
-        .agents
-        .iter()
-        .find(|a| a.id == agent)
-        .map(|a| a.workspace.path.clone())
-    else {
-        return;
-    };
-    let p = ctx.p.clone();
-    let saved = tokio::task::spawn_blocking(move || -> Result<String, String> {
-        let jail = p.open_jail(&path)?;
-        jail.create_dir(UPLOADS).map_err(|e| e.to_string())?;
-        let free = unique(&name, |n| {
-            jail.exists(&format!("{UPLOADS}/{n}")).unwrap_or(true)
-        })
-        .ok_or("too many files by that name")?;
-        jail.write(&format!("{UPLOADS}/{free}"), &data)
-            .map_err(|e| e.to_string())?;
-        Ok(free)
-    })
-    .await
-    .map_err(|e| e.to_string())
-    .and_then(|r| r);
+    let host = ctx.host.clone();
+    let agent_id = agent.to_string();
+    let saved = tokio::task::spawn_blocking(move || host.save_upload(&agent_id, &name, &data))
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r);
     match saved {
         Ok(n) => {
             chummy_log::system::info("matrix", format!("Saved a file to {agent}'s uploads"));

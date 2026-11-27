@@ -1,6 +1,6 @@
-//! Everything chummyd sends to Matrix, in order. A run's response is one
+//! Everything sent to Matrix, in order. A run's response is one
 //! message edited as it grows (at most every [`EDIT_EVERY`]), split into
-//! several when it's long. While a run goes, chummyd shows it's typing
+//! several when it's long. While a run goes, the bot shows it's typing
 //! (Matrix forgets that after a few seconds, so it's kept up), except while
 //! a question waits for the person.
 
@@ -31,7 +31,7 @@ struct RunMsg {
     want: String,
     done: bool,
     last: Option<Instant>,
-    /// Showing that chummyd is typing.
+    /// Showing that the bot is typing.
     typing: bool,
 }
 
@@ -147,7 +147,7 @@ async fn handle(ctx: &Ctx, c: &Client, runs: &mut HashMap<String, RunMsg>, m: To
 
 impl RunMsg {
     fn parts(&self) -> Vec<String> {
-        chummy_channel::split(&self.want, MAX_PART)
+        crate::split(&self.want, MAX_PART)
             .into_iter()
             .filter(|p| !p.trim().is_empty())
             .collect()
@@ -218,7 +218,7 @@ async fn typing(c: &Client, id: &str, on: bool) {
 async fn send_parts(c: &Client, id: &str, text: &str, notice: bool) -> Option<OwnedEventId> {
     let room = room(c, id)?;
     let mut last = None;
-    for part in chummy_channel::split(text, MAX_PART) {
+    for part in crate::split(text, MAX_PART) {
         let content = if notice {
             RoomMessageEventContent::notice_markdown(&part)
         } else {

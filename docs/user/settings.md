@@ -76,6 +76,43 @@ PyPI). The list shows each tool, whether it can go online, whether it's
 agent in **Agents**. Tools the current sandbox can't run are greyed out
 with the reason.
 
+## Channels
+
+Talk to an agent from outside Chummy (your phone, say) while Chummy runs.
+Matrix is the only kind of channel so far; it's the same channel chummyd
+has, with the same commands.
+
+**New channel** asks for:
+
+- **Type** (Matrix), a **name** and the **agent** people talk to.
+- **The bot's account**: the homeserver (https, or plain http only on this
+  computer or your local network), the bot's Matrix ID and its password.
+  Use an account just for this: not yours, and not one a chummyd uses.
+- **People** who may talk to it (Matrix IDs, one per line), and the largest
+  file they may send (saved in the agent's folder, under `uploads/`).
+- **Answer tool approvals in Matrix** (off by default): off, approvals wait
+  for you in Chummy and the room is told; on, `/allow` and `/deny` in the
+  room answer them.
+
+Adding a channel, letting more people in or moving approvals to Matrix
+asks you first. Chummy then logs in as the bot, sets up its cross-signing
+and makes an encrypted room with each person. Before anyone can talk to the
+agent, they verify the bot from their Matrix app: the emoji show in the
+channel's card, and you choose **They match** if they're the same.
+
+The password is kept in your system keychain, and the bot's session is
+sealed in the Chummy folder with a key from the keychain, so channels
+connect again whenever Chummy starts. The list shows whether each one is
+connected; switch one off to disconnect it without losing its settings, or
+delete it (the rooms stay, but nobody can reach the agent through them).
+
+In a room, a message starts a run of the agent's loop (shown in the
+sessions panel, and in the agent's chats as a chat with that person);
+replying to a question answers it; `/help` lists the commands (`/stop`,
+`/pause`, `/resume`, `/new`, `/status`, `/jobs`, `/run`…). The connection
+to the homeserver is Chummy's own, like model connections, so the Internet
+permission doesn't apply to it.
+
 ## Security and Privacy
 
 - **Internet access** and **Tools**: the app-wide switches (off by

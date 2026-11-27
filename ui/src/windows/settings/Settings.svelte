@@ -14,18 +14,30 @@
   import ToolsPane from "./ToolsPane.svelte";
   import LogsPane from "./LogsPane.svelte";
   import SecurityPane from "./SecurityPane.svelte";
+  import ChannelsPane from "./ChannelsPane.svelte";
 
-  type Section = "agents" | "models" | "engine" | "tools" | "security" | "logs" | "general" | "appearance" | "about";
+  type Section =
+    | "agents"
+    | "models"
+    | "engine"
+    | "tools"
+    | "channels"
+    | "security"
+    | "logs"
+    | "general"
+    | "appearance"
+    | "about";
 
   const sections: {
     id: Section;
     label: string;
-    icon: "bot" | "cpu" | "shield" | "palette" | "info" | "chat" | "wrench" | "sliders" | "history";
+    icon: "bot" | "cpu" | "shield" | "palette" | "info" | "chat" | "wrench" | "sliders" | "history" | "channel";
   }[] = [
     { id: "agents", label: "Agents", icon: "chat" },
     { id: "models", label: "Models", icon: "bot" },
     { id: "engine", label: "Local engine", icon: "cpu" },
     { id: "tools", label: "Tools", icon: "wrench" },
+    { id: "channels", label: "Channels", icon: "channel" },
     { id: "security", label: "Security and Privacy", icon: "shield" },
     { id: "logs", label: "Logs", icon: "history" },
     { id: "general", label: "General", icon: "sliders" },
@@ -109,6 +121,8 @@
         <AgentsPane gotoModels={() => go("models", "pick")} gotoTools={() => go("tools")} gotoSecurity={() => go("security")} />
       {:else if active === "tools"}
         <ToolsPane gotoSecurity={() => go("security")} gotoAgents={() => go("agents")} />
+      {:else if active === "channels"}
+        <ChannelsPane gotoAgents={() => go("agents")} />
       {:else if active === "security"}
         <SecurityPane gotoTools={() => go("tools")} />
       {:else if active === "general"}

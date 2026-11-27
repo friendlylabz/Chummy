@@ -218,8 +218,14 @@ pub fn list_runs(state: State<'_, AppState>) -> Vec<RunInfo> {
     state.session.runs()
 }
 
-/// What a running run's Pane output blocks have shown so far, newest first
-/// (empty for a run that has finished or never used one).
+/// Runs that finished lately, newest first (three for each agent).
+#[tauri::command]
+pub fn recent_runs(state: State<'_, AppState>) -> Vec<chummy_session::RecentRun> {
+    state.session.recent()
+}
+
+/// What a run's Pane output blocks have shown, newest first: a running
+/// run's so far, or a recent one's.
 #[tauri::command]
 pub fn run_pane(state: State<'_, AppState>, run_id: String) -> Vec<String> {
     state.session.pane(&run_id)
