@@ -35,7 +35,132 @@ the docs for that part of Chummy and take it out of this file.
   later IMAP. No webhooks for now (they'd need a listening port). Custom
   sources would be sandboxed tool scripts with `poll(state)`; Chummy keeps
   the state, drops duplicates by content hash, limits runs (30 an hour per
-  job) and caps payloads.
+  job) and caps payloads. A source that *lists* items is also what a data
+  channel works through (next section).
+
+## Next: data channels (a loop run over each item)
+
+The user's idea (2026-11-28), for what local model users need and few
+tools offer: run one loop over every item of a list, unattended and
+resumably, such as summarising 3,000 notes, tagging each line of a file or
+extracting fields from each invoice. Not built yet; this is the agreed
+sketch.
+
+**Two kinds of loop.** *Chat loops* hold a conversation with a person while
+doing tasks; chat channels (Matrix, Telegram, Discord, the chat window)
+plug into them. *Data loops* process one item in a set way, usually with
+fixed prompts, and have no conversation. A loop file says which it is
+(`kind: "chat" | "data"`, chat by default) and, for a data loop, what its
+input is (a path, a line of text, a record). The editor shows the kind as
+a badge, and Chummy refuses to connect a data loop to a chat channel or a
+chat loop to a data channel. A data loop run starts fresh for each item
+(no chat history) and can't contain an **Ask me** block. A test run in the
+editor asks for a sample item.
+
+**Part of jobs and the Automation window, not a new place.** A data channel
+is a job whose input is a source of items instead of one message:
+
+- **Run on:** *one message* (today's jobs) or *each item from a source*.
+- **Sources** (modular like channel kinds: a small base that lists items,
+  names each one and reads its content; built-ins first, more later):
+  - *Files in a folder*: a folder in the agent's folder, a filter
+    (`*.txt`), with or without subfolders, in name or date order.
+  - *Lines of a text file*: blank lines skipped, optionally a header line
+    skipped.
+  - Later: CSV and JSONL rows (a record per row), pages of a document,
+    chunks of a long file. They come with the record and document types
+    planned above.
+  - Sources only read inside the agent's folder (the folder jail holds), and
+    the list is taken when the run starts, so the order is fixed and files
+    the loop writes don't join the list.
+- **The message per item** reuses the job's message template, with new
+  placeholders: `_ITEM_` (the item as text: the line, or the file's text),
+  `_ITEM_PATH_`, `_ITEM_NAME_`, `_ITEM_INDEX_` and `_ITEM_COUNT_`. The
+  current `_FILE_` and `_FILE_TEXT_` rules apply to file items.
+- **Runs at once** (1 by default): how many items are processed in
+  parallel, one item per run, each with its own clean prompt. That's how
+  "batchable" is meant: local servers (llama.cpp with parallel slots, vLLM,
+  Ollama with `OLLAMA_NUM_PARALLEL`) answer concurrent requests together,
+  so throughput rises without putting several items in one prompt (which
+  small models handle badly). It stays under the app's limit on runs at once
+  (Settings → General) and chummyd's `limits.max_runs`, so a data job may
+  need that limit raised. A data job still runs one *batch* at a time.
+- **Results** go somewhere people can use them, not only into the run log:
+  - a *results file* in the agent's folder (JSONL or CSV), one row per item
+    with its index, name or path, status and the loop's output, written as
+    each item finishes;
+  - and/or a *file per item* from a pattern (`out/_ITEM_STEM_.md`), the
+    natural extension of today's `save_reply_to`;
+  - or nothing, when the loop writes its own files with tools.
+- **Progress survives anything.** Each item is recorded as waiting, done,
+  failed (with the error and the number of tries) or skipped, with the
+  content hash it was processed with, next to the job's state
+  (`jobs/items/<job id>.json`; in chummyd, its sealed state). Quitting,
+  pausing, a crash or a restart carries on from there, without doing items
+  again. **Re-run failed items** is one button, and an option redoes items
+  whose content changed since they were done.
+- **When an item fails:** retry it (0–3 times), then *skip it and go on*
+  (the default) or *stop the batch*. Independently, **stop after N failures
+  in a row** (5 by default), so a stopped model server or a broken prompt
+  doesn't fail its way through thousands of items.
+- **Preview first:** run the first few items (3 by default), show their
+  outputs and token use, estimate the whole batch's tokens and time from
+  them, and then **Start** the rest. The daily token limits still apply, and
+  a batch that hits one pauses rather than fails.
+- **Triggers** are the job's triggers: by hand, on a schedule, or when
+  files change in a folder. A scheduled or folder run processes only items
+  not done yet (new files, new lines, or changed content when that option is
+  on), which makes "process each file that lands in `inbox/`" the same
+  feature.
+
+**Tools and permissions: the same system as everywhere.** A data loop's
+tools follow the usual levels (the app's switches in Security and Privacy,
+the agent's tools, and the disable-only overrides on blocks); nothing new
+to learn and nothing bypassed. What's different is that every item is
+outside data, so:
+
+- The items are marked untrusted, which plugs into the untrusted-content
+  switch planned above (risky and online tools ask first while untrusted
+  content is in a run).
+- A tool call that needs an OK can't sensibly wait per item with several
+  runs at once. The question offers **Allow for the rest of this batch**
+  (scoped to that tool, that job and that batch, ended by Stop or when the
+  batch ends), and the batch's other items carry on while one waits. In
+  chummyd, approvals follow the channels' rules as today (refused when no
+  channel may answer them).
+- The form says plainly when a data loop has write or online tools: a line
+  in a file can try to steer the model, so a loop without tools (a pure
+  transform from item to result) is the safe default for templates.
+
+**In the Automation window:** the job form gets the *Run on* choice and the
+source, runs-at-once, results and failure settings, plus **Preview**. A
+running data job shows a progress card (done, failed, skipped, waiting;
+items a minute; time left), a table of items with their status and a link
+to each run's log, and **Pause**, **Resume**, **Stop** and **Re-run
+failed**. Runs still appear in the sessions panel, grouped under the job
+so a batch of 3,000 doesn't flood it. The history keeps one record per
+batch, with its counts.
+
+**chummyd:** data jobs go in the bundle like other jobs (an unattended
+batch on a headless machine is exactly its use), with progress in the
+sealed state and `/status` showing each running batch's counts.
+
+**Templates:** a few data loops to start from, such as *Summarise each file*,
+*Classify each line* (into labels you give) and *Extract fields* (to a
+record once records exist), each without tools.
+
+**Open questions:**
+
+- The name in the interface: "data channels" (the working name) or
+  something like "item jobs", since they live with jobs and have no people
+  in them as chat channels do.
+- Whether one data loop run may take several items at once for loops that
+  want to compare items (off by default; parallel single items are the
+  plan).
+- How the results file stays consistent when two batches of the same job
+  could overlap (they can't today: one batch at a time).
+- Very long items: chunking belongs to sources (*chunks of a long file*),
+  not to the loop.
 
 ## Sandboxes
 
