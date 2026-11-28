@@ -32,6 +32,14 @@ pub fn builder() -> reqwest::ClientBuilder {
     }
 }
 
+/// The TLS settings Chummy's web requests use (the operating system's
+/// certificate checks), for connections that aren't made with reqwest
+/// (a WebSocket). `None` when they can't be set up here.
+pub fn tls_config() -> Option<rustls::ClientConfig> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    platform_tls()
+}
+
 fn platform_tls() -> Option<rustls::ClientConfig> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let verifier = rustls_platform_verifier::Verifier::new(provider.clone()).ok()?;

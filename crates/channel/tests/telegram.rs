@@ -216,7 +216,7 @@ impl Bot {
 #[tokio::test]
 async fn people_pair_with_a_code_and_then_talk() {
     let fake = Fake::start().await;
-    let mut bot = start_with(fake.clone(), TOKEN, true, None).await;
+    let mut bot = start_with(fake.clone(), TOKEN.as_str(), true, None).await;
     bot.connected().await;
     assert!(
         bot.event(|e| *e
@@ -332,7 +332,7 @@ async fn people_pair_with_a_code_and_then_talk() {
 #[tokio::test]
 async fn approvals_have_buttons_and_questions_take_replies() {
     let fake = Fake::start().await;
-    let mut bot = start_with(fake.clone(), TOKEN, true, None).await;
+    let mut bot = start_with(fake.clone(), TOKEN.as_str(), true, None).await;
     bot.connected().await;
     let alice = bot.pair_alice().await;
     let out = bot.handle.sender();
@@ -415,7 +415,7 @@ async fn approvals_have_buttons_and_questions_take_replies() {
 async fn without_drafts_one_message_grows_and_without_streaming_it_comes_at_the_end() {
     let fake = Fake::start().await;
     fake.set_no_drafts(true);
-    let mut bot = start_with(fake.clone(), TOKEN, true, None).await;
+    let mut bot = start_with(fake.clone(), TOKEN.as_str(), true, None).await;
     bot.connected().await;
     bot.pair_alice().await;
     let out = bot.handle.sender();
@@ -436,7 +436,7 @@ async fn without_drafts_one_message_grows_and_without_streaming_it_comes_at_the_
 
     // Streaming off: nothing until it's done.
     let fake2 = Fake::start().await;
-    let mut quiet = start_with(fake2.clone(), TOKEN, false, None).await;
+    let mut quiet = start_with(fake2.clone(), TOKEN.as_str(), false, None).await;
     quiet.connected().await;
     quiet.pair_alice().await;
     let out = quiet.handle.sender();
@@ -466,7 +466,7 @@ async fn without_drafts_one_message_grows_and_without_streaming_it_comes_at_the_
 #[tokio::test]
 async fn files_are_saved_groups_are_left_and_old_messages_get_a_note() {
     let fake = Fake::start().await;
-    let mut bot = start_with(fake.clone(), TOKEN, true, None).await;
+    let mut bot = start_with(fake.clone(), TOKEN.as_str(), true, None).await;
     bot.connected().await;
     let alice = bot.pair_alice().await;
 
@@ -533,7 +533,7 @@ async fn what_goes_wrong_is_said_plainly_without_the_token() {
     // A webhook.
     let fake = Fake::start().await;
     fake.set_webhook("https://example.org/hook");
-    let bot = start_with(fake.clone(), TOKEN, true, None).await;
+    let bot = start_with(fake.clone(), TOKEN.as_str(), true, None).await;
     let s = until("a problem", || {
         bot.seen
             .lock()
@@ -551,7 +551,7 @@ async fn what_goes_wrong_is_said_plainly_without_the_token() {
 
     // Something else reading the bot's messages.
     let fake = Fake::start().await;
-    let bot = start_with(fake.clone(), TOKEN, true, None).await;
+    let bot = start_with(fake.clone(), TOKEN.as_str(), true, None).await;
     bot.connected().await;
     fake.set_conflict(true);
     let s = until("a conflict", || {
@@ -566,7 +566,7 @@ async fn what_goes_wrong_is_said_plainly_without_the_token() {
             })
     })
     .await;
-    assert!(!s.contains(TOKEN));
+    assert!(!s.contains(TOKEN.as_str()));
     // And when it's gone, it's fine again.
     fake.set_conflict(false);
     until("connected again", || {
@@ -579,14 +579,14 @@ async fn what_goes_wrong_is_said_plainly_without_the_token() {
 #[tokio::test]
 async fn people_let_in_stay_across_restarts_but_not_for_another_bot() {
     let fake = Fake::start().await;
-    let mut bot = start_with(fake.clone(), TOKEN, true, None).await;
+    let mut bot = start_with(fake.clone(), TOKEN.as_str(), true, None).await;
     bot.connected().await;
     bot.pair_alice().await;
     let kept = bot.host.kept();
     bot.handle.stop();
     drop(bot);
 
-    let mut again = start_with(fake.clone(), TOKEN, true, kept.clone()).await;
+    let mut again = start_with(fake.clone(), TOKEN.as_str(), true, kept.clone()).await;
     loop {
         if let FromChannel::Ready { convs } = again.next().await {
             assert_eq!(convs.len(), 1);
@@ -598,7 +598,7 @@ async fn people_let_in_stay_across_restarts_but_not_for_another_bot() {
     // What was kept says another bot: nobody is let in.
     let mut k = kept.unwrap();
     k["bot_id"] = json!(5);
-    let mut other = start_with(fake, TOKEN, true, Some(k)).await;
+    let mut other = start_with(fake, TOKEN.as_str(), true, Some(k)).await;
     loop {
         if let FromChannel::Ready { convs } = other.next().await {
             assert!(convs.is_empty());

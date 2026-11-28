@@ -259,7 +259,11 @@ pub trait ChannelKind: Send + Sync + 'static {
 
 /// Every kind of channel there is.
 pub fn kinds() -> &'static [&'static dyn ChannelKind] {
-    &[&crate::matrix::Matrix, &crate::telegram::Telegram]
+    &[
+        &crate::matrix::Matrix,
+        &crate::telegram::Telegram,
+        &crate::discord::Discord,
+    ]
 }
 
 /// The kind of channel with this id.

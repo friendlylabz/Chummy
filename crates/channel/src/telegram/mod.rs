@@ -37,6 +37,13 @@ pub fn valid_token(token: &str) -> bool {
 }
 
 /// A bot's id: its token's first part (not a secret).
+/// A made-up token of the right shape for the bot `bot`, for tests: no
+/// token, real or fake, is written out anywhere in the code.
+#[doc(hidden)]
+pub fn fake_token(bot: &str) -> String {
+    format!("{bot}:{}", "fake".repeat(9))
+}
+
 pub fn bot_id(token: &str) -> Option<&str> {
     token.split_once(':').map(|(id, _)| id)
 }
@@ -186,13 +193,13 @@ mod tests {
 
     #[test]
     fn tokens_are_checked() {
-        let token = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw";
-        assert!(valid_token(token));
+        let token = fake_token("123456789");
+        assert!(valid_token(&token));
         assert!(!valid_token("123456789"));
-        assert!(!valid_token("abc:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"));
+        assert!(!valid_token(&fake_token("abc")));
         assert!(!valid_token("123:short"));
-        assert!(!valid_token("123:AAHdqTcvCH1vGWJxfSeofSAs0K5PALD saw"));
-        assert_eq!(bot_id(token), Some("123456789"));
+        assert!(!valid_token(&token.replacen("fake", "fa e", 1)));
+        assert_eq!(bot_id(&token), Some("123456789"));
     }
 
     #[test]

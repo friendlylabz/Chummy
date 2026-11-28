@@ -13,12 +13,14 @@ name = "chummyd"
 path = "src/main.rs"
 
 [features]
-default = ["matrix", "telegram"]
+default = ["matrix", "telegram", "discord"]
 # The Matrix channel (matrix-sdk with end-to-end encryption and its SQLite
 # store, built in so no system SQLite is needed).
 matrix = ["chummy-channel/matrix"]
 # The Telegram channel (the Bot API over HTTPS).
 telegram = ["chummy-channel/telegram"]
+# The Discord channel (its web API and Gateway over HTTPS/WebSocket).
+discord = ["chummy-channel/discord"]
 
 [dependencies]
 serde.workspace = true
@@ -58,6 +60,8 @@ futures-util.workspace = true
 # The test's own Matrix client.
 matrix-sdk = { version = "0.20", default-features = false, features = ["e2e-encryption", "automatic-room-key-forwarding", "bundled-sqlite", "markdown"] }
 mime = "0.3"
+# The stand-in Discord's Gateway.
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }
 
 # Against a real Synapse (see the test).
 [[test]]
@@ -68,6 +72,11 @@ required-features = ["matrix"]
 [[test]]
 name = "telegram"
 required-features = ["telegram"]
+
+# Against a stand-in Discord.
+[[test]]
+name = "discord"
+required-features = ["discord"]
 
 [lints]
 workspace = true

@@ -71,11 +71,11 @@ until you say so.
   the sessions panel keeps each agent's three latest runs with their pane
   and log, and the Logs window searches every run.
 - **Talk to agents from your phone.** Settings → Channels connects agents
-  to end-to-end encrypted Matrix rooms (with a bot account you choose) or a
-  Telegram bot, the same channels chummyd has and the same code. People you
-  allow verify the Matrix bot by emoji, or pair with the Telegram bot by a
-  code you make; their messages start runs that show in the sessions panel
-  like any other.
+  to end-to-end encrypted Matrix rooms (with a bot account you choose), a
+  Telegram bot or a Discord bot (direct messages only), the same channels
+  chummyd has and the same code. People you allow verify the Matrix bot by
+  emoji, or ask in to the Telegram or Discord bot with a code you make;
+  their messages start runs that show in the sessions panel like any other.
 - **Any model.** Ollama, LM Studio, llama.cpp, vLLM, any OpenAI-compatible
   server, OpenAI, Anthropic, Gemini, OpenRouter and more, plus a basic
   built-in engine for Hugging Face models. Daily token limits per model.

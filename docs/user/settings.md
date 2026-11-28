@@ -85,11 +85,12 @@ with the reason.
 ## Channels
 
 Talk to an agent from outside Chummy (your phone, say) while Chummy runs.
-There are two kinds of channel, Matrix and Telegram; they're the same
+There are three kinds of channel, Matrix, Telegram and Discord; they're the same
 channels chummyd has, with the same commands. Every kind is set up the same
 way: **New channel**, its type, a name, the agents it serves and what that
 kind asks for. When someone new wants in, the channel's card shows what to
-check and asks you (the emoji for Matrix, the person for Telegram).
+check and asks you (the emoji for Matrix, the person for Telegram and
+Discord).
 
 ### Matrix
 
@@ -157,6 +158,46 @@ different bot token starts with nobody let in.
 In the chat, a message starts a run; replying to a question answers it;
 the menu next to the message box lists the commands (`/new`, `/status`,
 `/stop`…).
+
+### Discord
+
+Discord isn't end-to-end encrypted either: Discord can read what's said to
+the bot and what the agent answers. Choose Matrix for anything private.
+The bot talks in direct messages only; anything said to it in a server is
+ignored.
+
+1. **Make a bot** in Discord's Developer Portal (discord.com/developers):
+   **New Application**, then under **Bot**, **Reset Token** and copy it.
+   Turn **Public Bot** off there, so only you can add it to servers. It
+   needs no privileged intents. Give each channel its own bot, and don't
+   use one a chummyd uses.
+2. **New channel**: type **Discord**, a name, the agent, and the token.
+   **Show answers as they're written** (on by default) edits the bot's
+   message as the agent writes; off, the answer comes when it's done.
+   Files people send can be up to 100 MB (25 by default). **Discord API**
+   stays Discord's own; it's only there for testing. **Answer tool
+   approvals in Discord** (off by default) puts Allow and Deny buttons in
+   the chat.
+3. **Share a server with the bot.** Discord only lets people message a bot
+   they share a server with. If the bot is in none, the channel's card
+   shows the link that adds it to one of yours; a small private server
+   with you, the bot and the people you'll let in is enough.
+4. **Let people in.** Once the channel is connected, **Add a person**
+   makes a six-digit code that works once, for ten minutes. The person
+   sends the code to the bot in a direct message; their name and Discord
+   id show in the channel's card (with a notification), and you choose
+   **Let them in** or **Refuse**. Messages from anyone else get no answer
+   at all.
+
+The people let in are listed in the card, each with **Remove**. The token
+is kept in your system keychain and the people let in are sealed in the
+Chummy folder, so the channel connects again whenever Chummy starts, and
+fetches what people said while it was off. A different bot token starts
+with nobody let in.
+
+In the chat, a message starts a run; replying to a question answers it;
+typing `/` lists the bot's commands (`/new`, `/status`, `/stop`…), and
+`!status` and the like work too.
 
 ## Security and Privacy
 

@@ -6,7 +6,7 @@
 #![allow(dead_code)]
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -14,8 +14,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
 
-pub const TOKEN: &str = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw";
 pub const BOT_ID: i64 = 123456789;
+/// A made-up token for the bot, made when first used (no token is written
+/// out in the code).
+pub static TOKEN: LazyLock<String> =
+    LazyLock::new(|| chummy_channel::telegram::fake_token(&BOT_ID.to_string()));
 
 #[derive(Default)]
 struct St {
@@ -201,7 +204,7 @@ impl Fake {
             )
         };
         if let Some(tok) = path.strip_prefix("/bot").and_then(|p| p.split('/').next())
-            && tok != TOKEN
+            && tok != TOKEN.as_str()
         {
             return no(401, "Unauthorized");
         }
@@ -324,7 +327,9 @@ impl Fake {
                 let (tok, file) = rest.split_once('/').unwrap_or(("", ""));
                 let st = lock(&self.st);
                 match st.files.values().find(|(p, _)| p == file) {
-                    Some((_, d)) if tok == TOKEN => (200, d.clone(), "application/octet-stream"),
+                    Some((_, d)) if tok == TOKEN.as_str() => {
+                        (200, d.clone(), "application/octet-stream")
+                    }
                     _ => (404, b"not found".to_vec(), "text/plain"),
                 }
             } else {
@@ -334,7 +339,7 @@ impl Fake {
                         .strip_prefix("/bot")
                         .and_then(|p| p.split('/').next())
                         .unwrap_or("");
-                    if tok == TOKEN {
+                    if tok == TOKEN.as_str() {
                         self.updates(&body).await
                     } else {
                         (

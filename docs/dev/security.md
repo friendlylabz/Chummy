@@ -952,6 +952,31 @@ listening); a webhook on the bot or another program reading it is reported,
 never overridden. Files: at most 20 MB, through the agent's jail as for
 Matrix.
 
+**Discord channels** (Unreleased, the app and chummyd, one implementation
+in `chummy-channel`, no Discord library: its web API and Gateway
+WebSocket directly): one bot per agent, direct messages only. The Gateway
+is asked for direct-message events alone (intent `DIRECT_MESSAGES`, no
+privileged intents), and any message or interaction that comes with a
+server id is dropped. *Not end-to-end encrypted*, said in the same places
+as for Telegram. The token is the bot's whole login: in the keychain or
+the bundle, sent only in the `Authorization` header to the configured API
+and in the Gateway's identify, never in an address; anything a server
+says has it blanked out, and tests check it never shows. Invitation codes
+work as for Telegram (sent alone, or after `/start`), then the user
+confirms; messages, slash commands and button presses from anyone else get
+no answer. A press is checked against the person the question was for and
+the question still waiting; a pressed or closed question loses its
+buttons. Everything the bot sends goes with `allowed_mentions: {parse:
+[]}`, so nothing the agent writes can ping a server or a person. Who was
+let in, their direct-message channels and the last message seen are kept
+sealed and start empty for another bot; when the channel connects again
+it fetches what each person said since (older than ten minutes: a note,
+not a run). It never listens: Discord is reached only by outgoing
+connections (no interactions endpoint URL). A bot set as Public Bot is
+pointed out in the channel's card. Files: at most 100 MB, fetched from
+the address Discord gives without the token, then through the agent's
+jail.
+
 chummyd, the background service being built, raises the stakes
 (unattended hosts, answers from messaging apps). Its design keeps it
 narrow: no listening API (only outgoing channel connections), a

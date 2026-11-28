@@ -272,7 +272,7 @@ mod tests {
 
         // Channels: each described by its kind (a Telegram bot by its id,
         // never its token), with what's worth a look.
-        let token = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw";
+        let token = chummy_channel::telegram::fake_token("123456789");
         c.channels.list.push(chummy_bundle::BundleChannel {
             id: "tg".into(),
             name: "Phone".into(),
@@ -280,7 +280,7 @@ mod tests {
             agents: vec!["helper".into()],
             approvals: true,
             options: Default::default(),
-            secrets: [("token".to_string(), token.to_string())].into(),
+            secrets: [("token".to_string(), token.clone())].into(),
             reports: Default::default(),
         });
         let text = describe(&c).join("\n");
@@ -293,6 +293,9 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("approvals can be given in “Phone”"), "{text}");
-        assert!(!text.contains("AAHdq"), "{text}");
+        assert!(
+            !text.contains(&token) && !text.contains("fakefake"),
+            "{text}"
+        );
     }
 }

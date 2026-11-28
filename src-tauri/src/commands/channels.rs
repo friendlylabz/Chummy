@@ -468,7 +468,8 @@ mod tests {
         gone.agents = vec!["gone".into()];
         assert!(check(&s, &gone, &prepared(&gone, &pw), &[]).is_err());
 
-        let token = [("token", "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw")];
+        let telegram_token = chummy_channel::telegram::fake_token("123456789");
+        let token = [("token", telegram_token.as_str())];
         let t = channel("telegram", &["a"], json!({}));
         assert!(check(&s, &t, &prepared(&t, &token), &[]).is_ok());
         // Another channel with the same bot.
@@ -491,6 +492,41 @@ mod tests {
         assert!(
             check(&s, &big, &prepared(&big, &token), &[]).is_err(),
             "20 MB at most"
+        );
+
+        let discord_token = chummy_channel::discord::fake_token("123456789012345678");
+        let token = [("token", discord_token.as_str())];
+        let d = channel("discord", &["a"], json!({}));
+        assert!(check(&s, &d, &prepared(&d, &token), &[]).is_ok());
+        assert!(
+            check(
+                &s,
+                &d,
+                &prepared(&d, &token),
+                &["discord:123456789012345678".into()]
+            )
+            .is_err(),
+            "another channel with the same bot"
+        );
+        assert!(
+            check(
+                &s,
+                &d,
+                &prepared(&d, &[("token", telegram_token.as_str())]),
+                &[]
+            )
+            .is_err(),
+            "a Telegram token"
+        );
+        let d2 = channel("discord", &["a", "b"], json!({}));
+        assert!(
+            check(&s, &d2, &prepared(&d2, &token), &[]).is_err(),
+            "one agent"
+        );
+        let big = channel("discord", &["a"], json!({ "upload_mb": 101 }));
+        assert!(
+            check(&s, &big, &prepared(&big, &token), &[]).is_err(),
+            "100 MB at most"
         );
     }
 
