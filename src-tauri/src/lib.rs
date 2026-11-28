@@ -249,8 +249,10 @@ pub fn run() {
         RunEvent::Reopen { .. } => windows::show_main(app),
         RunEvent::Exit => {
             if let Some(state) = app.try_state::<AppState>() {
-                // Never leave a model loaded in the background.
+                // Never leave a model loaded in the background, or the
+                // sandbox's containers running.
                 tauri::async_runtime::block_on(state.engine.stop());
+                tauri::async_runtime::block_on(state.close_sandbox());
             }
         }
         _ => {}

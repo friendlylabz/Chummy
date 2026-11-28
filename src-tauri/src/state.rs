@@ -299,6 +299,10 @@ impl AppState {
     pub async fn sandbox(&self) -> Result<Arc<dyn SandboxBackend>, String> {
         let s = self.settings().sandbox;
         if s.kind == SandboxKind::Native {
+            // What the previous sandbox kept running goes.
+            if let Some((_, old)) = lock(&self.sandbox).take() {
+                tauri::async_runtime::spawn(async move { old.close().await });
+            }
             return Ok(Arc::new(NativeSandbox::new(self.tool_host().await?)));
         }
         let mut cached = lock(&self.sandbox);
@@ -308,8 +312,26 @@ impl AppState {
             return Ok(b.clone());
         }
         let b = self.build_sandbox(&s)?;
-        *cached = Some((s, b.clone()));
+        if let Some((_, old)) = cached.replace((s, b.clone())) {
+            tauri::async_runtime::spawn(async move { old.close().await });
+        }
         Ok(b)
+    }
+
+    /// Removes what the sandbox keeps running between calls (when Chummy
+    /// quits): the containers kept for agents' folders.
+    pub async fn close_sandbox(&self) {
+        let old = lock(&self.sandbox).take();
+        let limit = std::time::Duration::from_secs(20);
+        if let Some((_, b)) = old {
+            let _ = tokio::time::timeout(limit, b.close()).await;
+        }
+        let s = self.settings().sandbox;
+        if s.kind == SandboxKind::Container
+            && let Ok(c) = ContainerSandbox::new(s.container, self.tool_paths.clone())
+        {
+            let _ = tokio::time::timeout(limit, c.remove_all_kept()).await;
+        }
     }
 
     fn build_sandbox(&self, s: &SandboxSettings) -> Result<Arc<dyn SandboxBackend>, String> {

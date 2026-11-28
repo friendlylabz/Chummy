@@ -9,6 +9,18 @@ the version (`## v0.1.5`) in the commit you tag. Keep each line short and
 about what people notice; `scripts/release-notes.mjs v0.1.5` shows what the
 release will say.
 
+## Unreleased
+
+- The **Container** sandbox keeps one container for each agent's folder
+  instead of starting a fresh one per call, so tool calls start about twice
+  as fast. The folder is still the only place it can write: programs' home
+  is `.chummy-home` there (git ignores it), so git settings and what they
+  install for the user (pip, cargo, npm) stay between calls. Anything a
+  call starts still stops when the call ends. The containers are removed
+  when Chummy quits.
+- Security and Privacy no longer says container calls never have a
+  network: Run shell command's programs do when its Internet is on.
+
 ## v0.1.6
 
 - **Run command** and **Run shell command** have an **Internet** switch in

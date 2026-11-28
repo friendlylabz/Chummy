@@ -164,8 +164,11 @@ the menu next to the message box lists the commands (`/new`, `/status`,
   default).
 - **Ask before tools go online** (on by default).
 - **Sandbox**: where tool calls run. **Native** (built in, WebAssembly, the
-  default), **Container** (Docker or Podman, a fresh locked-down container
-  per call, using the image you approve) or **NVIDIA OpenShell**. See
+  default), **Container** (Docker or Podman, using the image you approve:
+  one locked-down container for each agent's folder, kept while Chummy runs;
+  the folder is the only place it can write, and programs' settings and
+  user installs go in `.chummy-home` there, so they stay between calls) or
+  **NVIDIA OpenShell**. See
   [Security and threat model → Sandboxes](../dev/security.md#sandboxes-where-tools-run).
 - The Chummy folder in use, and how it's protected.
 

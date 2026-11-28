@@ -90,7 +90,8 @@ until you say so.
   can't escape.
 - **Tools are sandboxed, always.** Choose where they run: **Native**
   (CPython for WebAssembly, the default, nothing to install), **Container**
-  (a fresh, locked-down Docker or Podman container per call) or **NVIDIA
+  (a locked-down Docker or Podman container for each agent's folder, which
+  is the only place it can write) or **NVIDIA
   OpenShell**. There is no unsandboxed mode.
 - **Tools are off until you turn them on**, and so is internet access. Each
   agent has its own tool switchboard (on, ask first, internet, per tool),

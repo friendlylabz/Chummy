@@ -5,7 +5,7 @@
 # [tool.chummy]
 # name = "run_shell"
 # title = "Run shell command"
-# version = "1.1.0"
+# version = "1.2.0"
 # network = true
 # timeout = 120
 # risky = true
@@ -18,7 +18,11 @@ programs, so it needs a sandbox that has them: Container or OpenShell. In
 the Native (WebAssembly) sandbox it's shown greyed out and never offered.
 
 It still runs inside that sandbox: only the workspace is there, and whatever
-the image has installed is what's available. There's no network unless the
+the image has installed is what's available. In the Container sandbox each
+agent's folder keeps one container, and HOME is `.chummy-home` in the
+workspace, so git settings and what's installed for the user (pip --user,
+cargo install, npm -g) stay between calls; nothing a call starts outlives
+it. There's no network unless the
 tool's Internet switch is on (off by default). Then, in the Container
 sandbox, the programs it starts get the container engine's ordinary
 network: git, pip, npm and curl work, and Chummy can't check where they
@@ -64,7 +68,7 @@ def cut(text):
 
 @chummy.tool
 def run_shell(command: str) -> str:
-    """Run a real shell command in the workspace with sh -c: any program installed in the sandbox (git, make, compilers, test runners…). Nothing outside the workspace. No network unless the user turned on this tool's internet access; then programs like git, pip and curl can go online.
+    """Run a real shell command in the workspace with sh -c: any program installed in the sandbox (git, make, compilers, test runners…). Nothing outside the workspace; HOME is kept between calls, but processes it starts end with the call. No network unless the user turned on this tool's internet access; then programs like git, pip and curl can go online.
 
     command: the command line, like  make test  or  ls -la src | head
     """
@@ -75,11 +79,19 @@ def run_shell(command: str) -> str:
     if not command.strip():
         raise chummy.ToolError("Give a command to run.")
     os.chdir(chummy.WORKSPACE)
+    # In a kept container, HOME is a folder in the workspace that stays
+    # between calls; what programs install for the user goes on PATH.
+    home = os.environ.get("CHUMMY_HOME") or "/tmp"
+    path = os.environ.get("PATH") or "/usr/local/bin:/usr/bin:/bin"
+    if os.environ.get("CHUMMY_HOME"):
+        path = ":".join(f"{home}/{d}" for d in (".local/bin", ".cargo/bin", ".npm-global/bin")) + ":" + path
     env = {
-        "PATH": os.environ.get("PATH") or "/usr/local/bin:/usr/bin:/bin",
-        "HOME": "/tmp",
+        "PATH": path,
+        "HOME": home,
         "LANG": "C.UTF-8",
     }
+    if os.environ.get("CHUMMY_HOME"):
+        env["NPM_CONFIG_PREFIX"] = f"{home}/.npm-global"
     if os.environ.get("TZ"):
         env["TZ"] = os.environ["TZ"]
     try:

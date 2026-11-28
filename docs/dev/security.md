@@ -84,7 +84,7 @@ app, chosen in **Settings → Security and Privacy → Sandbox**. The default is
 | Sandbox | What runs a tool call | Real programs | Needs |
 |---|---|---|---|
 | **Native** (default) | CPython 3.14 for WebAssembly under Wasmtime, built into Chummy | no | nothing (the WebAssembly Python comes with Chummy) |
-| **Container** | a fresh Docker or Podman container per call | yes, whatever the image has | Docker or Podman already installed and running |
+| **Container** | a locked-down Docker or Podman container kept for each agent's folder | yes, whatever the image has | Docker or Podman already installed and running |
 | **OpenShell** | an NVIDIA OpenShell sandbox, kept per workspace | yes, whatever its image has | the `openshell` program and a working OpenShell gateway |
 
 Chummy never installs Docker, Podman or OpenShell, and never suggests one on
@@ -136,16 +136,45 @@ preopened; WASI has no sockets and no way to start processes.
 
 ### Container
 
-Each call is `docker run --rm -i` (or `podman run`) with:
+**One container per agent's folder**, started at its first call (`docker run
+-d --init --rm`) and kept while Chummy runs; each call is `docker exec -i` in
+it, which also makes calls quicker (about 90 ms instead of 180 ms to start,
+measured). What that means:
 
-- `--network none` (except a `direct-network` call, below), `--read-only`
-  root filesystem and a 256 MB `/tmp`;
+- **Only the workspace is writable** (plus `/tmp`, in memory). `HOME` is
+  `.chummy-home` in the workspace, so what programs keep in it (git
+  settings, `pip install --user`, `cargo install`, npm with its prefix
+  there, caches) stays between calls, and survives Chummy quitting. That
+  folder holds a `.gitignore` of `*`, so git ignores it. System packages
+  can't be installed (the root is read-only): they belong in the image.
+- **Nothing a call starts outlives it.** The runner makes the call its own
+  process group and stops what's left of it when the call ends; a call past
+  its time limit has its process group killed (the container stays).
+  Leftovers from a previous call can't act later, except through files in
+  the workspace, which was already true.
+- **Offline and online calls never share a container**: a call with a
+  direct network (below) runs in a second container for the same folder.
+- **Settings changes replace containers**: a container's name carries a
+  hash of the folder and of everything it was started with (image ID,
+  limits, user, mounts); a call finds and removes the folder's containers
+  started with other settings. Leaving the Container sandbox removes the
+  old ones, and quitting Chummy removes every container labelled
+  `com.friendlylabz.chummy=workspace`. Agents sharing a folder share its
+  container.
+- Calls without a workspace (reading a tool's description) still get a
+  fresh `docker run --rm -i` each.
+
+Every container has:
+
+- `--network none` (except a `direct-network` container, below),
+  `--read-only` root filesystem and a 256 MB `/tmp`;
 - `--cap-drop ALL`, `--security-opt no-new-privileges`, `--ipc none`,
   `--pids-limit 256`, memory and CPU limits (Settings), `--log-driver none`
   (the engine keeps no copy of the tool's output);
-- exactly three mounts: the workspace at `/workspace` (read/write), the tool
-  at `/tool` and Chummy's runner at `/chummy` (both read-only). The Docker
-  socket is never mounted;
+- exactly three mounts: the workspace at `/workspace` (read/write), the
+  installed tools at `/tools` (a fresh container: just its tool, at `/tool`)
+  and Chummy's runner at `/chummy` (both read-only). The Docker socket is
+  never mounted;
 - with Docker on Linux and macOS, the workspace owner's user and group
   instead of root, so files the tool writes belong to you. Rootless Podman
   maps the container's root to you already;
@@ -156,8 +185,10 @@ Each call is `docker run --rm -i` (or `podman run`) with:
   image nothing changes until you approve again. Changing the name or the
   engine clears the approval.
 
-A call that runs past its time limit is stopped with `docker kill`, and the
-container is removed.
+Tested with real Docker: HOME and `/tmp` kept between calls, a background
+process gone after its call, a timed-out call's processes gone with the
+container still working, offline and online containers side by side, new
+limits replacing a folder's containers, and closing removing them.
 
 ### OpenShell
 
@@ -342,10 +373,11 @@ every other tool's:
   Internet switch, the agent's switchboard, the block), the same
   `NetPolicy` as any tool; "Ask before tools go online" still makes each use
   wait for an OK.
-- When all of that allows it, the **Container** sandbox runs that call
-  without `--network none`, on the engine's ordinary network (Docker's
-  bridge, Podman's default). Everything else stays: read-only root, no
-  capabilities, the same three mounts, limits, the approved image.
+- When all of that allows it, the **Container** sandbox runs that call in
+  the folder's second container, started without `--network none`, on the
+  engine's ordinary network (Docker's bridge, Podman's default). Everything
+  else stays: read-only root, no capabilities, the same three mounts,
+  limits, the approved image. Offline calls never run in it.
 - **OpenShell** keeps the programs offline: its network rules allow listed
   hosts for listed programs, and Chummy doesn't write any. **Native** can't
   run programs at all.
@@ -484,9 +516,11 @@ it. What was checked:
   set with a native file picker and is refused inside any agent's workspace
   (where a tool could replace it) or the Chummy folder. Its environment is
   reduced to what the engine needs.
-- **Containers.** `--network none`, read-only root, all capabilities dropped,
+- **Containers.** One kept per agent's folder, the folder its only writable
+  place (HOME in `.chummy-home` there), nothing a call starts outliving it.
+  `--network none`, read-only root, all capabilities dropped,
   `no-new-privileges`, `--ipc none`, process/memory/CPU limits, no engine
-  logs, only the workspace (rw) and the tool and runner (ro) mounted, never
+  logs, only the workspace (rw) and the tools and runner (ro) mounted, never
   the Docker socket, not root (Docker on Linux/macOS), `--pull never` and the
   approved image ID. Tested with real Docker: no network, no host files or
   environment, files owned by the workspace's owner, the web bridge still
