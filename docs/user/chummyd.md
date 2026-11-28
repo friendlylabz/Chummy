@@ -10,7 +10,7 @@ same code the app uses, until it stops.
   chummyd again.
 - **No way in from the network.** chummyd listens on nothing. You talk to its
   agents through *channels*: the terminal it runs in, end-to-end
-  encrypted Matrix rooms, and Telegram bots.
+  encrypted Matrix rooms, Telegram bots and Discord bots.
 - **Agents stay in their folders.** Each agent works only in
   `<jail dir>/<agent>/`, which never contains (and is never inside)
   chummyd's own files.
@@ -27,9 +27,10 @@ Open **Configure chummyd** from the main menu.
    and settings. An agent that uses Chummy's built-in engine can't be included:
    chummyd has no built-in engine, so give it another model (Ollama, say).
 3. Include the jobs it runs (their agent must be included).
-4. Choose the channels: the terminal, and **Add channel** for each Matrix
-   bot or Telegram bot (see [Matrix](#4-talk-to-it-in-matrix) and
-   [Telegram](#5-talk-to-it-in-telegram)). Every channel has a name, the
+4. Choose the channels: the terminal, and **Add channel** for each Matrix,
+   Telegram or Discord bot (see [Matrix](#4-talk-to-it-in-matrix),
+   [Telegram](#5-talk-to-it-in-telegram) and
+   [Discord](#6-talk-to-it-in-discord)). Every channel has a name, the
    agents it serves, what its kind asks for, and who each of its agents'
    jobs **reports to**. Choose whether chummyd's logs may include message
    text (off: they say what happened, never what was said).
@@ -206,7 +207,7 @@ What the Compose file sets up:
   `/jails/agents/<agent>`: chummyd won't use a mount point, such as a volume's
   root, as the jail dir); the state folder in the volume `state` (`/state`).
   Back up `state`: it holds the conversations, Matrix keys and the Telegram
-  people let in.
+  and Discord people let in.
 - Everything runs as user 65532: chummyd, and the agents' tools, which run
   inside it (WebAssembly). So everything in the agents' folders should
   belong to 65532. chummyd makes their folders itself; on each start it says
@@ -269,9 +270,9 @@ chat. If the agent asked you something, your next message is the answer.
 | `/jobs`, `/run <job>` | this agent's jobs; runs one now |
 | `/allow`, `/deny [reason]` | answers a tool approval (if allowed for the agent) |
 | `/agents`, `/agent <name>` | lists the agents; talks to another |
-| `/verify [n] yes`, `/verify [n] no` | answers what a channel asks (a Matrix verification, someone asking in on Telegram) |
-| `/invite [channel]` | an invitation for this agent's channel (Telegram's six-digit code) |
-| `/people`, `/remove <id>` | who may talk to this agent, by channel; stops someone (Telegram) |
+| `/verify [n] yes`, `/verify [n] no` | answers what a channel asks (a Matrix verification, someone asking in on Telegram or Discord) |
+| `/invite [channel]` | an invitation for this agent's channel (Telegram's or Discord's six-digit code) |
+| `/people`, `/remove <id>` | who may talk to this agent, by channel; stops someone (Telegram, Discord) |
 | `/quit` | stops chummyd |
 | `/help` | the list |
 
@@ -286,7 +287,7 @@ allows it) goes to standard error; the conversation to standard output.
 
 (The Chummy app has the same Matrix channel, in Settings → Channels, for
 talking to agents while the app runs. Give chummyd and the app different
-bot accounts. For Telegram, see section 5.)
+bot accounts. For Telegram and Discord, see sections 5 and 6.)
 
 With the Matrix channel, each person you allow gets an end-to-end encrypted
 room with each agent, on your own homeserver (or any homeserver). chummyd
@@ -425,3 +426,43 @@ for the channel) come with **Allow** and **Deny** buttons; files go to the
 agent's `uploads/`. The bot's menu lists the commands. A job can report to
 someone let in: give their Telegram id (from `/people`) as who it **reports
 to**.
+
+## 6. Talk to it in Discord
+
+Each Discord channel is a bot for one agent, in direct messages only:
+what's said to it in a server is ignored. Discord isn't end-to-end
+encrypted: Discord can read what's said to the bot and what the agent
+answers. Choose Matrix for anything private.
+
+### Set it up
+
+1. **Make a bot** for the agent in Discord's Developer Portal
+   (discord.com/developers): **New Application**, then under **Bot**,
+   **Reset Token** and copy it. Turn **Public Bot** off. It needs no
+   privileged intents. Don't use a bot the Chummy app (or another chummyd)
+   uses: only one program should be connected as a bot.
+2. In **Configure chummyd**, **Add channel** of type **Discord**, choose its
+   agent and paste the token. **Show answers as they're written** is on by
+   default; files people send can be up to 100 MB (25 by default).
+3. Export the bundle and run chummyd **with a terminal**, as for Telegram.
+4. **Share a server with the bot**: Discord only lets people message a bot
+   they share a server with. If it's in none, chummyd's log gives the link
+   that adds it to one of yours.
+
+### Let someone in
+
+As for Telegram: `/invite` makes a six-digit code that works once, for ten
+minutes; the person sends it to the bot in a direct message; chummyd shows
+their name and Discord id and asks (`/verify 1 yes` lets them in);
+`/people` lists who may talk to the agent and `/remove <id>` stops someone.
+They stay let in when chummyd starts again, and what they said while it
+was off is fetched when it's back. Anyone else gets no answer at all.
+
+### Talk
+
+A message starts a run, shown as it's written (the bot edits its message);
+reply to a question to answer it; approvals (when the bundle allows them
+for the channel) come with **Allow** and **Deny** buttons; files go to the
+agent's `uploads/`. Typing `/` lists the bot's commands, and `!status` and
+the like work too. A job can report to someone let in: give their Discord
+id (from `/people`) as who it **reports to**.

@@ -1031,7 +1031,7 @@ other versions aren't opened, so export the bundle again):
 | `state_key` | 32 bytes, base64: seals the state folder |
 
 Each of `channels.list`: `id` (unique), `name` (unique), `type` (a kind of
-channel: `matrix`, `telegram`), `agents` (agent ids; one unless the kind
+channel: `matrix`, `telegram`, `discord`), `agents` (agent ids; one unless the kind
 serves several), `approvals` (tool approvals and daily-limit questions may
 be answered in it; off: refused there), `options` (by field key, as the
 kind's fields say), `secrets` (by field key: a password, a bot token) and
@@ -1050,6 +1050,11 @@ only this shape; what goes in `options` and `secrets` is the kind's
   (default true); secret `token` (from @BotFather, `<digits>:<20–100 of A–Z
   a–z 0–9 _ ->`). One agent. The people let in are kept in the state, not
   the bundle.
+- `discord`: options `api_url` (default `https://discord.com/api/v10`;
+  https, or http only nearby; for testing), `upload_mb` (1–100, default
+  25), `stream` (default true); secret `token` (from the Developer Portal:
+  three base64url parts joined by dots, 50–120 characters, the first the
+  bot's id). One agent. The people let in are kept in the state.
 
 `chummy_channel::check_bundle` gives errors (chummyd won't start; the app
 won't export) and warnings, on top of `Config::check()`'s (no channel; a
@@ -1059,7 +1064,7 @@ Errors: a kind that doesn't exist, missing or duplicate ids and names,
 agents not in the bundle or more than the kind serves, a field that fails
 its checks (required, a number out of range, an invalid address, ID or
 token), two channels on the same account (the kind's `identity`: the Matrix
-ID, the Telegram bot), and a report naming a missing job, a job of another
+ID, the Telegram or Discord bot), and a report naming a missing job, a job of another
 agent, or someone the kind says can't be reached. Warnings are the kind's
 `cautions` (for Matrix: nobody to talk to, a job that reports to no one).
 
@@ -1092,5 +1097,9 @@ device), whether it's `cross_signed` and has `synced`, and its `rooms`, one
 `{agent, user, room}` each; if the bot's ID changes, what it kept and its
 stores are thrown away and it logs in afresh. Telegram keeps the `bot_id`,
 the next update `offset`, and the `people` let in, `{id, name, since}`;
-another bot starts with nobody. A state file that doesn't open stops
+another bot starts with nobody. Discord keeps the `bot_id`, the `people`
+let in (as Telegram), `dms` (each person's direct-message channel, by
+their id) and `last` (the last message id seen in each direct-message
+channel, to fetch what came while chummyd was off); another bot starts
+with nobody. A state file that doesn't open stops
 chummyd; it's never replaced by a fresh one.

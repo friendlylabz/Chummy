@@ -1,6 +1,6 @@
 [package]
 name = "chummy-channel"
-description = "Channels (chummyd's terminal, Matrix, Telegram): conversations with agents from outside Chummy, the same in the app and chummyd."
+description = "Channels (chummyd's terminal, Matrix, Telegram, Discord): conversations with agents from outside Chummy, the same in the app and chummyd."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,6 +14,9 @@ publish = false
 matrix = ["dep:matrix-sdk", "dep:futures-util"]
 # The Telegram channel (the Bot API over HTTPS; no Telegram library).
 telegram = ["dep:getrandom"]
+# The Discord channel (its web API and Gateway WebSocket; no Discord
+# library).
+discord = ["dep:getrandom", "dep:tokio-tungstenite", "dep:futures-util"]
 
 [dependencies]
 serde.workspace = true
@@ -25,6 +28,8 @@ zeroize = "1"
 futures-util = { workspace = true, optional = true }
 reqwest.workspace = true
 getrandom = { version = "0.4", optional = true }
+tokio-tungstenite = { version = "0.30", optional = true, default-features = false, features = ["connect", "handshake", "rustls-tls-native-roots"] }
+base64 = "0.23"
 matrix-sdk = { version = "0.20", optional = true, default-features = false, features = ["e2e-encryption", "automatic-room-key-forwarding", "bundled-sqlite", "markdown"] }
 chummy-agent.workspace = true
 chummy-bundle.workspace = true
@@ -37,6 +42,8 @@ chummy-session.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }
+futures-util = { workspace = true }
 
 [lints]
 workspace = true

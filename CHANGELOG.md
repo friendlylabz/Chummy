@@ -11,6 +11,14 @@ release will say.
 
 ## Unreleased
 
+- **Discord channels**, in the app (Settings → Channels) and in chummyd
+  (Configure chummyd → Add channel): a Discord bot for an agent, in direct
+  messages only (messages in servers are ignored). People ask in with a
+  six-digit code you make and you let them in; answers appear as they're
+  written, approvals come with Allow and Deny buttons, questions are
+  answered by replying, the bot's commands show when you type `/`, and
+  files are saved to the agent's `uploads/`. What people say while Chummy
+  is off is picked up when it's back. Discord isn't end-to-end encrypted.
 - The **Container** sandbox keeps one container for each agent's folder
   instead of starting a fresh one per call, so tool calls start about twice
   as fast. The folder is still the only place it can write: programs' home

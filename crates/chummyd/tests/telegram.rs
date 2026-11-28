@@ -75,7 +75,7 @@ fn setup(url: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
             "type": "telegram",
             "agents": ["echoer"],
             "options": { "api_url": url, "upload_mb": 20, "stream": true },
-            "secrets": { "token": TOKEN },
+            "secrets": { "token": TOKEN.as_str() },
         }))
         .unwrap(),
     );
@@ -226,7 +226,7 @@ async fn people_paired_at_the_terminal_talk_to_the_agent() {
     assert!(
         !seen
             .iter()
-            .any(|l| l.contains(TOKEN) || l.contains("AAHdq")),
+            .any(|l| l.contains(TOKEN.as_str()) || l.contains("fakefake")),
         "the token was printed"
     );
 

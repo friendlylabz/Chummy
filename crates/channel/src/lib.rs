@@ -1,14 +1,14 @@
 //! Channels: talking to agents from outside Chummy (chummyd's terminal,
-//! Matrix, Telegram), the same in the app and chummyd.
+//! Matrix, Telegram, Discord), the same in the app and chummyd.
 //!
 //! - [`Conversations`]: how conversations through any channel behave
 //!   (messages, answers, the commands people send ([`Command`]), runs shown
 //!   as they go ([`RunView`]), questions, approvals and jobs' reports).
 //! - [`ChannelKind`]: a kind of channel, the one place it's described
 //!   ([`kind`]): what to ask when one is set up, how it's checked and
-//!   described, and how it runs. [`matrix::Matrix`] and
-//!   [`telegram::Telegram`] (running them needs the `matrix` and
-//!   `telegram` features). The programs never name a kind: they list
+//!   described, and how it runs. [`matrix::Matrix`],
+//!   [`telegram::Telegram`] and [`discord::Discord`] (running them needs
+//!   the `matrix`, `telegram` and `discord` features). The programs never name a kind: they list
 //!   [`kinds`] and run one through a [`ChannelHost`] (what differs between
 //!   them), a [`Handle`] and a [`ChannelOutlet`]. Each kind verifies people
 //!   its own way and asks the program with an [`Event::Verify`], which the
@@ -20,6 +20,7 @@
 
 mod command;
 mod conv;
+pub mod discord;
 pub mod files;
 mod host;
 pub mod kind;
