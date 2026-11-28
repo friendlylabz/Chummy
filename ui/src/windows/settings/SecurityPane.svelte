@@ -274,8 +274,11 @@
       </div>
     </div>
     <p class="faint xs note">
-      Each call: no network, read-only system files, only the workspace mounted, all Linux capabilities dropped, no
-      privilege escalation, and the container is removed afterwards.
+      Each agent's folder gets one container, kept while Chummy runs and removed when it quits. Its only writable
+      folder is the agent's (plus a small temporary one in memory); system files are read-only, all Linux capabilities
+      are dropped and there's no privilege escalation. Programs keep their settings and what they install for
+      themselves in <span class="mono">.chummy-home</span> there, so those stay between calls; anything a call starts
+      stops when it ends. No network, except Run shell command's programs when you turn its Internet on for an agent.
     </p>
   {:else if cfg.kind === "openshell"}
     <div class="card rows">

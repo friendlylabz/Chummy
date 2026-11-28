@@ -2,6 +2,9 @@
 
 Chummy starts this with the tool mounted at /tool (tool.py plus its
 packages in /tool/site-packages) and the agent's workspace at /workspace.
+In a container kept between calls, CHUMMY_TOOL says where the tool is and
+CHUMMY_CALL names the call: the call is then its own process group, and
+whatever it started that's still running is stopped when it ends.
 Sandboxes that can't mount folders there (OpenShell copies them in) set
 CHUMMY_ROOT to the folder holding tool/ and chummy/, and CHUMMY_WORKSPACE to
 the workspace copy. The first line on stdin says what to do; the last line
@@ -18,7 +21,8 @@ import traceback
 import typing
 
 ROOT = os.environ.get("CHUMMY_ROOT", "").rstrip("/")
-TOOL = ROOT + "/tool"
+TOOL = os.environ.get("CHUMMY_TOOL") or ROOT + "/tool"
+KEPT = bool(os.environ.get("CHUMMY_CALL")) and hasattr(os, "setpgrp")
 
 PROTO = sys.__stdout__
 sys.stdout = sys.stderr
@@ -177,7 +181,36 @@ def call(chummy, fn, args):
     done_ok(result)
 
 
+def own_group():
+    """Makes this call its own process group (in a kept container)."""
+    if KEPT:
+        try:
+            os.setpgrp()
+        except OSError:
+            pass
+
+
+def stop_leftovers():
+    """Stops what this call started that's still running (in a kept
+    container), so nothing outlives the call."""
+    if not KEPT:
+        return
+    me = os.getpid()
+    group = os.getpgrp()
+    if group != me:
+        return
+    for p in os.listdir("/proc"):
+        if not p.isdigit() or int(p) in (me, 1):
+            continue
+        try:
+            if os.getpgid(int(p)) == group:
+                os.kill(int(p), 9)
+        except OSError:
+            pass
+
+
 def main():
+    own_group()
     request = json.loads(sys.stdin.readline() or "{}")
     try:
         chummy, fn = load_tool()
@@ -191,4 +224,7 @@ def main():
         return done_err(f"The tool couldn't load: {type(e).__name__}: {e}", "definition")
 
 
-main()
+try:
+    main()
+finally:
+    stop_leftovers()

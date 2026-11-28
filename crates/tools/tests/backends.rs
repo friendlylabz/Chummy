@@ -214,6 +214,7 @@ async fn container_runs_tools_locked_down() {
             .await
             .expect("image on this computer"),
     );
+    let b_opts = opts.clone();
     let b = ContainerSandbox::new(opts, paths.clone()).unwrap();
     assert_eq!(b.kind(), SandboxKind::Container);
 
@@ -366,7 +367,45 @@ async fn container_runs_tools_locked_down() {
         );
     }
 
-    // A call that runs too long is stopped, and its container is gone.
+    // The workspace keeps one container: HOME (in the workspace) and /tmp
+    // stay between calls, processes don't.
+    let sh = |cmd: &str| {
+        let (b, shell, jail) = (&b, &shell, &jail);
+        let cmd = cmd.to_string();
+        async move {
+            text(
+                call(
+                    b,
+                    shell,
+                    Some(jail),
+                    json!({ "command": cmd }),
+                    NetPolicy::off("no"),
+                    30,
+                )
+                .await
+                .unwrap(),
+            )
+        }
+    };
+    let out = sh("echo kept > ~/note; echo t > /tmp/t; echo $HOME; \
+         python3 -c 'import time; time.sleep(300)' >/dev/null 2>&1 & echo started")
+    .await;
+    assert_eq!(
+        out, "/workspace/.chummy-home\nstarted\n[exit code 0]",
+        "{out}"
+    );
+    assert!(ws.path().join(".chummy-home/.gitignore").is_file());
+    assert_eq!(
+        std::fs::read_to_string(ws.path().join(".chummy-home/note")).unwrap(),
+        "kept\n"
+    );
+    // Lists processes still sleeping from earlier calls (the patterns are
+    // split so this command's own line doesn't match).
+    const RUNNING: &str = "python3 -c \"import os\npats=[b'sleep('+b'300)', b'sleep('+b'60)']\nfor p in os.listdir('/proc'):\n  if not p.isdigit(): continue\n  try: c=open(f'/proc/{p}/cmdline','rb').read()\n  except Exception: continue\n  if any(x in c for x in pats): print('left', p, c)\nprint('ok')\"";
+    let out = sh(&format!("cat ~/note /tmp/t; {RUNNING}")).await;
+    assert_eq!(out, "kept\nt\nok\n[exit code 0]", "{out}");
+
+    // A call that runs too long is stopped; the container stays and works.
     let err = call(
         &b,
         &tool,
@@ -378,20 +417,98 @@ async fn container_runs_tools_locked_down() {
     .await
     .unwrap_err();
     assert!(matches!(err, ToolError::Timeout(1)), "{err:?}");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    let left = std::process::Command::new("docker")
-        .args([
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let out = sh(&format!("cat /tmp/t; {RUNNING}")).await;
+    assert_eq!(
+        out, "t\nok\n[exit code 0]",
+        "nothing of the stopped call is left: {out}"
+    );
+
+    let docker = |args: &[&str]| {
+        let o = std::process::Command::new("docker")
+            .args(args)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    let kept = || {
+        let mut v: Vec<String> = docker(&[
             "ps",
             "-aq",
             "--filter",
-            "label=com.friendlylabz.chummy=tool",
+            "label=com.friendlylabz.chummy=workspace",
         ])
-        .output()
-        .unwrap();
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+        v.sort();
+        v
+    };
     assert!(
-        String::from_utf8_lossy(&left.stdout).trim().is_empty(),
-        "containers left behind"
+        docker(&[
+            "ps",
+            "-aq",
+            "--filter",
+            "label=com.friendlylabz.chummy=tool"
+        ])
+        .is_empty(),
+        "no one-off containers left behind"
     );
+    // One for offline calls, one for the direct-network calls (Linux only).
+    let before = kept();
+    assert_eq!(
+        before.len(),
+        if cfg!(target_os = "linux") { 2 } else { 1 },
+        "{before:?}"
+    );
+
+    // Other settings: the workspace's container is replaced, HOME stays.
+    let mut more = b_opts.clone();
+    more.memory_mb = 2048;
+    let b2 = ContainerSandbox::new(more, paths.clone()).unwrap();
+    let out = text(
+        call(
+            &b2,
+            &shell,
+            Some(&jail),
+            json!({"command": "cat ~/note"}),
+            NetPolicy::off("no"),
+            30,
+        )
+        .await
+        .unwrap(),
+    );
+    assert_eq!(out, "kept\n[exit code 0]", "{out}");
+    // Both old ones went (their settings are out of date); only the one
+    // this call needed was started.
+    let after = kept();
+    assert_eq!(after.len(), 1, "{before:?} → {after:?}");
+    assert!(!before.contains(&after[0]), "{before:?} → {after:?}");
+
+    // Closing removes the ones it started; quitting removes any.
+    let (_ws2, jail2) = workspace();
+    let _other = text(
+        call(
+            &b,
+            &shell,
+            Some(&jail2),
+            json!({"command": "true"}),
+            NetPolicy::off("no"),
+            30,
+        )
+        .await
+        .unwrap(),
+    );
+    assert_eq!(kept().len(), 2, "one per folder: {:?}", kept());
+    b2.close().await;
+    assert_eq!(
+        kept().len(),
+        1,
+        "b's container is b's to remove: {:?}",
+        kept()
+    );
+    b2.remove_all_kept().await;
+    assert!(kept().is_empty(), "kept containers left: {:?}", kept());
 }
 
 #[tokio::test]

@@ -193,6 +193,11 @@ pub trait SandboxBackend: Send + Sync {
     /// Runs one call. Problems the tool reports come back in the outcome;
     /// only sandbox failures are `Err`.
     fn call<'a>(&'a self, call: SandboxCall<'a>) -> BoxFut<'a, Result<CallOutcome, ToolError>>;
+
+    /// Removes what it keeps running between calls (when Chummy quits).
+    fn close(&self) -> BoxFut<'_, ()> {
+        Box::pin(async {})
+    }
 }
 
 /// Why a tool can't run in a sandbox with this health, or `None` if it can.

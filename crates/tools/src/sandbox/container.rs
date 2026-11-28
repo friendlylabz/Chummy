@@ -1,12 +1,27 @@
-//! The container sandbox: each tool call runs in a fresh, hardened Docker or
-//! Podman container.
+//! The container sandbox: tool calls run in hardened Docker or Podman
+//! containers.
 //!
 //! Chummy never installs Docker or Podman and never downloads an image on
 //! its own: the user picks an image and gets it in Security and Privacy,
-//! which records the image's ID. Calls run that exact ID (`--pull never`),
-//! so a tag that changes later can't swap in a different image unseen.
+//! which records the image's ID. Containers run that exact ID (`--pull
+//! never`), so a tag that changes later can't swap in a different image
+//! unseen.
 //!
-//! Each call is `docker run --rm -i` with:
+//! **One container kept per workspace** (so, per agent), started at its
+//! first call and removed when Chummy quits; each call is a `docker exec`
+//! in it. Its only writable folder is the workspace (and a small `/tmp` in
+//! memory). `HOME` is `.chummy-home` in the workspace, so what programs keep
+//! there (git settings, `pip install --user`, `cargo install`, caches)
+//! stays between calls; the folder ignores itself for git. Nothing a call
+//! starts outlives it: the runner makes the call its own process group and
+//! stops whatever is left of it when the call ends (or Chummy stops it when
+//! the time is up). Calls with a direct network get a second container of
+//! their own, so an offline call never shares a network. A container whose
+//! settings no longer match (another image, other limits) is replaced.
+//! Calls with no workspace (describing a tool) use a fresh `docker run
+//! --rm -i` each time.
+//!
+//! Every container has:
 //!
 //! - `--network none`: no network at all. `chummy.http` still works, over
 //!   stdin/stdout, through Chummy's own checks. The one exception is a
@@ -14,16 +29,18 @@
 //!   access on: that call gets the engine's ordinary network, so the
 //!   programs it starts can connect anywhere, unchecked (the user is told
 //!   so when turning it on).
-//! - only three mounts: the workspace (read/write) at `/workspace`, the tool
-//!   at `/tool` and Chummy's runner at `/chummy` (both read-only). The
-//!   Docker socket is never mounted.
+//! - only three mounts: the workspace (read/write) at `/workspace`, the
+//!   installed tools at `/tools` (a fresh call: just its tool, at `/tool`)
+//!   and Chummy's runner at `/chummy`, both read-only. The Docker socket is
+//!   never mounted.
 //! - `--read-only` root filesystem with a small `/tmp`, `--cap-drop ALL`,
 //!   `--security-opt no-new-privileges`, `--ipc none`, limits on memory,
 //!   CPUs and processes, no logs kept by the engine, and (with Docker on
 //!   Linux and macOS) the user id of the workspace's owner rather than root.
 //! - no host environment: only the variables Chummy passes (`TZ`).
 
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -121,10 +138,21 @@ pub fn valid_image(image: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || "._-/:@+".contains(c))
 }
 
+/// The label on every container Chummy starts.
+const LABEL: &str = "com.friendlylabz.chummy";
+/// The kept container's workspace (a hash), and its settings (a hash).
+const LABEL_WS: &str = "com.friendlylabz.chummy.workspace";
+const LABEL_CONFIG: &str = "com.friendlylabz.chummy.config";
+
+/// The home folder of a kept container, in the workspace.
+pub const HOME_DIR: &str = ".chummy-home";
+
 pub struct ContainerSandbox {
     opts: ContainerOptions,
     paths: ToolPaths,
     web: reqwest::Client,
+    /// Kept containers known to be running, by name.
+    kept: tokio::sync::Mutex<BTreeMap<String, PathBuf>>,
 }
 
 impl ContainerSandbox {
@@ -133,6 +161,7 @@ impl ContainerSandbox {
             opts: opts.normalized(),
             paths,
             web: web_client()?,
+            kept: Default::default(),
         })
     }
 
@@ -150,7 +179,8 @@ impl ContainerSandbox {
         })
     }
 
-    /// The `run` arguments shared by calls and checks, up to the image.
+    /// The `run` arguments of a fresh container for one call (or a check),
+    /// up to the image.
     pub fn run_args(
         &self,
         name: &str,
@@ -158,39 +188,97 @@ impl ContainerSandbox {
         tool: Option<&Path>,
         network: bool,
     ) -> Vec<String> {
+        let mut a = self.base_args(name, workspace, network, None);
+        if let Some(t) = tool {
+            a.push("--mount".into());
+            a.push(bind(t, "/tool", true));
+            a.push("--mount".into());
+            a.push(bind(&self.paths.support, "/chummy", true));
+        }
+        a
+    }
+
+    /// The `run` arguments of the container kept for `workspace`, up to the
+    /// image. `labels`: its workspace and settings hashes.
+    pub fn keep_args(
+        &self,
+        name: &str,
+        workspace: &Path,
+        network: bool,
+        labels: (&str, &str),
+    ) -> Vec<String> {
+        let mut a = self.base_args(name, Some(workspace), network, Some(labels));
+        a.push("--mount".into());
+        a.push(bind(&self.paths.installed, "/tools", true));
+        a.push("--mount".into());
+        a.push(bind(&self.paths.support, "/chummy", true));
+        a
+    }
+
+    fn base_args(
+        &self,
+        name: &str,
+        workspace: Option<&Path>,
+        network: bool,
+        kept: Option<(&str, &str)>,
+    ) -> Vec<String> {
         let o = &self.opts;
-        let mut a: Vec<String> = [
-            "run",
-            "--rm",
-            "-i",
-            "--pull",
-            "never",
-            "--name",
-            name,
-            "--label",
-            "com.friendlylabz.chummy=tool",
-            "--read-only",
-            "--tmpfs",
-            "/tmp:rw,nosuid,nodev,size=256m",
-            "--cap-drop",
-            "ALL",
-            "--security-opt",
-            "no-new-privileges",
-            "--ipc",
-            "none",
-            "--pids-limit",
-            "256",
-            "--log-driver",
-            "none",
-            "--hostname",
-            "chummy",
-            "-e",
-            "HOME=/tmp",
-            "-e",
-            "PYTHONDONTWRITEBYTECODE=1",
-        ]
-        .map(String::from)
-        .to_vec();
+        let home = format!("/workspace/{HOME_DIR}");
+        let mut a: Vec<String> = match kept {
+            // Kept: in the background, with an init that reaps finished
+            // processes.
+            Some((ws, config)) => vec![
+                "run".into(),
+                "-d".into(),
+                "--init".into(),
+                "--rm".into(),
+                "--label".into(),
+                format!("{LABEL}=workspace"),
+                "--label".into(),
+                format!("{LABEL_WS}={ws}"),
+                "--label".into(),
+                format!("{LABEL_CONFIG}={config}"),
+                "-e".into(),
+                format!("HOME={home}"),
+                "-e".into(),
+                format!("CHUMMY_HOME={home}"),
+            ],
+            None => vec![
+                "run".into(),
+                "--rm".into(),
+                "-i".into(),
+                "--label".into(),
+                format!("{LABEL}=tool"),
+                "-e".into(),
+                "HOME=/tmp".into(),
+            ],
+        };
+        a.extend(
+            [
+                "--pull",
+                "never",
+                "--name",
+                name,
+                "--read-only",
+                "--tmpfs",
+                "/tmp:rw,nosuid,nodev,size=256m",
+                "--cap-drop",
+                "ALL",
+                "--security-opt",
+                "no-new-privileges",
+                "--ipc",
+                "none",
+                "--pids-limit",
+                "256",
+                "--log-driver",
+                "none",
+                "--hostname",
+                "chummy",
+                "-e",
+                "PYTHONDONTWRITEBYTECODE=1",
+            ]
+            .map(String::from),
+        );
         if !network {
             a.push("--network".into());
             a.push("none".into());
@@ -214,13 +302,176 @@ impl ContainerSandbox {
             a.push("--workdir".into());
             a.push("/tmp".into());
         }
-        if let Some(t) = tool {
-            a.push("--mount".into());
-            a.push(bind(t, "/tool", true));
-            a.push("--mount".into());
-            a.push(bind(&self.paths.support, "/chummy", true));
-        }
         a
+    }
+
+    /// The name of the container kept for `workspace`, and its labels:
+    /// the workspace's hash, and the hash of the settings it was started
+    /// with (so a change of settings gives a new one). The offline and the
+    /// direct-network containers share settings and differ by name.
+    fn kept_name(&self, image: &str, workspace: &Path, network: bool) -> (String, String, String) {
+        use sha2::Digest;
+        let h = |s: &str| crate::lock::hex(&sha2::Sha256::digest(s))[..16].to_string();
+        let ws = h(&workspace.display().to_string());
+        let mut args = self.keep_args("-", workspace, false, ("-", "-"));
+        args.push(image.to_string());
+        let config = h(&args.join("\0"));
+        let net = if network { "net" } else { "off" };
+        (format!("chummy-ws-{ws}-{config}-{net}"), ws, config)
+    }
+
+    /// Makes sure the container kept for `workspace` runs, and returns its
+    /// name. Replaces the workspace's containers whose settings changed.
+    async fn ensure(
+        &self,
+        program: &Path,
+        image: &str,
+        workspace: &Path,
+        network: bool,
+    ) -> Result<String, String> {
+        let (name, ws, config) = self.kept_name(image, workspace, network);
+        let mut kept = self.kept.lock().await;
+        let mut cmd = clean_command(program);
+        cmd.args(["inspect", "--format", "{{.State.Running}}", &name]);
+        if let Ok((true, out, _)) = process::output(cmd, Duration::from_secs(30)).await {
+            if out.trim() == "true" {
+                kept.insert(name.clone(), workspace.to_path_buf());
+                return Ok(name);
+            }
+            self.remove(program, std::slice::from_ref(&name)).await;
+        }
+        kept.remove(&name);
+        // This workspace's containers from other settings go.
+        let mut cmd = clean_command(program);
+        cmd.args([
+            "ps",
+            "-a",
+            "--filter",
+            &format!("label={LABEL_WS}={ws}"),
+            "--format",
+            &format!("{{{{.Names}}}} {{{{.Label \"{LABEL_CONFIG}\"}}}}"),
+        ]);
+        if let Ok((true, out, _)) = process::output(cmd, Duration::from_secs(30)).await {
+            let stale: Vec<String> = out
+                .lines()
+                .filter_map(|l| l.split_once(' '))
+                .filter(|(n, c)| *c != config && !n.is_empty())
+                .map(|(n, _)| n.to_string())
+                .collect();
+            if !stale.is_empty() {
+                self.remove(program, &stale).await;
+            }
+        }
+        prepare_home(workspace)?;
+        let mut cmd = clean_command(program);
+        cmd.args(self.keep_args(&name, workspace, network, (&ws, &config)));
+        cmd.args([image, "python3", "-S", "-E", "-c", KEEP_ALIVE]);
+        let label = self.opts.engine.label();
+        match process::output(cmd, Duration::from_secs(120)).await {
+            Ok((true, _, _)) => {}
+            Ok((false, _, err)) => {
+                return Err(format!(
+                    "{label} couldn't start the workspace's container: {}",
+                    last_line(&err)
+                ));
+            }
+            Err(e) => {
+                return Err(format!(
+                    "{label} couldn't start the workspace's container: {e}"
+                ));
+            }
+        }
+        kept.insert(name.clone(), workspace.to_path_buf());
+        Ok(name)
+    }
+
+    async fn remove(&self, program: &Path, names: &[String]) {
+        let mut cmd = clean_command(program);
+        cmd.args(["rm", "-f"]).args(names);
+        let _ = process::output(cmd, Duration::from_secs(60)).await;
+    }
+
+    /// Removes the containers this sandbox started for workspaces.
+    pub async fn remove_kept(&self) {
+        let Ok(program) = self.program() else {
+            return;
+        };
+        let names: Vec<String> = std::mem::take(&mut *self.kept.lock().await)
+            .into_keys()
+            .collect();
+        if !names.is_empty() {
+            self.remove(&program, &names).await;
+        }
+    }
+
+    /// Removes every container Chummy keeps for workspaces, whoever started
+    /// it (when Chummy quits, so none are left from a crash either).
+    pub async fn remove_all_kept(&self) {
+        let Ok(program) = self.program() else {
+            return;
+        };
+        let mut cmd = clean_command(&program);
+        cmd.args(["ps", "-aq", "--filter", &format!("label={LABEL}=workspace")]);
+        if let Ok((true, out, _)) = process::output(cmd, Duration::from_secs(30)).await {
+            let ids: Vec<String> = out.split_whitespace().map(str::to_string).collect();
+            if !ids.is_empty() {
+                self.remove(&program, &ids).await;
+            }
+        }
+        self.kept.lock().await.clear();
+    }
+
+    /// A call in the kept container: `docker exec -i`.
+    async fn call_kept(
+        &self,
+        program: &Path,
+        image: &str,
+        call: &SandboxCall<'_>,
+        workspace: &Path,
+        tool: &str,
+    ) -> Result<CallOutcome, ToolError> {
+        let name = self
+            .ensure(program, image, workspace, call.direct_network)
+            .await
+            .map_err(ToolError::Runtime)?;
+        let call_id = call_name();
+        let mut cmd = clean_command(program);
+        cmd.args(["exec", "-i"]);
+        for (k, v) in &call.env {
+            cmd.arg("-e").arg(format!("{k}={v}"));
+        }
+        cmd.arg("-e").arg(format!("CHUMMY_TOOL=/tools/{tool}"));
+        cmd.arg("-e").arg(format!("CHUMMY_CALL={call_id}"));
+        cmd.args([
+            &name,
+            "python3",
+            "-S",
+            "-E",
+            "-B",
+            "-u",
+            "/chummy/_runner.py",
+        ]);
+        // When the time is up, stop the call's processes (not the
+        // container).
+        let stop = async {
+            let mut k = clean_command(program);
+            k.args([
+                "exec", &name, "python3", "-S", "-E", "-c", STOP_CALL, &call_id,
+            ]);
+            let _ = process::output(k, Duration::from_secs(15)).await;
+        };
+        process::run(
+            Run {
+                cmd,
+                mode: &call.mode,
+                web: &self.web,
+                policy: &call.network,
+                timeout: call.timeout,
+                what: self.opts.engine.label(),
+            },
+            stop,
+        )
+        .await
     }
 
     /// Gets the image (`pull`) or, with `pull` false, takes the copy already
@@ -298,7 +549,7 @@ impl ContainerSandbox {
                 Some(py) => Health::ready(
                     kind,
                     py,
-                    format!("Tools run in {label} containers with no network."),
+                    format!("Tools run in {label}: one container kept for each agent's folder."),
                 ),
                 None => Health::problem(kind, "The image's Python didn't say its version."),
             },
@@ -328,12 +579,28 @@ impl SandboxBackend for ContainerSandbox {
         Box::pin(self.health())
     }
 
+    fn close(&self) -> BoxFut<'_, ()> {
+        Box::pin(self.remove_kept())
+    }
+
     fn call<'a>(&'a self, call: SandboxCall<'a>) -> BoxFut<'a, Result<CallOutcome, ToolError>> {
         Box::pin(async move {
             let id = self.image_id().map_err(ToolError::Runtime)?;
             let program = self.program().map_err(ToolError::Runtime)?;
-            let name = call_name();
             let ws = call.jail.map(|j| j.root().to_path_buf());
+            // With a workspace: its kept container, when the tool is one of
+            // the installed ones (mounted at /tools).
+            let tool = call
+                .tool_dir
+                .strip_prefix(&self.paths.installed)
+                .ok()
+                .and_then(|rest| rest.to_str())
+                .filter(|t| !t.is_empty() && !t.contains(['/', '\\']))
+                .map(str::to_string);
+            if let (Some(ws), Some(tool)) = (ws.as_deref(), tool) {
+                return self.call_kept(&program, id, &call, ws, &tool).await;
+            }
+            let name = call_name();
             let mut cmd = clean_command(&program);
             cmd.args(self.run_args(
                 &name,
@@ -364,6 +631,54 @@ impl SandboxBackend for ContainerSandbox {
             .await
         })
     }
+}
+
+/// What a kept container runs between calls.
+const KEEP_ALIVE: &str = "import time\nwhile True: time.sleep(86400)";
+
+/// Stops a call in a kept container: the process group of the runner whose
+/// `CHUMMY_CALL` is `sys.argv[1]` (never the container's own).
+const STOP_CALL: &str = r#"import os, sys, signal
+want = ("CHUMMY_CALL=" + sys.argv[1]).encode()
+init = os.getpgid(1)
+groups = set()
+for p in os.listdir("/proc"):
+    if not p.isdigit():
+        continue
+    try:
+        with open(f"/proc/{p}/environ", "rb") as f:
+            if want in f.read().split(b"\0"):
+                groups.add(os.getpgid(int(p)))
+    except OSError:
+        pass
+for g in groups - {init, os.getpgrp()}:
+    try:
+        os.killpg(g, signal.SIGKILL)
+    except OSError:
+        pass
+"#;
+
+/// Makes the kept container's home folder in the workspace, ignored by git.
+fn prepare_home(workspace: &Path) -> Result<(), String> {
+    let home = workspace.join(HOME_DIR);
+    let meta = std::fs::symlink_metadata(&home);
+    if let Ok(m) = &meta
+        && !m.is_dir()
+    {
+        return Err(format!(
+            "“{HOME_DIR}” in the workspace isn't a folder: the sandbox keeps its home there. Move it away."
+        ));
+    }
+    std::fs::create_dir_all(&home)
+        .map_err(|e| format!("couldn't make “{HOME_DIR}” in the workspace: {e}"))?;
+    let ignore = home.join(".gitignore");
+    if !ignore.exists() {
+        let _ = std::fs::write(
+            &ignore,
+            "# Chummy's sandbox keeps its home here (git settings, caches,\n# programs installed for the user). Ignored by git.\n*\n",
+        );
+    }
+    Ok(())
 }
 
 /// A unique container name for one call.
@@ -472,6 +787,86 @@ mod tests {
         assert!(!joined.contains("--privileged"));
         // Exactly three mounts.
         assert_eq!(a.iter().filter(|x| *x == "--mount").count(), 3);
+    }
+
+    #[test]
+    fn kept_containers_mount_the_workspace_tools_and_runner_only() {
+        let b = sandbox();
+        let a = b.keep_args("k", Path::new("/ws"), false, ("w", "c"));
+        let joined = a.join(" ");
+        for must in [
+            "run -d --init --rm",
+            "--label com.friendlylabz.chummy=workspace",
+            "--label com.friendlylabz.chummy.workspace=w",
+            "--label com.friendlylabz.chummy.config=c",
+            "-e HOME=/workspace/.chummy-home",
+            "--read-only",
+            "--cap-drop ALL",
+            "--security-opt no-new-privileges",
+            "--network none",
+            "type=bind,source=/ws,target=/workspace",
+            "--workdir /workspace",
+        ] {
+            assert!(joined.contains(must), "missing {must}: {joined}");
+        }
+        let mounts: Vec<_> = a
+            .iter()
+            .zip(a.iter().skip(1))
+            .filter(|(k, _)| *k == "--mount")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(mounts.len(), 3, "{mounts:?}");
+        assert!(mounts[1].ends_with("target=/tools,readonly"), "{mounts:?}");
+        assert!(mounts[2].ends_with("target=/chummy,readonly"), "{mounts:?}");
+        assert!(
+            !joined.contains(" -i "),
+            "kept containers aren't attached: {joined}"
+        );
+    }
+
+    #[test]
+    fn kept_containers_change_with_their_settings() {
+        let b = sandbox();
+        let img = "sha256:0123456789abcdef0123456789abcdef";
+        let (name, ws, config) = b.kept_name(img, Path::new("/ws"), false);
+        assert!(name.starts_with("chummy-ws-") && name.contains(&ws) && name.contains(&config));
+        // Same settings, same container.
+        assert_eq!(b.kept_name(img, Path::new("/ws"), false).0, name);
+        // Another workspace, the network, the image or the limits: another.
+        let (other_ws, ws2, _) = b.kept_name(img, Path::new("/ws2"), false);
+        assert!(other_ws != name && ws2 != ws);
+        // The direct-network one is another container with the same settings.
+        let (online, ws3, c3) = b.kept_name(img, Path::new("/ws"), true);
+        assert!(online != name && ws3 == ws && c3 == config);
+        assert_ne!(b.kept_name("sha256:other", Path::new("/ws"), false).0, name);
+        let mut opts = b.opts.clone();
+        opts.memory_mb = 4096;
+        let bigger = ContainerSandbox::new(opts, ToolPaths::new("/chummy/tools")).unwrap();
+        let (n4, ws4, c4) = bigger.kept_name(img, Path::new("/ws"), false);
+        assert!(n4 != name && ws4 == ws && c4 != config);
+    }
+
+    #[test]
+    fn the_home_folder_ignores_itself() {
+        let ws = tempfile::tempdir().unwrap();
+        prepare_home(ws.path()).unwrap();
+        let ignore = std::fs::read_to_string(ws.path().join(".chummy-home/.gitignore")).unwrap();
+        assert!(ignore.lines().any(|l| l == "*"), "{ignore}");
+        // Kept as it is the next time.
+        std::fs::write(ws.path().join(".chummy-home/.gitignore"), "mine").unwrap();
+        prepare_home(ws.path()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(ws.path().join(".chummy-home/.gitignore")).unwrap(),
+            "mine"
+        );
+        // A file in the way is explained.
+        let other = tempfile::tempdir().unwrap();
+        std::fs::write(other.path().join(".chummy-home"), "x").unwrap();
+        assert!(
+            prepare_home(other.path())
+                .unwrap_err()
+                .contains("isn't a folder")
+        );
     }
 
     #[test]
